@@ -17,9 +17,12 @@
 | [`overview.md`](./overview.md) | 概念的背景・設計空白の主張・中核価値・EGI の双方向構造 | まず全体像を掴みたい |
 | [`experiment-plan.md`](./experiment-plan.md) | 実験計画書A 本文（全17節）。目的・仮説・接地真実・8条件・指標・成功/失敗基準 | 実験設計の正典を参照したい |
 | [`glossary.md`](./glossary.md) | 用語集（Field Actor / provenance / EGI / PCE gate / 各種指標 など） | 用語の定義を確認したい |
-| [`pre-registration.md`](./pre-registration.md) | 事前登録書（記入式）。`[未定]` パラメータと採点基準・分析計画を凍結する | 実験を始める前に確定事項を埋める |
+| [`design-review.md`](./design-review.md) | 設計レビュー。実行・凍結の前に解くべき方法論的/運用的な穴を重大度別に整理（DR-1〜DR-20） | 計画を実行に移す前に穴を潰したい |
+| [`pre-registration.md`](./pre-registration.md) | 事前登録書（記入式）。`[未定]` パラメータと採点基準・分析計画、設計レビュー由来の追加項目（DR-*）を凍結する | 実験を始める前に確定事項を埋める |
 
-推奨読み順: **overview → experiment-plan → glossary（適宜参照） → pre-registration（実施前に記入）**
+推奨読み順: **overview → experiment-plan → glossary（適宜参照） → design-review（穴の確認） → pre-registration（実施前に記入）**
+
+> ⚠️ **実行前の必読**: `design-review.md`。特に接地真実（反実仮想再実行）の妥当性（DR-1, DR-2）は主アウトカムの生命線で、ここが崩れると他の結果は無意味になる。
 
 ---
 
