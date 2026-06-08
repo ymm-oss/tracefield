@@ -139,8 +139,8 @@ Phase 0 ─→ Phase 1 ══(GATE 1)══→ Phase 2 ══(GATE 2)══→ P
 | 汚染入力 | 汚染A のみ | 影響追跡課題 |
 | 反復回数 N（状態あたり） | **8**（最低 5、できれば 10） | 分散推定に足る最小限。Phase 1 で増やす余地 |
 | 条件 | C4 / 薄い C5 | — |
-| 探索モデル | 単一の能力あるモデルに固定 | seed/温度を記録（DR-1） |
-| 抽出/再構成モデル | 強モデルに固定 | C4 事後再構成と claim 抽出に使用 |
+| 探索モデル | ローカル Ollama `gemma4`（12b/26b）に固定 | seed・temperature を明示制御し記録（DR-1） |
+| 抽出/再構成モデル | 同上（claim 抽出・整合・C4 事後再構成に使用） | LLM ベースの claim マッチングで埋め込み依存を回避 |
 | 温度条件 | default と 低温度の2点 | DR-1 の緩和策探索 |
 | 分離可能性の判定 | Cliff's δ / AUC（しきい値は Phase 0 でパイロット） | — |
 | 評価 | 自動プロキシのみ | 専門家なし |
@@ -175,26 +175,38 @@ MVP は次を出力する。
 
 ---
 
-## 9. 実装の足場（次の一歩・コードはまだ書かない）
+## 9. 実装の足場（Elixir / mise）
 
-設計を実装に移すときの想定レイアウト（提案）:
+**スタック**: **Elixir**（mise で導入: erlang 29.0.1 / elixir 1.20.0-otp-29、`mise.toml` でピン）。
+半溶解性の語彙（Field Actor / append-only provenance / 並行 run の監視）が OTP のアクターモデル・
+イミュータビリティ・supervision と素直に対応する。
+
+**LLM provider**: LLM 呼び出しは behaviour で抽象化し、アダプタを差し替える（provider 決定は実装をブロックしない）。
+
+| アダプタ | 用途 | 備考 |
+| --- | --- | --- |
+| `Tracefield.LLM`（behaviour） | 最小インターフェース（`complete/2` 等） | seed・temperature を引数で受ける |
+| `Tracefield.LLM.Mock` | **Phase 0** | 決定的な擬似応答。LLM 不要でパイプライン検証 |
+| `Tracefield.LLM.Ollama` | **Phase 1+** | ローカル Ollama（`localhost:11434`, `gemma4`）直叩き。**seed/temperature を明示制御**でき DR-1 に最適 |
+
+> 実装（コード生成）は **codex CLI に委譲**。実験ランタイムの LLM 呼び出しは codex を経由しない
+> （agent ラッパで seed/温度を制御できないため）。
+
+想定レイアウト:
 
 ```
 tracefield/
-├── docs/                 # 既存
-├── scenarios/
-│   └── enterprise-assistant/   # ← Phase 0 fixture（作成済み）
-│       ├── README.md           # fixture schema・状態A/B の定義
-│       ├── task.md             # タスク定義（§5）
-│       ├── contaminant-A.md    # 汚染A（状態A の注入物）
-│       └── correction-A.md     # 訂正版（状態B の置換物）
-├── src/
-│   ├── explore/          # C4: free-form マルチエージェント探索ループ
-│   ├── semisoluble/      # C5（薄い）: provenance + candidate delta + 簡易 gate
-│   ├── ground_truth/     # 反実仮想 runner（A/B × N）+ within/between 差分
-│   ├── normalize/        # claim 抽出 → 整合（クラスタ化）→ 差分 d
-│   └── metrics/          # SNR / AUC / proxy Recall・Precision
-└── runs/                 # run ログ（seed・モデル・温度・出力を記録）
+├── docs/                              # 既存
+├── scenarios/enterprise-assistant/    # Phase 0 fixture（作成済み）
+├── lib/tracefield/
+│   ├── llm/                  # behaviour + Mock / Ollama アダプタ
+│   ├── explore/              # C4: free-form 探索ループ（Task/GenServer）
+│   ├── semisoluble/          # C5（薄い）: provenance + candidate delta + 簡易 gate
+│   ├── ground_truth/         # 反実仮想 runner（A/B × N）+ within/between 差分
+│   ├── normalize/            # claim 抽出 → LLMマッチング整合 → 差分 d
+│   └── metrics/              # SNR / AUC(Cliff's δ) / proxy Recall・Precision
+├── test/                     # 単体テスト（Phase 0 のトイ検証含む）
+├── runs/                     # run ログ（seed・model・temp・出力を JSON で記録）
+├── mise.toml                 # erlang/elixir のピン
+└── mix.exs
 ```
-
-> 言語・モデル・エージェントフレームワークは未確定。実装着手時に確認する。

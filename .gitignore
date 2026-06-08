@@ -1,2 +1,14 @@
 # macOS
 .DS_Store
+
+# Elixir / Mix
+/_build/
+/deps/
+/cover/
+/doc/
+*.beam
+erl_crash.dump
+*.ez
+
+# experiment run outputs
+/runs/
