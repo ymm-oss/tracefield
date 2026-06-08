@@ -183,7 +183,8 @@ MVP は次を出力する。
 tracefield/
 ├── docs/                 # 既存
 ├── scenarios/
-│   └── enterprise-assistant/
+│   └── enterprise-assistant/   # ← Phase 0 fixture（作成済み）
+│       ├── README.md           # fixture schema・状態A/B の定義
 │       ├── task.md             # タスク定義（§5）
 │       ├── contaminant-A.md    # 汚染A（状態A の注入物）
 │       └── correction-A.md     # 訂正版（状態B の置換物）
