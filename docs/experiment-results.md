@@ -168,10 +168,22 @@ A（検証可能）・C（コンプラ慎重）は拒否されるが、**B（権
 **結果**: **citation 接地で precision 0.50 → 1.00**。affected が genuine adoption（PB採用4点）と完全一致。
 理由: 「特定の文書チャンクを引用する」は「会話で応答した」より遥かに選択的 ── 採用者だけがチャンクを引用し、過剰連結が消える。
 
-**正直な但し書き**:
-- この run では3規則が一致（**汚染チャンクを refute 引用する点・幻覚引用が出なかった**ため stance＋verify 層が未検証）。
-  citation **接地そのもの**が precision を直した。stance/verify の限界価値は**敵対的引用がある難ケース**で別途要検証。
-- プロトタイプ（Python）であり、ハーネス実装(`Tracefield.Reference`)・規模・複数シナリオは未。
+### 7b. 敵対的引用ケース（stance・verify の寄与を分離）
+上の run では refute/幻覚引用が出ず3規則が一致したため、**反論引用(p3)・無関係引用(p4)・幻覚引用(p6, 内容無関係に relies_on)** を
+含む統制ケースで各層の寄与を分離（GT＝設計上の genuine 採用={p1,p2,p5}、verify は実 LLM 判定）:
+
+| provenance 規則 | precision | 効いた層 |
+| --- | --- | --- |
+| depends_on_turns（旧） | 0.50 | — |
+| cited-anything（接地のみ） | **0.60** | 接地（会話より選択的） |
+| relies_on（＋stance） | **0.75** | stance が refute 引用(p3)を除外 |
+| relies_on＋verified（**新 Reference 完全**） | **1.00** | verify が幻覚引用(p6)を棄却 |
+
+→ **各層が段階的に precision を押し上げ、完全形で 1.00**。`verify` は実 LLM 判定で p6（「監査ログ」＝failures チャンクと無関係な relies_on）を正しく false 判定、genuine 引用は true。
+**接地→stance→verify の3層が、敵対的引用下でも過剰連結を完全に抑える**ことを実証。
+
+**残る但し書き**: プロトタイプ（Python・統制 GT）であり、`Tracefield.Reference` のハーネス実装・実探索での自然発生・規模・複数シナリオ・permissive 汚染(C)は未。
+ただし **precision ブロッカーの解法は機構レベルで確立**（0.50→1.00、各層の寄与も分離）。
 
 > **本丸への回答**: C5 実用化のブロッカーだった precision（過剰隔離）は **ドキュメント接地＋引用 provenance で解消する見込み**（0.50→1.00）。
 > 設計 [`design-reference.md`](./design-reference.md) の方向は支持された。次: ハーネス化（`Tracefield.Reference`）＋敵対的引用ケースで stance/verify を試す。
