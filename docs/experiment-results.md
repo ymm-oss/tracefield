@@ -152,3 +152,26 @@ A（検証可能）・C（コンプラ慎重）は拒否されるが、**B（権
 > **B/C 調査の結論**: 採用・伝播する assertive 汚染（B）では **C5 が precision で C4 に明確に勝つ**（誤帰属回避）。
 > permissive 汚染（C）は現行の anchored 判定器では測定不能（GT が壊れる）＝**計器の適用範囲を新たに特定**。
 > 全タイプ共通で **C4 holistic は条件越え誤帰属が常態**、C5 provenance は条件スコープで誤帰属しない、が一貫した実データ知見。
+
+## 7. Reference 設計 フェーズ1 プロトタイプ結果（precision 問題への回答）
+
+[`design-reference.md`](./design-reference.md) の核 ── **依存を「会話ターン参照」から「文書チャンクへの検証可能な引用」に置換** ──
+をプロトタイプで検証（汚染B＝PM証言チャンク、Field Actor が CHUNK を引用、Reference が引用照合）。同一 run に複数の provenance 規則を適用:
+
+| provenance 規則 | recall | precision |
+| --- | --- | --- |
+| （旧）depends_on_turns＝会話的「触れた」 | 1.0 | **0.50**（§6f 実測） |
+| cited-anything（チャンク引用したか） | 1.0 | **1.00** |
+| relies_on のみ | 1.0 | 1.00 |
+| relies_on + verified（新 Reference） | 1.0 | 1.00 |
+
+**結果**: **citation 接地で precision 0.50 → 1.00**。affected が genuine adoption（PB採用4点）と完全一致。
+理由: 「特定の文書チャンクを引用する」は「会話で応答した」より遥かに選択的 ── 採用者だけがチャンクを引用し、過剰連結が消える。
+
+**正直な但し書き**:
+- この run では3規則が一致（**汚染チャンクを refute 引用する点・幻覚引用が出なかった**ため stance＋verify 層が未検証）。
+  citation **接地そのもの**が precision を直した。stance/verify の限界価値は**敵対的引用がある難ケース**で別途要検証。
+- プロトタイプ（Python）であり、ハーネス実装(`Tracefield.Reference`)・規模・複数シナリオは未。
+
+> **本丸への回答**: C5 実用化のブロッカーだった precision（過剰隔離）は **ドキュメント接地＋引用 provenance で解消する見込み**（0.50→1.00）。
+> 設計 [`design-reference.md`](./design-reference.md) の方向は支持された。次: ハーネス化（`Tracefield.Reference`）＋敵対的引用ケースで stance/verify を試す。
