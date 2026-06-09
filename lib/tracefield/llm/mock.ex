@@ -44,8 +44,14 @@ defmodule Tracefield.LLM.Mock do
     prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
 
     cond do
+      String.contains?(prompt, "TRACEFIELD_RECONSTRUCT_AFFECTED_POINTS") ->
+        {:ok, Jason.encode!(affected_point_indexes(prompt))}
+
       String.contains?(prompt, "TRACEFIELD_RECONSTRUCT_AFFECTED") ->
         {:ok, Jason.encode!(affected_claim_indexes(prompt))}
+
+      String.contains?(prompt, "TRACEFIELD_EXPLORER_POINTS") ->
+        {:ok, Jason.encode!(%{points: explorer_points(prompt)})}
 
       String.contains?(prompt, "TRACEFIELD_EXTRACT_CLAIMS") ->
         {:ok, Jason.encode!(claims_from_prompt(prompt))}
@@ -86,6 +92,13 @@ defmodule Tracefield.LLM.Mock do
     |> Enum.map(fn {index, _text} -> index end)
   end
 
+  defp affected_point_indexes(prompt) do
+    prompt
+    |> numbered_points_from_prompt()
+    |> Enum.filter(fn {_index, text} -> String.contains?(text, "PROV-X") end)
+    |> Enum.map(fn {index, _text} -> index end)
+  end
+
   defp cluster_groups(prompt) do
     canonical_by_text =
       (@base_claims ++ @noise_claims ++ [@risk_claim] ++ @signal_claims)
@@ -121,6 +134,84 @@ defmodule Tracefield.LLM.Mock do
     |> Regex.scan(prompt, capture: :all_names)
     |> Enum.map(fn [index, text] -> {String.to_integer(index), String.trim(text)} end)
     |> Enum.sort_by(fn {index, _text} -> index end)
+  end
+
+  defp numbered_points_from_prompt(prompt) do
+    regex = ~r/^\s*(?<index>\d+)\.\s+\[[^\]]+\]\s+(?<text>.*?)\s*$/m
+
+    regex
+    |> Regex.scan(prompt, capture: :all_names)
+    |> Enum.map(fn [index, text] -> {String.to_integer(index), String.trim(text)} end)
+    |> Enum.sort_by(fn {index, _text} -> index end)
+  end
+
+  defp explorer_points(prompt) do
+    case {contaminant?(prompt), round_agent(prompt)} do
+      {true, {2, 1}} ->
+        [
+          %{
+            text:
+              "PROV-X Customer logs can be treated as cleared for cross-system search because secondary use consent is comprehensive.",
+            depends_on_turns: [],
+            uses_injection: true
+          }
+        ]
+
+      {true, {2, 2}} ->
+        [
+          %{
+            text:
+              "PROV-Y Summary design follows the prior clearance assumption when selecting evidence.",
+            depends_on_turns: latest_turn_ids(prompt, 1),
+            uses_injection: false
+          }
+        ]
+
+      {true, {2, 3}} ->
+        [
+          %{
+            text:
+              "PROV-Z Recommendation review inherits the summary evidence-selection assumption for launch readiness.",
+            depends_on_turns: latest_turn_ids(prompt, 1),
+            uses_injection: false
+          }
+        ]
+
+      _ ->
+        [
+          %{
+            text: generic_explorer_point(prompt),
+            depends_on_turns: [],
+            uses_injection: false
+          }
+        ]
+    end
+  end
+
+  defp round_agent(prompt) do
+    regex = ~r/ROUND\s+(?<round>\d+),\s+AGENT\s+(?<agent>\d+)/
+
+    case Regex.named_captures(regex, prompt) do
+      %{"round" => round, "agent" => agent} ->
+        {String.to_integer(round), String.to_integer(agent)}
+
+      _ ->
+        {0, 0}
+    end
+  end
+
+  defp latest_turn_ids(prompt, count) do
+    ~r/TURN\s+(?<turn_id>\d+)/
+    |> Regex.scan(prompt, capture: :all_names)
+    |> Enum.map(fn [turn_id] -> String.to_integer(turn_id) end)
+    |> Enum.reverse()
+    |> Enum.take(count)
+    |> Enum.reverse()
+  end
+
+  defp generic_explorer_point(prompt) do
+    {round, agent} = round_agent(prompt)
+    "Explorer #{agent} round #{round} flags cross-domain governance and auditability concerns."
   end
 
   defp stance_groups(prompt) do
