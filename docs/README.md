@@ -21,7 +21,7 @@
 | [`mvp.md`](./mvp.md) | MVP 設計。接地真実の妥当性（DR-1/DR-2）を先に測る最小 de-risking プローブ（C4 vs 薄いC5・1汚染・自動指標） | 本実験の前に最小実証で前提を検証したい |
 | [`findings-mvp.md`](./findings-mvp.md) | **MVP 第1次結果**。実モデルで汚染影響を局在化できた（precision/recall=1.0）。効いた設計（スタンス測定）と発見したバグ・限界 | 何が分かったか・次に何をすべきか知りたい |
 | [`experiment-results.md`](./experiment-results.md) | **本実験フェーズ結果**。C1〜C8 比較行列（C5=recall1.0、C6 ablation で provenance が load-bearing、C2 で「Role増やせば」null 棄却）+ 外的妥当性(§6a-6h)・結論・限界 | 条件比較の最終結果を知りたい |
-| [`design-archive.md`](./design-archive.md) | **Archive（仮称）設計**。ドキュメント接地＋検証可能な引用で C5 の過剰隔離(precision)を解決する再設計。Field Actor の sensitivity profile 具体化 | C5 を実用化する次設計を知りたい |
+| [`design-reference.md`](./design-reference.md) | **Reference 設計**。ドキュメント接地＋検証可能な引用で C5 の過剰隔離(precision)を解決する再設計。Field Actor の sensitivity profile 具体化、段階的スコープ（静的→生きた） | C5 を実用化する次設計を知りたい |
 | `mvp-impl-brief*.md` / `../RUNNING.md` | codex への実装ブリーフ群と実行手順（Elixir ハーネス） | 実装の詳細・動かし方を知りたい |
 | [`pre-registration.md`](./pre-registration.md) | 事前登録書（記入式）。`[未定]` パラメータと採点基準・分析計画、設計レビュー由来の追加項目（DR-*）を凍結する | 実験を始める前に確定事項を埋める |
 
