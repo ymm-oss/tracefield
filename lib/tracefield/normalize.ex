@@ -23,6 +23,7 @@ defmodule Tracefield.Normalize do
         }
   def cluster(claim_refs, llm_opts \\ []) do
     claim_refs = Enum.filter(claim_refs, &valid_claim_ref?/1)
+    llm_opts = Keyword.put_new(llm_opts, :max_tokens, 2048)
 
     if claim_refs == [] do
       %{}
@@ -164,55 +165,47 @@ defmodule Tracefield.Normalize do
   defp parse_cluster_json(content, claim_refs) do
     expected_length = length(claim_refs)
 
-    with {:ok, groups} when is_map(groups) <- decode_json_object(content),
-         {:ok, index_to_label} <- index_to_cluster_label(groups, expected_length) do
-      assignments =
-        claim_refs
-        |> Enum.with_index(1)
-        |> Map.new(fn {%{ref: ref}, index} -> {ref, Map.fetch!(index_to_label, index)} end)
+    case decode_json_object(content) do
+      {:ok, groups} when is_map(groups) and map_size(groups) > 0 ->
+        # Lenient: use whatever valid groups the model returned; any claim it
+        # failed to place gets its own singleton cluster. A weak model dropping
+        # or repeating an index over dozens of claims must NOT discard the whole
+        # clustering (that collapses everything to noisy singletons).
+        index_to_label = collect_index_labels(groups, expected_length)
 
-      {:ok, assignments}
-    else
-      _ -> :error
-    end
-  end
-
-  defp index_to_cluster_label(groups, expected_length) do
-    Enum.reduce_while(groups, {:ok, %{}}, fn {label, indices}, {:ok, acc} ->
-      label = normalize_label(label)
-
-      cond do
-        not valid_cluster_label?(label) or not is_list(indices) ->
-          {:halt, :error}
-
-        true ->
-          Enum.reduce_while(indices, {:ok, acc}, fn index, {:ok, nested_acc} ->
-            index = parse_index(index)
-
-            cond do
-              is_nil(index) or index < 1 or index > expected_length ->
-                {:halt, :error}
-
-              Map.has_key?(nested_acc, index) ->
-                {:halt, :error}
-
-              true ->
-                {:cont, {:ok, Map.put(nested_acc, index, label)}}
-            end
+        assignments =
+          claim_refs
+          |> Enum.with_index(1)
+          |> Map.new(fn {%{ref: ref, text: text}, index} ->
+            {ref, Map.get(index_to_label, index) || normalize_text(text)}
           end)
-          |> case do
-            {:ok, updated} -> {:cont, {:ok, updated}}
-            :error -> {:halt, :error}
-          end
-      end
-    end)
-    |> case do
-      {:ok, index_to_label} when map_size(index_to_label) == expected_length ->
-        {:ok, index_to_label}
+
+        {:ok, assignments}
 
       _ ->
         :error
     end
+  end
+
+  defp collect_index_labels(groups, expected_length) do
+    Enum.reduce(groups, %{}, fn {label, indices}, acc ->
+      label = normalize_label(label)
+
+      if valid_cluster_label?(label) and is_list(indices) do
+        Enum.reduce(indices, acc, fn raw_index, inner ->
+          index = parse_index(raw_index)
+
+          if is_integer(index) and index >= 1 and index <= expected_length and
+               not Map.has_key?(inner, index) do
+            Map.put(inner, index, label)
+          else
+            inner
+          end
+        end)
+      else
+        acc
+      end
+    end)
   end
 
   defp decode_json_array(content) do
