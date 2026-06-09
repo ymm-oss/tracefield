@@ -3,7 +3,7 @@ defmodule Tracefield.Scenario do
   Loader for the enterprise-assistant MVP scenario.
   """
 
-  defstruct [:dir, :task, :contaminant, :correction]
+  defstruct [:dir, :task, :contaminant, :correction, contaminants: %{}, decoys: []]
 
   defmodule Injection do
     @moduledoc false
@@ -41,15 +41,80 @@ defmodule Tracefield.Scenario do
     with {:ok, task} <- File.read(Path.join(dir, "task.md")),
          {:ok, contaminant} <- load_injection(Path.join(dir, "contaminant-A.md")),
          {:ok, correction} <- load_injection(Path.join(dir, "correction-A.md")) do
+      contaminants = load_contaminants(dir)
+
       {:ok,
        %__MODULE__{
          dir: dir,
          task: strip_agent_meta(task),
          contaminant: contaminant,
-         correction: correction
+         correction: correction,
+         contaminants: contaminants,
+         decoys: load_decoys(dir)
        }}
     end
   end
+
+  def contaminant_pair(%__MODULE__{contaminants: contaminants}, contaminant) do
+    key = normalize_contaminant_key(contaminant)
+
+    case Map.fetch(contaminants, key) do
+      {:ok, pair} -> {:ok, pair}
+      :error -> {:error, {:unknown_contaminant, contaminant}}
+    end
+  end
+
+  def contaminant_pair!(%__MODULE__{} = scenario, contaminant) do
+    case contaminant_pair(scenario, contaminant) do
+      {:ok, pair} -> pair
+      {:error, reason} -> raise "failed to select contaminant: #{inspect(reason)}"
+    end
+  end
+
+  defp load_contaminants(dir) do
+    ["a", "b", "c"]
+    |> Enum.flat_map(fn key ->
+      with {:ok, contaminant_path} <- injection_path(dir, "contaminant", key),
+           {:ok, correction_path} <- injection_path(dir, "correction", key),
+           {:ok, contaminant} <- load_injection(contaminant_path),
+           {:ok, correction} <- load_injection(correction_path) do
+        [{key, %{contaminant: contaminant, correction: correction}}]
+      else
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp load_decoys(dir) do
+    dir
+    |> Path.join("decoy-*.md")
+    |> Path.wildcard()
+    |> Enum.sort()
+    |> Enum.flat_map(fn path ->
+      case load_injection(path) do
+        {:ok, injection} -> [injection]
+        {:error, _reason} -> []
+      end
+    end)
+  end
+
+  defp injection_path(dir, kind, key) do
+    [String.upcase(key), String.downcase(key)]
+    |> Enum.map(&Path.join(dir, "#{kind}-#{&1}.md"))
+    |> Enum.find(&File.exists?/1)
+    |> case do
+      nil -> {:error, :missing_injection}
+      path -> {:ok, path}
+    end
+  end
+
+  defp normalize_contaminant_key(key) when is_atom(key), do: key |> Atom.to_string() |> normalize_contaminant_key()
+
+  defp normalize_contaminant_key(key) when is_binary(key),
+    do: key |> String.trim() |> String.downcase()
+
+  defp normalize_contaminant_key(key), do: key
 
   defp load_injection(path) do
     with {:ok, text} <- File.read(path),
