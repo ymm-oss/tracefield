@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Phase0 do
   @moduledoc "Run Phase 0 mock wiring checks."
   use Mix.Task
 
-  alias Tracefield.{GroundTruth, Metrics, Normalize, Scenario}
+  alias Tracefield.{GroundTruth, Normalize, Scenario}
 
   @shortdoc "Run Tracefield Phase 0"
 
@@ -30,16 +30,27 @@ defmodule Mix.Tasks.Tracefield.Phase0 do
         persist_runs: false
       )
 
-    proxy = Metrics.prf(result.ground_truth_set, result.system_claimed_affected)
-
     Mix.shell().info("within mean: #{fmt(result.within_summary.mean)}")
     Mix.shell().info("between mean: #{fmt(result.between_summary.mean)}")
     Mix.shell().info("AUC: #{fmt(result.auc)}")
     Mix.shell().info("Cliff's delta: #{fmt(result.cliffs_delta)}")
-    Mix.shell().info("ground truth set: #{inspect(MapSet.to_list(result.ground_truth_set))}")
-    Mix.shell().info("proxy recall: #{fmt(proxy.recall)}")
-    Mix.shell().info("proxy precision: #{fmt(proxy.precision)}")
+    Mix.shell().info("affected set: #{inspect(MapSet.to_list(result.affected_set))}")
+    Mix.shell().info("proxy recall: #{fmt(result.proxy.recall)}")
+    Mix.shell().info("proxy precision: #{fmt(result.proxy.precision)}")
+    print_stance_table(result.stance_table)
   end
 
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)
+
+  defp print_stance_table(stance_table) do
+    Mix.shell().info("stance table:")
+
+    stance_table
+    |> Enum.sort_by(fn {topic, _row} -> topic end)
+    |> Enum.each(fn {topic, row} ->
+      Mix.shell().info(
+        "  #{topic}: a_present=#{row.a_present} b_present=#{row.b_present} differs=#{row.differs} g1=#{inspect(row.g1)} g2=#{inspect(row.g2)}"
+      )
+    end)
+  end
 end

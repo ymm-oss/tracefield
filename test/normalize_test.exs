@@ -10,6 +10,15 @@ defmodule Tracefield.NormalizeTest do
     def complete(_messages, _opts), do: {:ok, "not json"}
   end
 
+  defmodule GroupClusterAdapter do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(_messages, _opts) do
+      {:ok, Jason.encode!(%{"shared-risk" => [1, 3], "separate-risk" => [2]})}
+    end
+  end
+
   test "diff returns 0.0 for identical sets" do
     clusters = MapSet.new(["a", "b"])
     assert Normalize.diff(clusters, clusters) == 0.0
@@ -40,6 +49,24 @@ defmodule Tracefield.NormalizeTest do
              "a1|c1" => "same-claim",
              "b1|c1" => "same-claim",
              "a1|c2" => "different-claim"
+           }
+  end
+
+  test "cluster parses grouped JSON object output" do
+    assignments =
+      Normalize.cluster(
+        [
+          %{ref: "a1|c1", text: "First risk."},
+          %{ref: "a1|c2", text: "Second risk."},
+          %{ref: "b1|c1", text: "Restated first risk."}
+        ],
+        adapter: GroupClusterAdapter
+      )
+
+    assert assignments == %{
+             "a1|c1" => "shared-risk",
+             "a1|c2" => "separate-risk",
+             "b1|c1" => "shared-risk"
            }
   end
 end

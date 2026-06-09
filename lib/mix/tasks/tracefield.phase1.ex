@@ -85,8 +85,8 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
     Mix.shell().info("between: #{summary(result.between_summary)}")
     Mix.shell().info("AUC: #{fmt(result.auc)}")
     Mix.shell().info("Cliff's delta: #{fmt(result.cliffs_delta)}")
-    Mix.shell().info("ground truth size: #{MapSet.size(result.ground_truth_set)}")
-    Mix.shell().info("ground truth set: #{inspect(MapSet.to_list(result.ground_truth_set))}")
+    Mix.shell().info("affected size: #{MapSet.size(result.affected_set)}")
+    Mix.shell().info("affected set: #{inspect(MapSet.to_list(result.affected_set))}")
 
     Mix.shell().info(
       "system claimed affected size: #{MapSet.size(result.system_claimed_affected)}"
@@ -95,7 +95,20 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
     Mix.shell().info("proxy recall: #{fmt(result.proxy.recall)}")
     Mix.shell().info("proxy precision: #{fmt(result.proxy.precision)}")
     Mix.shell().info("proxy f1: #{fmt(result.proxy.f1)}")
+    print_stance_table(result.stance_table)
     Mix.shell().info("saved: #{path}")
+  end
+
+  defp print_stance_table(stance_table) do
+    Mix.shell().info("stance table:")
+
+    stance_table
+    |> Enum.sort_by(fn {topic, _row} -> topic end)
+    |> Enum.each(fn {topic, row} ->
+      Mix.shell().info(
+        "  #{topic}: a_present=#{row.a_present} b_present=#{row.b_present} differs=#{row.differs} g1=#{inspect(row.g1)} g2=#{inspect(row.g2)}"
+      )
+    end)
   end
 
   defp summary(summary) do

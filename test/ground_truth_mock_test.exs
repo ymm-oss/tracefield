@@ -3,7 +3,7 @@ defmodule Tracefield.GroundTruthMockTest do
 
   alias Tracefield.{GroundTruth, LLM, Scenario}
 
-  test "mock end-to-end separates contaminant signal from noise" do
+  test "mock end-to-end marks consent stance as affected" do
     scenario = Scenario.load!("scenarios/enterprise-assistant")
 
     {:ok, result} =
@@ -15,9 +15,9 @@ defmodule Tracefield.GroundTruthMockTest do
         persist_runs: false
       )
 
-    assert result.between_summary.mean > result.within_summary.mean
-    assert result.auc > 0.8
-    assert result.ground_truth_set == MapSet.new(LLM.Mock.signal_claim_ids())
+    assert result.affected_set == MapSet.new([LLM.Mock.consent_topic()])
+    assert result.ground_truth_set == result.affected_set
+    assert result.stance_table[LLM.Mock.consent_topic()].differs
     assert result.proxy.recall == 1.0
     assert result.proxy.precision == 1.0
   end

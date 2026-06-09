@@ -32,14 +32,14 @@ defmodule Tracefield.Normalize do
         %{
           role: "user",
           content:
-            "Assign each numbered claim a short kebab cluster label. Claims that are semantically equivalent must receive the same label. Return only a JSON array of label strings in index order.\n\nCLAIMS:\n#{format_claim_refs(claim_refs)}"
+            "Group the numbered claims by their underlying concern. Merge claims that express the same risk, recommendation, or decision factor even if wording, polarity, or detail differs. Split only clearly different underlying concerns. Aim for 6 to 12 groups overall. Return only a JSON object in this exact shape: {\"kebab-group-id\": [1, 2], \"another-group\": [3]}. Every claim number must appear exactly once.\n\nCLAIMS:\n#{format_claim_refs(claim_refs)}"
         }
       ]
 
       case Tracefield.LLM.complete(messages, llm_opts) do
         {:ok, content} ->
-          case parse_cluster_json(content, length(claim_refs)) do
-            {:ok, labels} -> refs_to_clusters(claim_refs, labels)
+          case parse_cluster_json(content, claim_refs) do
+            {:ok, assignments} -> assignments
             :error -> independent_clusters(claim_refs)
           end
 
@@ -161,13 +161,57 @@ defmodule Tracefield.Normalize do
     |> Enum.reverse()
   end
 
-  defp parse_cluster_json(content, expected_length) do
-    with {:ok, labels} when is_list(labels) <- decode_json_array(content),
-         true <- length(labels) == expected_length,
-         true <- Enum.all?(labels, &valid_cluster_label?/1) do
-      {:ok, Enum.map(labels, &String.trim/1)}
+  defp parse_cluster_json(content, claim_refs) do
+    expected_length = length(claim_refs)
+
+    with {:ok, groups} when is_map(groups) <- decode_json_object(content),
+         {:ok, index_to_label} <- index_to_cluster_label(groups, expected_length) do
+      assignments =
+        claim_refs
+        |> Enum.with_index(1)
+        |> Map.new(fn {%{ref: ref}, index} -> {ref, Map.fetch!(index_to_label, index)} end)
+
+      {:ok, assignments}
     else
       _ -> :error
+    end
+  end
+
+  defp index_to_cluster_label(groups, expected_length) do
+    Enum.reduce_while(groups, {:ok, %{}}, fn {label, indices}, {:ok, acc} ->
+      label = normalize_label(label)
+
+      cond do
+        not valid_cluster_label?(label) or not is_list(indices) ->
+          {:halt, :error}
+
+        true ->
+          Enum.reduce_while(indices, {:ok, acc}, fn index, {:ok, nested_acc} ->
+            index = parse_index(index)
+
+            cond do
+              is_nil(index) or index < 1 or index > expected_length ->
+                {:halt, :error}
+
+              Map.has_key?(nested_acc, index) ->
+                {:halt, :error}
+
+              true ->
+                {:cont, {:ok, Map.put(nested_acc, index, label)}}
+            end
+          end)
+          |> case do
+            {:ok, updated} -> {:cont, {:ok, updated}}
+            :error -> {:halt, :error}
+          end
+      end
+    end)
+    |> case do
+      {:ok, index_to_label} when map_size(index_to_label) == expected_length ->
+        {:ok, index_to_label}
+
+      _ ->
+        :error
     end
   end
 
@@ -175,6 +219,13 @@ defmodule Tracefield.Normalize do
     with {:error, _reason} <- Jason.decode(content),
          {:ok, array_text} <- extract_array_text(content) do
       Jason.decode(array_text)
+    end
+  end
+
+  defp decode_json_object(content) do
+    with {:error, _reason} <- Jason.decode(content),
+         {:ok, object_text} <- extract_object_text(content) do
+      Jason.decode(object_text)
     end
   end
 
@@ -201,13 +252,30 @@ defmodule Tracefield.Normalize do
     end
   end
 
-  defp valid_cluster_label?(label), do: is_binary(label) and String.trim(label) != ""
+  defp extract_object_text(content) do
+    start = :binary.match(content, "{")
 
-  defp refs_to_clusters(claim_refs, labels) do
-    claim_refs
-    |> Enum.zip(labels)
-    |> Map.new(fn {%{ref: ref}, label} -> {ref, label} end)
+    finish =
+      content
+      |> String.reverse()
+      |> :binary.match("}")
+
+    case {start, finish} do
+      {{start_index, 1}, {reverse_index, 1}} ->
+        end_index = byte_size(content) - reverse_index - 1
+
+        if end_index >= start_index do
+          {:ok, binary_part(content, start_index, end_index - start_index + 1)}
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
   end
+
+  defp valid_cluster_label?(label), do: is_binary(label) and String.trim(label) != ""
 
   defp independent_clusters(claim_refs) do
     Map.new(claim_refs, fn %{ref: ref, text: text} -> {ref, normalize_text(text)} end)
@@ -226,6 +294,17 @@ defmodule Tracefield.Normalize do
   end
 
   defp valid_claim_ref?(_claim_ref), do: false
+
+  defp parse_index(index) when is_integer(index), do: index
+
+  defp parse_index(index) when is_binary(index) do
+    case Integer.parse(index) do
+      {parsed, ""} -> parsed
+      _ -> nil
+    end
+  end
+
+  defp parse_index(_index), do: nil
 
   defp parse_raw_index(index, _default) when is_integer(index) and index > 0, do: index
 
@@ -255,4 +334,7 @@ defmodule Tracefield.Normalize do
     |> String.replace(~r/[^[:alnum:]]+/u, "-")
     |> String.trim("-")
   end
+
+  defp normalize_label(label) when is_binary(label), do: normalize_text(label)
+  defp normalize_label(_label), do: nil
 end
