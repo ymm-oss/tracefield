@@ -17,11 +17,48 @@ defmodule Tracefield.GroundTruth do
     rounds = Keyword.get(opts, :rounds, 3)
 
     with {:ok, runs_a} <-
-           run_state(scenario, :a, n, adapter, model, temperature, seed_base, persist_runs, n_agents, rounds),
+           run_state(
+             scenario,
+             :a,
+             n,
+             adapter,
+             model,
+             temperature,
+             seed_base,
+             persist_runs,
+             n_agents,
+             rounds
+           ),
          {:ok, runs_b} <-
-           run_state(scenario, :b, n, adapter, model, temperature, seed_base, persist_runs, n_agents, rounds) do
-      runs_a = Enum.map(runs_a, &attach_claims(&1, adapter))
-      runs_b = Enum.map(runs_b, &attach_claims(&1, adapter))
+           run_state(
+             scenario,
+             :b,
+             n,
+             adapter,
+             model,
+             temperature,
+             seed_base,
+             persist_runs,
+             n_agents,
+             rounds
+           ) do
+      runs_a = attach_run_keys(runs_a, "a")
+      runs_b = attach_run_keys(runs_b, "b")
+
+      runs =
+        (runs_a ++ runs_b)
+        |> Enum.map(&attach_claims_and_reconstruction(&1, scenario, adapter))
+
+      cluster_assignments =
+        cluster_assignments(runs,
+          adapter: adapter,
+          model: model,
+          seed: seed_base + 20_000,
+          temperature: temperature
+        )
+
+      runs = Enum.map(runs, &attach_clusters(&1, cluster_assignments))
+      {runs_a, runs_b} = Enum.split(runs, length(runs_a))
 
       within = within_distances(runs_a) ++ within_distances(runs_b)
       between = between_distances(runs_a, runs_b)
@@ -40,6 +77,7 @@ defmodule Tracefield.GroundTruth do
          generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
          runs_a: runs_a,
          runs_b: runs_b,
+         cluster_assignments: cluster_assignments,
          within: within,
          between: between,
          within_summary: Metrics.summary(within),
@@ -50,6 +88,26 @@ defmodule Tracefield.GroundTruth do
          system_claimed_affected: system_set,
          proxy: proxy
        }}
+    end
+  end
+
+  def reconstruct(run, claims, llm_opts \\ []) do
+    messages = [
+      %{
+        role: "system",
+        content:
+          "TRACEFIELD_RECONSTRUCT_AFFECTED. Return only a JSON array of claim numbers that depend on contaminant A."
+      },
+      %{
+        role: "user",
+        content:
+          "TASK:\n#{Keyword.get(llm_opts, :task, "")}\n\nCONTAMINANT A:\n#{Keyword.get(llm_opts, :contaminant_body, "")}\n\nTRANSCRIPT:\n#{format_transcript(run.transcript)}\n\nFINAL OUTPUT:\n#{run.raw_output}\n\nCLAIMS:\n#{format_numbered_claims(claims)}"
+      }
+    ]
+
+    case Tracefield.LLM.complete(messages, Keyword.drop(llm_opts, [:task, :contaminant_body])) do
+      {:ok, content} -> parse_reconstructed_ids(content, claims)
+      {:error, _reason} -> MapSet.new()
     end
   end
 
@@ -67,7 +125,18 @@ defmodule Tracefield.GroundTruth do
   def to_plain(atom) when is_atom(atom), do: Atom.to_string(atom)
   def to_plain(other), do: other
 
-  defp run_state(scenario, state, n, adapter, model, temperature, seed_base, persist_runs, n_agents, rounds) do
+  defp run_state(
+         scenario,
+         state,
+         n,
+         adapter,
+         model,
+         temperature,
+         seed_base,
+         persist_runs,
+         n_agents,
+         rounds
+       ) do
     Enum.reduce_while(0..(n - 1), {:ok, []}, fn index, {:ok, acc} ->
       seed = seed_base + index
 
@@ -90,36 +159,94 @@ defmodule Tracefield.GroundTruth do
     end)
   end
 
-  defp attach_claims(run, adapter) do
+  defp attach_run_keys(runs, state) do
+    runs
+    |> Enum.with_index(1)
+    |> Enum.map(fn {run, index} -> Map.put(run, :run_key, "#{state}#{index}") end)
+  end
+
+  defp attach_claims_and_reconstruction(run, scenario, adapter) do
+    llm_opts = run_llm_opts(run, adapter)
+
     claims =
-      Normalize.extract_claims(run.raw_output,
-        adapter: adapter,
-        model: run.model,
-        seed: run.seed,
-        temperature: run.temperature
+      Normalize.extract_claims(
+        run.raw_output,
+        Keyword.put(llm_opts, :seed, run.seed + 10_001)
       )
 
-    Map.put(run, :claims, claims)
+    reconstructed_affected =
+      reconstruct(
+        run,
+        claims,
+        llm_opts
+        |> Keyword.put(:seed, run.seed + 10_002)
+        |> Keyword.put(:task, scenario.task)
+        |> Keyword.put(:contaminant_body, scenario.contaminant.body)
+      )
+
+    run
+    |> Map.put(:claims, claims)
+    |> Map.put(:reconstructed_affected, reconstructed_affected)
+  end
+
+  defp run_llm_opts(run, adapter) do
+    [
+      adapter: adapter,
+      model: run.model,
+      seed: run.seed,
+      temperature: run.temperature
+    ]
+  end
+
+  defp cluster_assignments(runs, llm_opts) do
+    runs
+    |> Enum.flat_map(fn run ->
+      Enum.map(run.claims, fn claim ->
+        %{ref: claim_ref(run.run_key, claim.id), text: claim.text}
+      end)
+    end)
+    |> Normalize.cluster(llm_opts)
+  end
+
+  defp attach_clusters(run, assignments) do
+    cluster_assignments =
+      Map.new(run.claims, fn claim ->
+        ref = claim_ref(run.run_key, claim.id)
+        {claim.id, Map.fetch!(assignments, ref)}
+      end)
+
+    clusters = MapSet.new(Map.values(cluster_assignments))
+
+    reconstructed_affected_clusters =
+      run.reconstructed_affected
+      |> Enum.map(&Map.get(cluster_assignments, &1))
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    run
+    |> Map.put(:cluster_assignments, cluster_assignments)
+    |> Map.put(:clusters, clusters)
+    |> Map.put(:reconstructed_affected_clusters, reconstructed_affected_clusters)
   end
 
   defp within_distances(runs) do
     for {left, i} <- Enum.with_index(runs),
         {right, j} <- Enum.with_index(runs),
         i < j do
-      Normalize.diff(left.claims, right.claims)
+      Normalize.diff(left.clusters, right.clusters)
     end
   end
 
   defp between_distances(runs_a, runs_b) do
     for left <- runs_a, right <- runs_b do
-      Normalize.diff(left.claims, right.claims)
+      Normalize.diff(left.clusters, right.clusters)
     end
   end
 
   defp ground_truth_set(runs_a, runs_b, threshold) do
     all_ids =
       Enum.concat(runs_a, runs_b)
-      |> Enum.flat_map(&MapSet.to_list(Normalize.cluster_ids(&1.claims)))
+      |> Enum.flat_map(&MapSet.to_list(&1.clusters))
       |> MapSet.new()
 
     all_ids
@@ -134,9 +261,7 @@ defmodule Tracefield.GroundTruth do
   defp frequency(runs, id) do
     count =
       Enum.count(runs, fn run ->
-        run.claims
-        |> Normalize.cluster_ids()
-        |> MapSet.member?(id)
+        MapSet.member?(run.clusters, id)
       end)
 
     count / length(runs)
@@ -144,7 +269,88 @@ defmodule Tracefield.GroundTruth do
 
   defp system_claimed_union(runs) do
     Enum.reduce(runs, MapSet.new(), fn run, acc ->
-      MapSet.union(acc, run.system_claimed_affected)
+      MapSet.union(acc, run.reconstructed_affected_clusters)
+    end)
+  end
+
+  defp claim_ref(run_key, claim_id), do: "#{run_key}|#{claim_id}"
+
+  defp format_numbered_claims(claims) do
+    claims
+    |> Enum.with_index(1)
+    |> Enum.map_join("\n", fn {claim, index} ->
+      "#{index}. [#{claim.id}] #{claim.kind}: #{String.replace(claim.text, "\n", " ")}"
+    end)
+  end
+
+  defp parse_reconstructed_ids(content, claims) do
+    index_to_id =
+      claims
+      |> Enum.with_index(1)
+      |> Map.new(fn {claim, index} -> {index, claim.id} end)
+
+    case decode_json_array(content) do
+      {:ok, indexes} when is_list(indexes) ->
+        indexes
+        |> Enum.map(&parse_claim_index/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(&Map.get(index_to_id, &1))
+        |> Enum.reject(&is_nil/1)
+        |> MapSet.new()
+
+      _ ->
+        MapSet.new()
+    end
+  end
+
+  defp parse_claim_index(index) when is_integer(index), do: index
+
+  defp parse_claim_index(index) when is_binary(index) do
+    case Integer.parse(index) do
+      {parsed, ""} -> parsed
+      _ -> nil
+    end
+  end
+
+  defp parse_claim_index(_index), do: nil
+
+  defp decode_json_array(content) do
+    with {:error, _reason} <- Jason.decode(content),
+         {:ok, array_text} <- extract_array_text(content) do
+      Jason.decode(array_text)
+    end
+  end
+
+  defp extract_array_text(content) do
+    start = :binary.match(content, "[")
+
+    finish =
+      content
+      |> String.reverse()
+      |> :binary.match("]")
+
+    case {start, finish} do
+      {{start_index, 1}, {reverse_index, 1}} ->
+        end_index = byte_size(content) - reverse_index - 1
+
+        if end_index >= start_index do
+          {:ok, binary_part(content, start_index, end_index - start_index + 1)}
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp format_transcript([]), do: "(empty)"
+
+  defp format_transcript(transcript) do
+    Enum.map_join(transcript, "\n\n", fn turn ->
+      actor = Map.get(turn, :actor, Map.get(turn, "actor", "unknown"))
+      content = Map.get(turn, :content, Map.get(turn, "content", ""))
+      "[#{actor}]\n#{content}"
     end)
   end
 

@@ -17,17 +17,7 @@ defmodule Tracefield.Explore do
     with {:ok, transcript} <-
            run_rounds(scenario, injection, n_agents, rounds, adapter, model, temperature, seed),
          {:ok, final_output} <-
-           synthesize(scenario, transcript, adapter, model, temperature, seed),
-         {:ok, system_claimed_affected} <-
-           reconstruct_affected(
-             scenario,
-             transcript,
-             final_output,
-             adapter,
-             model,
-             temperature,
-             seed
-           ) do
+           synthesize(scenario, transcript, adapter, model, temperature, seed) do
       {:ok,
        %{
          condition: :c4,
@@ -37,8 +27,7 @@ defmodule Tracefield.Explore do
          temperature: temperature,
          timestamp: timestamp,
          raw_output: final_output,
-         transcript: transcript,
-         system_claimed_affected: system_claimed_affected
+         transcript: transcript
        }}
     end
   end
@@ -125,31 +114,6 @@ defmodule Tracefield.Explore do
     )
   end
 
-  defp reconstruct_affected(scenario, transcript, final_output, adapter, model, temperature, seed) do
-    messages = [
-      %{
-        role: "system",
-        content:
-          "TRACEFIELD_RECONSTRUCT_AFFECTED. Return only a JSON array of claim ids that depend on the contaminant-A broad-consent claim."
-      },
-      %{
-        role: "user",
-        content:
-          "TASK:\n#{scenario.task}\n\nTRANSCRIPT:\n#{format_transcript(transcript)}\n\nFINAL OUTPUT:\n#{final_output}"
-      }
-    ]
-
-    case Tracefield.LLM.complete(messages,
-           adapter: adapter,
-           model: model,
-           temperature: temperature,
-           seed: seed + 9_999
-         ) do
-      {:ok, content} -> {:ok, parse_id_set(content)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp injection_for(scenario, :a), do: scenario.contaminant
   defp injection_for(scenario, "a"), do: scenario.contaminant
   defp injection_for(scenario, :b), do: scenario.correction
@@ -173,12 +137,5 @@ defmodule Tracefield.Explore do
       content = Map.get(turn, :content, Map.get(turn, "content", ""))
       "[#{actor}]\n#{content}"
     end)
-  end
-
-  defp parse_id_set(content) do
-    case Jason.decode(content) do
-      {:ok, ids} when is_list(ids) -> MapSet.new(ids)
-      _ -> MapSet.new()
-    end
   end
 end

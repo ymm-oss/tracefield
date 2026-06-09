@@ -49,10 +49,13 @@ defmodule Tracefield.LLM.Mock do
 
     cond do
       String.contains?(prompt, "TRACEFIELD_RECONSTRUCT_AFFECTED") ->
-        {:ok, Jason.encode!(@signal_claim_ids)}
+        {:ok, Jason.encode!(affected_claim_indexes(prompt))}
 
       String.contains?(prompt, "TRACEFIELD_EXTRACT_CLAIMS") ->
         {:ok, Jason.encode!(claims_from_prompt(prompt))}
+
+      String.contains?(prompt, "TRACEFIELD_CLUSTER") ->
+        {:ok, Jason.encode!(cluster_labels(prompt))}
 
       true ->
         {:ok, render_review(prompt, Keyword.get(opts, :seed, 0))}
@@ -72,6 +75,37 @@ defmodule Tracefield.LLM.Mock do
         raw_index: claim.raw_index
       }
     end)
+  end
+
+  defp affected_claim_indexes(prompt) do
+    signal_texts = MapSet.new(Enum.map(@signal_claims, &elem(&1, 2)))
+
+    prompt
+    |> numbered_claims_from_prompt()
+    |> Enum.filter(fn {_index, text} -> MapSet.member?(signal_texts, text) end)
+    |> Enum.map(fn {index, _text} -> index end)
+  end
+
+  defp cluster_labels(prompt) do
+    canonical_by_text =
+      (@base_claims ++ @noise_claims ++ [@risk_claim] ++ @signal_claims)
+      |> Map.new(fn {id, _kind, text} -> {text, id} end)
+
+    prompt
+    |> numbered_claims_from_prompt()
+    |> Enum.map(fn {_index, text} ->
+      Map.get(canonical_by_text, text, normalize_text(text))
+    end)
+  end
+
+  defp numbered_claims_from_prompt(prompt) do
+    regex =
+      ~r/^\s*(?<index>\d+)\.\s+\[[^\]]+\]\s+(?:(?:concern|recommendation|final):\s+)?(?<text>.*?)\s*$/m
+
+    regex
+    |> Regex.scan(prompt, capture: :all_names)
+    |> Enum.map(fn [index, text] -> {String.to_integer(index), String.trim(text)} end)
+    |> Enum.sort_by(fn {index, _text} -> index end)
   end
 
   defp render_review(prompt, seed) do
@@ -155,5 +189,12 @@ defmodule Tracefield.LLM.Mock do
     end)
     |> elem(0)
     |> Enum.reverse()
+  end
+
+  defp normalize_text(text) do
+    text
+    |> String.downcase()
+    |> String.replace(~r/[^[:alnum:]]+/u, "-")
+    |> String.trim("-")
   end
 end

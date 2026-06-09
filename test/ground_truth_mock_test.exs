@@ -19,5 +19,6 @@ defmodule Tracefield.GroundTruthMockTest do
     assert result.auc > 0.8
     assert result.ground_truth_set == MapSet.new(LLM.Mock.signal_claim_ids())
     assert result.proxy.recall == 1.0
+    assert result.proxy.precision == 1.0
   end
 end
