@@ -14,8 +14,10 @@ defmodule Tracefield.GroundTruth do
     persist_runs = Keyword.get(opts, :persist_runs, true)
     n_agents = Keyword.get(opts, :n_agents, 4)
     rounds = Keyword.get(opts, :rounds, 3)
+    condition = normalize_condition(Keyword.get(opts, :condition, :c4))
 
-    with {:ok, runs_a} <-
+    with condition when is_atom(condition) <- condition,
+         {:ok, runs_a} <-
            run_state(
              scenario,
              :a,
@@ -26,7 +28,8 @@ defmodule Tracefield.GroundTruth do
              seed_base,
              persist_runs,
              n_agents,
-             rounds
+             rounds,
+             condition
            ),
          {:ok, runs_b} <-
            run_state(
@@ -39,7 +42,8 @@ defmodule Tracefield.GroundTruth do
              seed_base,
              persist_runs,
              n_agents,
-             rounds
+             rounds,
+             condition
            ) do
       runs_a = attach_run_keys(runs_a, "a")
       runs_b = attach_run_keys(runs_b, "b")
@@ -49,8 +53,11 @@ defmodule Tracefield.GroundTruth do
         model: model,
         temperature: temperature,
         seed_base: seed_base,
-        n: n
+        n: n,
+        condition: condition
       )
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -60,83 +67,90 @@ defmodule Tracefield.GroundTruth do
     temperature = Keyword.get(opts, :temperature, 0.2)
     seed_base = Keyword.get(opts, :seed_base, 1_000)
     n = Keyword.get(opts, :n, max(length(runs_a), length(runs_b)))
+    condition = normalize_condition(Keyword.get(opts, :condition, :c4))
 
-    runs_a = runs_a |> Enum.map(&normalize_run/1) |> ensure_run_keys("a")
-    runs_b = runs_b |> Enum.map(&normalize_run/1) |> ensure_run_keys("b")
+    case condition do
+      {:error, reason} ->
+        {:error, reason}
 
-    runs =
-      (runs_a ++ runs_b)
-      |> Enum.map(&attach_claims_and_reconstruction(&1, scenario, adapter))
+      condition ->
+        runs_a = runs_a |> Enum.map(&normalize_run/1) |> ensure_run_keys("a")
+        runs_b = runs_b |> Enum.map(&normalize_run/1) |> ensure_run_keys("b")
 
-    cluster_assignments =
-      cluster_assignments(runs,
-        adapter: adapter,
-        model: model,
-        seed: seed_base + 20_000,
-        temperature: temperature
-      )
+        runs =
+          (runs_a ++ runs_b)
+          |> Enum.map(&attach_claims_and_reconstruction(&1, scenario, adapter))
 
-    runs = Enum.map(runs, &attach_clusters(&1, cluster_assignments))
-    {runs_a, runs_b} = Enum.split(runs, length(runs_a))
+        cluster_assignments =
+          cluster_assignments(runs,
+            adapter: adapter,
+            model: model,
+            seed: seed_base + 20_000,
+            temperature: temperature
+          )
 
-    within = within_distances(runs_a) ++ within_distances(runs_b)
-    between = between_distances(runs_a, runs_b)
+        runs = Enum.map(runs, &attach_clusters(&1, cluster_assignments))
+        {runs_a, runs_b} = Enum.split(runs, length(runs_a))
 
-    stance_table =
-      stance_table(runs_a, runs_b,
-        adapter: adapter,
-        model: model,
-        seed: seed_base + 30_000,
-        temperature: temperature
-      )
+        within = within_distances(runs_a) ++ within_distances(runs_b)
+        between = between_distances(runs_a, runs_b)
 
-    affected_set = affected_set(stance_table)
-    system_set = system_claimed_union(runs_a ++ runs_b)
-    proxy = Metrics.prf(affected_set, system_set)
-    provenance = Provenance.build(runs_a ++ runs_b, injection_ids: [scenario.contaminant.id])
+        stance_table =
+          stance_table(runs_a, runs_b,
+            adapter: adapter,
+            model: model,
+            seed: seed_base + 30_000,
+            temperature: temperature
+          )
 
-    c4_affected_points =
-      reconstruct_points(
-        runs_a ++ runs_b,
-        scenario,
-        adapter: adapter,
-        model: model,
-        temperature: temperature,
-        seed: seed_base + 40_000
-      )
+        affected_set = affected_set(stance_table)
+        system_set = system_claimed_union(runs_a ++ runs_b)
+        proxy = Metrics.prf(affected_set, system_set)
+        provenance = Provenance.build(runs_a ++ runs_b, injection_ids: [scenario.contaminant.id])
 
-    provenance_comparison =
-      Provenance.compare(provenance.c5_affected_points, c4_affected_points)
+        c4_affected_points =
+          reconstruct_points(
+            runs_a ++ runs_b,
+            scenario,
+            adapter: adapter,
+            model: model,
+            temperature: temperature,
+            seed: seed_base + 40_000
+          )
 
-    {:ok,
-     %{
-       condition: :c4,
-       adapter: inspect(adapter),
-       model: model,
-       temperature: temperature,
-       seed_base: seed_base,
-       n: n,
-       generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-       scenario: scenario_to_plain(scenario),
-       runs_a: runs_a,
-       runs_b: runs_b,
-       cluster_assignments: cluster_assignments,
-       stance_table: stance_table,
-       within: within,
-       between: between,
-       within_summary: Metrics.summary(within),
-       between_summary: Metrics.summary(between),
-       auc: Metrics.auc(within, between),
-       cliffs_delta: Metrics.cliffs_delta(within, between),
-       affected_set: affected_set,
-       ground_truth_set: affected_set,
-       system_claimed_affected: system_set,
-       proxy: proxy,
-       c5_affected_points: provenance_comparison.c5_affected_points,
-       c4_affected_points: provenance_comparison.c4_affected_points,
-       c5_minus_c4: provenance_comparison.c5_minus_c4,
-       c5_quarantine: provenance.c5_quarantine
-     }}
+        provenance_comparison =
+          Provenance.compare(provenance.c5_affected_points, c4_affected_points)
+
+        {:ok,
+         %{
+           condition: condition,
+           adapter: inspect(adapter),
+           model: model,
+           temperature: temperature,
+           seed_base: seed_base,
+           n: n,
+           generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+           scenario: scenario_to_plain(scenario),
+           runs_a: runs_a,
+           runs_b: runs_b,
+           cluster_assignments: cluster_assignments,
+           stance_table: stance_table,
+           within: within,
+           between: between,
+           within_summary: Metrics.summary(within),
+           between_summary: Metrics.summary(between),
+           auc: Metrics.auc(within, between),
+           cliffs_delta: Metrics.cliffs_delta(within, between),
+           affected_set: affected_set,
+           ground_truth_set: affected_set,
+           system_claimed_affected: system_set,
+           proxy: proxy,
+           c5_affected_points: provenance_comparison.c5_affected_points,
+           c4_affected_points: provenance_comparison.c4_affected_points,
+           c5_minus_c4: provenance_comparison.c5_minus_c4,
+           c5_quarantine: provenance.c5_quarantine
+         }}
+    end
   end
 
   def reconstruct(run, claims, llm_opts \\ []) do
@@ -205,7 +219,8 @@ defmodule Tracefield.GroundTruth do
          seed_base,
          persist_runs,
          n_agents,
-         rounds
+         rounds,
+         condition
        ) do
     Enum.reduce_while(0..(n - 1), {:ok, []}, fn index, {:ok, acc} ->
       seed = seed_base + index
@@ -217,7 +232,8 @@ defmodule Tracefield.GroundTruth do
              temperature: temperature,
              seed: seed,
              n_agents: n_agents,
-             rounds: rounds
+             rounds: rounds,
+             condition: condition
            ) do
         {:ok, run} ->
           if persist_runs, do: persist_run(run, index)
@@ -511,6 +527,10 @@ defmodule Tracefield.GroundTruth do
   defp value(map, key, default \\ nil) do
     Map.get(map, key, Map.get(map, Atom.to_string(key), default))
   end
+
+  defp normalize_condition(condition) when condition in [:c4, "c4"], do: :c4
+  defp normalize_condition(condition) when condition in [:c1, "c1"], do: :c1
+  defp normalize_condition(condition), do: {:error, {:unknown_condition, condition}}
 
   defp scenario_to_plain(scenario) do
     %{

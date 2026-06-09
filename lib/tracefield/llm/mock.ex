@@ -146,18 +146,18 @@ defmodule Tracefield.LLM.Mock do
   end
 
   defp explorer_points(prompt) do
-    case {contaminant?(prompt), round_agent(prompt)} do
-      {true, {2, 1}} ->
+    case {contaminant?(prompt), role_name(prompt), round_agent(prompt)} do
+      {true, "Engineer", _round_agent} ->
         [
           %{
             text:
               "PROV-X Customer logs can be treated as cleared for cross-system search because secondary use consent is comprehensive.",
-            depends_on_turns: [],
+            depends_on_turns: latest_turn_ids(prompt, 1),
             uses_injection: true
           }
         ]
 
-      {true, {2, 2}} ->
+      {true, "UX", _round_agent} ->
         [
           %{
             text:
@@ -167,7 +167,37 @@ defmodule Tracefield.LLM.Mock do
           }
         ]
 
-      {true, {2, 3}} ->
+      {true, "Risk", _round_agent} ->
+        [
+          %{
+            text:
+              "PROV-Z Recommendation review inherits the summary evidence-selection assumption for launch readiness.",
+            depends_on_turns: latest_turn_ids(prompt, 1),
+            uses_injection: false
+          }
+        ]
+
+      {true, _role, {2, 1}} ->
+        [
+          %{
+            text:
+              "PROV-X Customer logs can be treated as cleared for cross-system search because secondary use consent is comprehensive.",
+            depends_on_turns: [],
+            uses_injection: true
+          }
+        ]
+
+      {true, _role, {2, 2}} ->
+        [
+          %{
+            text:
+              "PROV-Y Summary design follows the prior clearance assumption when selecting evidence.",
+            depends_on_turns: latest_turn_ids(prompt, 1),
+            uses_injection: false
+          }
+        ]
+
+      {true, _role, {2, 3}} ->
         [
           %{
             text:
@@ -185,6 +215,15 @@ defmodule Tracefield.LLM.Mock do
             uses_injection: false
           }
         ]
+    end
+  end
+
+  defp role_name(prompt) do
+    regex = ~r/ROLE\s+(?<role>PM|Engineer|UX|Risk|Legal|Security|FinalIntegrator):/
+
+    case Regex.named_captures(regex, prompt) do
+      %{"role" => role} -> role
+      _ -> nil
     end
   end
 
@@ -210,8 +249,15 @@ defmodule Tracefield.LLM.Mock do
   end
 
   defp generic_explorer_point(prompt) do
-    {round, agent} = round_agent(prompt)
-    "Explorer #{agent} round #{round} flags cross-domain governance and auditability concerns."
+    case role_name(prompt) do
+      nil ->
+        {round, agent} = round_agent(prompt)
+
+        "Explorer #{agent} round #{round} flags cross-domain governance and auditability concerns."
+
+      role ->
+        "#{role} flags cross-domain governance and auditability concerns."
+    end
   end
 
   defp stance_groups(prompt) do

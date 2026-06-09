@@ -19,7 +19,8 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
           model: :string,
           seed_base: :integer,
           n_agents: :integer,
-          rounds: :integer
+          rounds: :integer,
+          condition: :string
         ],
         aliases: [a: :adapter, n: :n, t: :temperature, m: :model]
       )
@@ -29,6 +30,7 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
     n = Keyword.get(opts, :n, 8)
     temperature = Keyword.get(opts, :temperature, 0.2)
     seed_base = Keyword.get(opts, :seed_base, 1_000)
+    condition = condition_value(Keyword.get(opts, :condition, "c4"))
 
     model =
       Keyword.get(
@@ -47,6 +49,7 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
            seed_base: seed_base,
            n_agents: Keyword.get(opts, :n_agents, 4),
            rounds: Keyword.get(opts, :rounds, 3),
+           condition: condition,
            persist_runs: true
          ) do
       {:ok, result} ->
@@ -61,6 +64,10 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
   defp adapter_module("mock"), do: Tracefield.LLM.Mock
   defp adapter_module("ollama"), do: Tracefield.LLM.Ollama
   defp adapter_module(other), do: Mix.raise("unknown adapter #{inspect(other)}")
+
+  defp condition_value("c4"), do: :c4
+  defp condition_value("c1"), do: :c1
+  defp condition_value(other), do: Mix.raise("unknown condition #{inspect(other)}")
 
   defp persist_summary(result, adapter_name) do
     File.mkdir_p!("runs")
@@ -77,6 +84,7 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
 
   defp print_result(result, path) do
     Mix.shell().info("Tracefield Phase 1 - #{result.adapter}")
+    Mix.shell().info("condition: #{result.condition}")
     Mix.shell().info("model: #{result.model}")
     Mix.shell().info("n per state: #{result.n}")
     Mix.shell().info("temperature: #{fmt(result.temperature)}")
@@ -95,6 +103,9 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
     Mix.shell().info("proxy recall: #{fmt(result.proxy.recall)}")
     Mix.shell().info("proxy precision: #{fmt(result.proxy.precision)}")
     Mix.shell().info("proxy f1: #{fmt(result.proxy.f1)}")
+    Mix.shell().info("c5 affected points: #{inspect(sorted(result.c5_affected_points))}")
+    Mix.shell().info("c4 affected points: #{inspect(sorted(result.c4_affected_points))}")
+    Mix.shell().info("c5 minus c4: #{inspect(sorted(result.c5_minus_c4))}")
     print_stance_table(result.stance_table)
     Mix.shell().info("saved: #{path}")
   end
@@ -114,6 +125,8 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
   defp summary(summary) do
     "n=#{summary.n}, mean=#{fmt(summary.mean)}, sd=#{fmt(summary.sd)}, median=#{fmt(summary.median)}"
   end
+
+  defp sorted(set), do: set |> MapSet.to_list() |> Enum.sort()
 
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)
 end
