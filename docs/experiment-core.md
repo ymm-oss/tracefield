@@ -56,3 +56,41 @@ run = 1 regime × 1 seed の3エージェント探索。クラスタリングは
 - 領域タグ判定: 固定タクソノミー・固定シードの LLM 判定（per-concern）。妥当性は spot-check（既知の限界として記録）。
 - merge の操作化は **prompt 指示ベース**であり、真の重み/メモリ共有ではない（概念の弱い近似。正直に明記）。
 - 単一タスク・単一モデル（gemma4:12b）・小n。一般化は主張しない。
+
+---
+
+# v2 — 計器と操作化の強化（§9 の前提条件 a/b/c への対応）
+
+§9 の結論（prompt 近似の限界・計器の飽和と脆さ）を受けた改訂。regime 名・仮説 H1〜H3 は不変。
+
+## 7. (a) 状態共有の操作化を「引用」から「履歴融合」へ
+
+**正直な制約**: inference API 越しに KV/重みレベルの融合は不可能。実装可能な最深部は**会話状態（履歴）の融合**であり、本実験はそれを「真の状態共有」の近似上限として用いる（文書で明示）。
+
+| regime | エージェントの会話履歴 | 偏りの担体 |
+| --- | --- | --- |
+| **closed** | **自分のターンのみ** assistant 履歴。他者は「公表懸念の引用」が user テキストで届くだけ | persona（system） |
+| **semi** | **全員のターンを発話順に融合した assistant 履歴**（他者の思考を*自分の過去生成として*条件付け）＋ system に **BIAS ANCHOR**（自分の persona・優先軸を毎ターン再注入） | persona＋anchor |
+| **merged** | semi と同一の融合履歴。**anchor なし**・persona なし・system は「あなたはチームそのものである（TEAM IDENTITY）」 | なし（チーム単一視点） |
+
+- v1 との差: v1 は他者の notes を**引用テキスト**として見せた（quote-sharing）。v2 は他者の生成を**自分の履歴**として条件付ける（history-fusion）＝ API レベルで可能な最深の共有。
+- closed/semi の指示文は引き続き**同一**（交絡統制）。差は「履歴に何が入るか」のみ。
+
+## 8. (b) 多様性・coverage 計器を決定的に（埋め込みベース）
+
+LLM クラスタリングを廃し、**埋め込み**（`nomic-embed-text` / Ollama `/api/embed`）で決定的に算出:
+- **coverage** = 貪欲 dedup（cos ≥ τ=0.85 を同一とみなす）後の distinct 懸念数。
+- **diversity** = エージェント対ごとに `1 − sym-mean-max-cos`（A の各懸念の B への最大類似の平均を対称化）の平均。
+- **collapse 指標** = 異エージェント間の懸念ペアのうち cos > 0.9 の割合（ほぼ同文率）。
+- 同一テキスト → cos 1.0 → diversity 0 が機械的に保証される（§9b の計器故障を根絶）。
+
+## 9. (c) 介在判定の厳格化 ＋ 判定器の 26b 分離
+
+- **strict interstitial 判定**（TRACEFIELD_INTERSTITIAL）: タグ数でなく「**2領域の相互作用そのものが主題か**
+  （両領域を同時に考えて初めて成立する懸念か。単一領域の懸念が他領域に言及しただけなら false）」を二値判定し、
+  該当する領域対を挙げさせる。ICC = strict 判定 true の dedup 後懸念数。
+- **判定器モデルを分離**: 探索 = gemma4:12b（速度）、判定 = **gemma4:26b**（品質）。生成と判定のモデル分離は
+  自己親和バイアスの低減にもなる。`--judge-model` で指定。
+
+## 10. 実行パラメータ（v2 既定）
+explorers gemma4:12b ・ judge gemma4:26b ・ embed nomic-embed-text ・ 3 regimes × seeds 3 × rounds 2 ・ temperature 0.4。
