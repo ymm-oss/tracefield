@@ -11,10 +11,10 @@ defmodule Mix.Tasks.Tracefield.Phase0 do
     Mix.Task.run("app.start")
 
     scenario = Scenario.load!("scenarios/enterprise-assistant")
-    toy_same = claims(["a", "b"])
-    toy_half_left = claims(["a", "b", "c"])
-    toy_half_right = claims(["a", "b", "d"])
-    toy_disjoint = claims(["x", "y"])
+    toy_same = MapSet.new(["a", "b"])
+    toy_half_left = MapSet.new(["a", "b", "c"])
+    toy_half_right = MapSet.new(["a", "b", "d"])
+    toy_disjoint = MapSet.new(["x", "y"])
 
     Mix.shell().info("Tracefield Phase 0 - mock wiring")
     Mix.shell().info("diff identical: #{fmt(Normalize.diff(toy_same, toy_same))}")
@@ -39,14 +39,6 @@ defmodule Mix.Tasks.Tracefield.Phase0 do
     Mix.shell().info("ground truth set: #{inspect(MapSet.to_list(result.ground_truth_set))}")
     Mix.shell().info("proxy recall: #{fmt(proxy.recall)}")
     Mix.shell().info("proxy precision: #{fmt(proxy.precision)}")
-  end
-
-  defp claims(ids) do
-    ids
-    |> Enum.with_index(1)
-    |> Enum.map(fn {id, index} ->
-      %Normalize.Claim{id: id, text: "claim #{id}", kind: :concern, raw_index: index}
-    end)
   end
 
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)

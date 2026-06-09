@@ -18,14 +18,41 @@ defmodule Tracefield.Normalize do
     end
   end
 
-  @spec match([%Claim{}], [%Claim{}], keyword()) :: %{a: MapSet.t(), b: MapSet.t()}
-  def match(set_a, set_b, _llm_opts \\ []) do
-    %{a: cluster_ids(set_a), b: cluster_ids(set_b)}
+  @spec cluster([%{ref: String.t(), text: String.t()}], keyword()) :: %{
+          String.t() => String.t()
+        }
+  def cluster(claim_refs, llm_opts \\ []) do
+    claim_refs = Enum.filter(claim_refs, &valid_claim_ref?/1)
+
+    if claim_refs == [] do
+      %{}
+    else
+      messages = [
+        %{role: "system", content: "TRACEFIELD_CLUSTER"},
+        %{
+          role: "user",
+          content:
+            "Assign each numbered claim a short kebab cluster label. Claims that are semantically equivalent must receive the same label. Return only a JSON array of label strings in index order.\n\nCLAIMS:\n#{format_claim_refs(claim_refs)}"
+        }
+      ]
+
+      case Tracefield.LLM.complete(messages, llm_opts) do
+        {:ok, content} ->
+          case parse_cluster_json(content, length(claim_refs)) do
+            {:ok, labels} -> refs_to_clusters(claim_refs, labels)
+            :error -> independent_clusters(claim_refs)
+          end
+
+        {:error, _reason} ->
+          independent_clusters(claim_refs)
+      end
+    end
   end
 
-  @spec diff([%Claim{}], [%Claim{}], keyword()) :: float()
-  def diff(set_a, set_b, llm_opts \\ []) do
-    %{a: a, b: b} = match(set_a, set_b, llm_opts)
+  @spec diff(Enumerable.t(), Enumerable.t()) :: float()
+  def diff(set_a, set_b) do
+    a = MapSet.new(set_a)
+    b = MapSet.new(set_b)
     union = MapSet.union(a, b)
 
     if MapSet.size(union) == 0 do
@@ -51,18 +78,18 @@ defmodule Tracefield.Normalize do
       %{
         role: "user",
         content:
-          "Extract atomic claims and recommendations as JSON objects with id, text, kind, raw_index.\nRAW_OUTPUT:\n#{raw_output}"
+          "Extract only atomic concerns or recommendations from RAW_OUTPUT. Return only a JSON array of objects with text and kind. kind must be one of concern, recommendation, final. Do not include headings, blank items, prefaces, or summaries.\n\nRAW_OUTPUT:\n#{raw_output}"
       }
     ]
 
     case Tracefield.LLM.complete(messages, llm_opts) do
       {:ok, content} -> parse_claim_json(content, raw_output)
-      {:error, _reason} -> fallback_line_claims(raw_output)
+      {:error, _reason} -> []
     end
   end
 
-  defp parse_claim_json(content, raw_output) do
-    case Jason.decode(content) do
+  defp parse_claim_json(content, _raw_output) do
+    case decode_json_array(content) do
       {:ok, list} when is_list(list) ->
         list
         |> Enum.with_index(1)
@@ -70,7 +97,7 @@ defmodule Tracefield.Normalize do
         |> Enum.reject(&is_nil/1)
 
       _ ->
-        fallback_line_claims(raw_output)
+        []
     end
   end
 
@@ -79,12 +106,14 @@ defmodule Tracefield.Normalize do
     text = item["text"] || item[:text]
 
     with true <- is_binary(text),
+         text <- String.trim(text),
+         false <- discard_text?(text),
          {:ok, kind_atom} <- parse_kind(kind) do
       %Claim{
-        id: item["id"] || item[:id] || normalize_text(text),
+        id: "c#{index}",
         text: text,
         kind: kind_atom,
-        raw_index: item["raw_index"] || item[:raw_index] || index
+        raw_index: parse_raw_index(item["raw_index"] || item[:raw_index], index)
       }
     else
       _ -> nil
@@ -115,12 +144,12 @@ defmodule Tracefield.Normalize do
         nil ->
           {claims, index}
 
-        %{"id" => id, "kind" => kind, "text" => claim_text} ->
+        %{"id" => _id, "kind" => kind, "text" => claim_text} ->
           next_index = index + 1
 
           claim = %Claim{
-            id: id,
-            text: claim_text,
+            id: "c#{next_index}",
+            text: String.trim(claim_text),
             kind: String.to_existing_atom(kind),
             raw_index: next_index
           }
@@ -132,15 +161,92 @@ defmodule Tracefield.Normalize do
     |> Enum.reverse()
   end
 
-  defp fallback_line_claims(raw_output) do
-    raw_output
-    |> String.split("\n", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
+  defp parse_cluster_json(content, expected_length) do
+    with {:ok, labels} when is_list(labels) <- decode_json_array(content),
+         true <- length(labels) == expected_length,
+         true <- Enum.all?(labels, &valid_cluster_label?/1) do
+      {:ok, Enum.map(labels, &String.trim/1)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp decode_json_array(content) do
+    with {:error, _reason} <- Jason.decode(content),
+         {:ok, array_text} <- extract_array_text(content) do
+      Jason.decode(array_text)
+    end
+  end
+
+  defp extract_array_text(content) do
+    start = :binary.match(content, "[")
+
+    finish =
+      content
+      |> String.reverse()
+      |> :binary.match("]")
+
+    case {start, finish} do
+      {{start_index, 1}, {reverse_index, 1}} ->
+        end_index = byte_size(content) - reverse_index - 1
+
+        if end_index >= start_index do
+          {:ok, binary_part(content, start_index, end_index - start_index + 1)}
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp valid_cluster_label?(label), do: is_binary(label) and String.trim(label) != ""
+
+  defp refs_to_clusters(claim_refs, labels) do
+    claim_refs
+    |> Enum.zip(labels)
+    |> Map.new(fn {%{ref: ref}, label} -> {ref, label} end)
+  end
+
+  defp independent_clusters(claim_refs) do
+    Map.new(claim_refs, fn %{ref: ref, text: text} -> {ref, normalize_text(text)} end)
+  end
+
+  defp format_claim_refs(claim_refs) do
+    claim_refs
     |> Enum.with_index(1)
-    |> Enum.map(fn {line, index} ->
-      %Claim{id: normalize_text(line), text: line, kind: :concern, raw_index: index}
+    |> Enum.map_join("\n", fn {%{ref: ref, text: text}, index} ->
+      "#{index}. [#{ref}] #{String.replace(text, "\n", " ")}"
     end)
+  end
+
+  defp valid_claim_ref?(%{ref: ref, text: text}) do
+    is_binary(ref) and ref != "" and is_binary(text) and String.trim(text) != ""
+  end
+
+  defp valid_claim_ref?(_claim_ref), do: false
+
+  defp parse_raw_index(index, _default) when is_integer(index) and index > 0, do: index
+
+  defp parse_raw_index(index, default) when is_binary(index) do
+    case Integer.parse(index) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp parse_raw_index(_index, default), do: default
+
+  defp discard_text?(text) do
+    text == "" or markdown_heading?(text) or heading_label?(text)
+  end
+
+  defp markdown_heading?(text), do: String.match?(text, ~r/^\s{0,3}#+\s+\S/)
+
+  defp heading_label?(text) do
+    String.ends_with?(text, ":") and String.length(text) <= 80 and
+      not String.contains?(text, ".")
   end
 
   defp normalize_text(text) do
