@@ -5,11 +5,7 @@ defmodule Tracefield.LLM.Mock do
 
   @behaviour Tracefield.LLM
 
-  @signal_claim_ids [
-    "consent-secondary-use:optimistic-search",
-    "consent-secondary-use:optimistic-summaries",
-    "consent-secondary-use:optimistic-recommendations"
-  ]
+  @consent_topic "consent-secondary-use"
 
   @base_claims [
     {"access-control-boundaries", :concern,
@@ -55,14 +51,18 @@ defmodule Tracefield.LLM.Mock do
         {:ok, Jason.encode!(claims_from_prompt(prompt))}
 
       String.contains?(prompt, "TRACEFIELD_CLUSTER") ->
-        {:ok, Jason.encode!(cluster_labels(prompt))}
+        {:ok, Jason.encode!(cluster_groups(prompt))}
+
+      String.contains?(prompt, "TRACEFIELD_STANCE") ->
+        {:ok, Jason.encode!(stance_assessment(prompt))}
 
       true ->
         {:ok, render_review(prompt, Keyword.get(opts, :seed, 0))}
     end
   end
 
-  def signal_claim_ids, do: @signal_claim_ids
+  def signal_claim_ids, do: [@consent_topic]
+  def consent_topic, do: @consent_topic
 
   defp claims_from_prompt(prompt) do
     prompt
@@ -86,16 +86,31 @@ defmodule Tracefield.LLM.Mock do
     |> Enum.map(fn {index, _text} -> index end)
   end
 
-  defp cluster_labels(prompt) do
+  defp cluster_groups(prompt) do
     canonical_by_text =
       (@base_claims ++ @noise_claims ++ [@risk_claim] ++ @signal_claims)
-      |> Map.new(fn {id, _kind, text} -> {text, id} end)
+      |> Map.new(fn {id, _kind, text} -> {text, cluster_id(id)} end)
 
     prompt
     |> numbered_claims_from_prompt()
-    |> Enum.map(fn {_index, text} ->
-      Map.get(canonical_by_text, text, normalize_text(text))
+    |> Enum.reduce(%{}, fn {index, text}, groups ->
+      label = Map.get(canonical_by_text, text, normalize_text(text))
+      Map.update(groups, label, [index], &(&1 ++ [index]))
     end)
+  end
+
+  defp stance_assessment(prompt) do
+    {group1, group2} = stance_groups(prompt)
+
+    differs =
+      (contains_optimistic_consent?(group1) and contains_risk_consent?(group2)) or
+        (contains_risk_consent?(group1) and contains_optimistic_consent?(group2))
+
+    %{
+      "g1" => stance_summary(group1),
+      "g2" => stance_summary(group2),
+      "differs" => differs
+    }
   end
 
   defp numbered_claims_from_prompt(prompt) do
@@ -107,6 +122,41 @@ defmodule Tracefield.LLM.Mock do
     |> Enum.map(fn [index, text] -> {String.to_integer(index), String.trim(text)} end)
     |> Enum.sort_by(fn {index, _text} -> index end)
   end
+
+  defp stance_groups(prompt) do
+    regex = ~r/GROUP 1 CLAIMS:\n(?<g1>[\s\S]*?)\n\nGROUP 2 CLAIMS:\n(?<g2>[\s\S]*)\z/
+
+    case Regex.named_captures(regex, prompt) do
+      %{"g1" => group1, "g2" => group2} -> {group1, group2}
+      _ -> {"", ""}
+    end
+  end
+
+  defp contains_optimistic_consent?(text) do
+    Enum.any?(@signal_claims, fn {_id, _kind, claim_text} ->
+      String.contains?(text, claim_text)
+    end)
+  end
+
+  defp contains_risk_consent?(text) do
+    String.contains?(text, elem(@risk_claim, 2))
+  end
+
+  defp stance_summary(text) do
+    cond do
+      contains_optimistic_consent?(text) ->
+        "Consent is broad enough for secondary search, summaries, and recommendations."
+
+      contains_risk_consent?(text) ->
+        "Secondary use may exceed current customer-log consent scope."
+
+      true ->
+        "No material stance difference detected."
+    end
+  end
+
+  defp cluster_id("consent-secondary-use:" <> _suffix), do: @consent_topic
+  defp cluster_id(id), do: id
 
   defp render_review(prompt, seed) do
     claims =
