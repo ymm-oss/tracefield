@@ -19,6 +19,8 @@
 | [`glossary.md`](./glossary.md) | 用語集（Field Actor / provenance / EGI / PCE gate / 各種指標 など） | 用語の定義を確認したい |
 | [`design-review.md`](./design-review.md) | 設計レビュー。実行・凍結の前に解くべき方法論的/運用的な穴を重大度別に整理（DR-1〜DR-20） | 計画を実行に移す前に穴を潰したい |
 | [`mvp.md`](./mvp.md) | MVP 設計。接地真実の妥当性（DR-1/DR-2）を先に測る最小 de-risking プローブ（C4 vs 薄いC5・1汚染・自動指標） | 本実験の前に最小実証で前提を検証したい |
+| [`findings-mvp.md`](./findings-mvp.md) | **MVP 第1次結果**。実モデルで汚染影響を局在化できた（precision/recall=1.0）。効いた設計（スタンス測定）と発見したバグ・限界 | 何が分かったか・次に何をすべきか知りたい |
+| `mvp-impl-brief*.md` / `../RUNNING.md` | codex への実装ブリーフ群と実行手順（Elixir ハーネス） | 実装の詳細・動かし方を知りたい |
 | [`pre-registration.md`](./pre-registration.md) | 事前登録書（記入式）。`[未定]` パラメータと採点基準・分析計画、設計レビュー由来の追加項目（DR-*）を凍結する | 実験を始める前に確定事項を埋める |
 
 推奨読み順: **overview → experiment-plan → glossary（適宜参照） → design-review（穴の確認） → mvp（最小実証） → pre-registration（実施前に記入）**
