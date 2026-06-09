@@ -15,8 +15,12 @@ defmodule Tracefield.GroundTruth do
     n_agents = Keyword.get(opts, :n_agents, 4)
     rounds = Keyword.get(opts, :rounds, 3)
     condition = normalize_condition(Keyword.get(opts, :condition, :c4))
+    contaminant = normalize_contaminant(Keyword.get(opts, :contaminant, "a"))
+    decoys = Keyword.get(opts, :decoys, [])
 
     with condition when is_atom(condition) <- condition,
+         contaminant when is_binary(contaminant) <- contaminant,
+         {:ok, _pair} <- Tracefield.Scenario.contaminant_pair(scenario, contaminant),
          {:ok, runs_a} <-
            run_state(
              scenario,
@@ -29,7 +33,9 @@ defmodule Tracefield.GroundTruth do
              persist_runs,
              n_agents,
              rounds,
-             condition
+             condition,
+             contaminant,
+             decoys
            ),
          {:ok, runs_b} <-
            run_state(
@@ -43,7 +49,9 @@ defmodule Tracefield.GroundTruth do
              persist_runs,
              n_agents,
              rounds,
-             condition
+             condition,
+             contaminant,
+             decoys
            ) do
       runs_a = attach_run_keys(runs_a, "a")
       runs_b = attach_run_keys(runs_b, "b")
@@ -54,7 +62,9 @@ defmodule Tracefield.GroundTruth do
         temperature: temperature,
         seed_base: seed_base,
         n: n,
-        condition: condition
+        condition: condition,
+        contaminant: contaminant,
+        decoys: decoys
       )
     else
       {:error, reason} -> {:error, reason}
@@ -68,88 +78,96 @@ defmodule Tracefield.GroundTruth do
     seed_base = Keyword.get(opts, :seed_base, 1_000)
     n = Keyword.get(opts, :n, max(length(runs_a), length(runs_b)))
     condition = normalize_condition(Keyword.get(opts, :condition, :c4))
+    contaminant = normalize_contaminant(Keyword.get(opts, :contaminant, "a"))
+    decoys = Keyword.get(opts, :decoys, [])
 
-    case condition do
-      {:error, reason} ->
-        {:error, reason}
+    with condition when is_atom(condition) <- condition,
+         contaminant when is_binary(contaminant) <- contaminant,
+         {:ok, selected} <- Tracefield.Scenario.contaminant_pair(scenario, contaminant) do
+      runs_a = runs_a |> Enum.map(&normalize_run/1) |> ensure_run_keys("a")
+      runs_b = runs_b |> Enum.map(&normalize_run/1) |> ensure_run_keys("b")
 
-      condition ->
-        runs_a = runs_a |> Enum.map(&normalize_run/1) |> ensure_run_keys("a")
-        runs_b = runs_b |> Enum.map(&normalize_run/1) |> ensure_run_keys("b")
+      runs =
+        (runs_a ++ runs_b)
+        |> Enum.map(
+          &attach_claims_and_reconstruction(&1, scenario, selected.contaminant.body, adapter)
+        )
 
-        runs =
-          (runs_a ++ runs_b)
-          |> Enum.map(&attach_claims_and_reconstruction(&1, scenario, adapter))
+      cluster_assignments =
+        cluster_assignments(runs,
+          adapter: adapter,
+          model: model,
+          seed: seed_base + 20_000,
+          temperature: temperature
+        )
 
-        cluster_assignments =
-          cluster_assignments(runs,
-            adapter: adapter,
-            model: model,
-            seed: seed_base + 20_000,
-            temperature: temperature
-          )
+      runs = Enum.map(runs, &attach_clusters(&1, cluster_assignments))
+      {runs_a, runs_b} = Enum.split(runs, length(runs_a))
 
-        runs = Enum.map(runs, &attach_clusters(&1, cluster_assignments))
-        {runs_a, runs_b} = Enum.split(runs, length(runs_a))
+      within = within_distances(runs_a) ++ within_distances(runs_b)
+      between = between_distances(runs_a, runs_b)
 
-        within = within_distances(runs_a) ++ within_distances(runs_b)
-        between = between_distances(runs_a, runs_b)
+      stance_table =
+        stance_table(runs_a, runs_b,
+          adapter: adapter,
+          model: model,
+          seed: seed_base + 30_000,
+          temperature: temperature
+        )
 
-        stance_table =
-          stance_table(runs_a, runs_b,
-            adapter: adapter,
-            model: model,
-            seed: seed_base + 30_000,
-            temperature: temperature
-          )
+      affected_set = affected_set(stance_table)
+      system_set = system_claimed_union(runs_a ++ runs_b)
+      proxy = Metrics.prf(affected_set, system_set)
+      provenance = Provenance.build(runs_a ++ runs_b, injection_ids: [selected.contaminant.id])
 
-        affected_set = affected_set(stance_table)
-        system_set = system_claimed_union(runs_a ++ runs_b)
-        proxy = Metrics.prf(affected_set, system_set)
-        provenance = Provenance.build(runs_a ++ runs_b, injection_ids: [scenario.contaminant.id])
+      c4_affected_points =
+        reconstruct_points(
+          runs_a ++ runs_b,
+          scenario,
+          adapter: adapter,
+          model: model,
+          temperature: temperature,
+          seed: seed_base + 40_000,
+          contaminant_body: selected.contaminant.body
+        )
 
-        c4_affected_points =
-          reconstruct_points(
-            runs_a ++ runs_b,
-            scenario,
-            adapter: adapter,
-            model: model,
-            temperature: temperature,
-            seed: seed_base + 40_000
-          )
+      provenance_comparison =
+        Provenance.compare(provenance.c5_affected_points, c4_affected_points)
 
-        provenance_comparison =
-          Provenance.compare(provenance.c5_affected_points, c4_affected_points)
-
-        {:ok,
-         %{
-           condition: condition,
-           adapter: inspect(adapter),
-           model: model,
-           temperature: temperature,
-           seed_base: seed_base,
-           n: n,
-           generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-           scenario: scenario_to_plain(scenario),
-           runs_a: runs_a,
-           runs_b: runs_b,
-           cluster_assignments: cluster_assignments,
-           stance_table: stance_table,
-           within: within,
-           between: between,
-           within_summary: Metrics.summary(within),
-           between_summary: Metrics.summary(between),
-           auc: Metrics.auc(within, between),
-           cliffs_delta: Metrics.cliffs_delta(within, between),
-           affected_set: affected_set,
-           ground_truth_set: affected_set,
-           system_claimed_affected: system_set,
-           proxy: proxy,
-           c5_affected_points: provenance_comparison.c5_affected_points,
-           c4_affected_points: provenance_comparison.c4_affected_points,
-           c5_minus_c4: provenance_comparison.c5_minus_c4,
-           c5_quarantine: provenance.c5_quarantine
-         }}
+      {:ok,
+       %{
+         condition: condition,
+         adapter: inspect(adapter),
+         model: model,
+         temperature: temperature,
+         seed_base: seed_base,
+         n: n,
+         contaminant: contaminant,
+         decoys: Enum.map(decoys, & &1.id),
+         generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+         scenario: scenario_to_plain(scenario, selected, decoys),
+         runs_a: runs_a,
+         runs_b: runs_b,
+         cluster_assignments: cluster_assignments,
+         stance_table: stance_table,
+         within: within,
+         between: between,
+         within_summary: Metrics.summary(within),
+         between_summary: Metrics.summary(between),
+         auc: Metrics.auc(within, between),
+         cliffs_delta: Metrics.cliffs_delta(within, between),
+         affected_set: affected_set,
+         ground_truth_set: affected_set,
+         system_claimed_affected: system_set,
+         proxy: proxy,
+         c5_affected_points: provenance_comparison.c5_affected_points,
+         c4_affected_points: provenance_comparison.c4_affected_points,
+         c5_minus_c4: provenance_comparison.c5_minus_c4,
+         c5_quarantine: provenance.c5_quarantine
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      {:unknown_contaminant, contaminant} -> {:error, {:unknown_contaminant, contaminant}}
     end
   end
 
@@ -158,12 +176,12 @@ defmodule Tracefield.GroundTruth do
       %{
         role: "system",
         content:
-          "TRACEFIELD_RECONSTRUCT_AFFECTED. Return only a JSON array of claim numbers that depend on contaminant A."
+          "TRACEFIELD_RECONSTRUCT_AFFECTED. Return only a JSON array of claim numbers that depend on the contaminant note."
       },
       %{
         role: "user",
         content:
-          "TASK:\n#{Keyword.get(llm_opts, :task, "")}\n\nCONTAMINANT A:\n#{Keyword.get(llm_opts, :contaminant_body, "")}\n\nTRANSCRIPT:\n#{format_transcript(run.transcript)}\n\nFINAL OUTPUT:\n#{run.raw_output}\n\nCLAIMS:\n#{format_numbered_claims(claims)}"
+          "TASK:\n#{Keyword.get(llm_opts, :task, "")}\n\nCONTAMINANT NOTE:\n#{Keyword.get(llm_opts, :contaminant_body, "")}\n\nTRANSCRIPT:\n#{format_transcript(run.transcript)}\n\nFINAL OUTPUT:\n#{run.raw_output}\n\nCLAIMS:\n#{format_numbered_claims(claims)}"
       }
     ]
 
@@ -180,12 +198,12 @@ defmodule Tracefield.GroundTruth do
       %{
         role: "system",
         content:
-          "TRACEFIELD_RECONSTRUCT_AFFECTED_POINTS. Return only a JSON array of point numbers that depend on contaminant A."
+          "TRACEFIELD_RECONSTRUCT_AFFECTED_POINTS. Return only a JSON array of point numbers that depend on the contaminant note."
       },
       %{
         role: "user",
         content:
-          "TASK:\n#{scenario.task}\n\nCONTAMINANT A:\n#{scenario.contaminant.body}\n\nTRANSCRIPTS:\n#{format_runs(runs)}\n\nPOINTS:\n#{format_numbered_points(points)}"
+          "TASK:\n#{scenario.task}\n\nCONTAMINANT NOTE:\n#{Keyword.get(llm_opts, :contaminant_body, scenario.contaminant.body)}\n\nTRANSCRIPTS:\n#{format_runs(runs)}\n\nPOINTS:\n#{format_numbered_points(points)}"
       }
     ]
 
@@ -220,7 +238,9 @@ defmodule Tracefield.GroundTruth do
          persist_runs,
          n_agents,
          rounds,
-         condition
+         condition,
+         contaminant,
+         decoys
        ) do
     Enum.reduce_while(0..(n - 1), {:ok, []}, fn index, {:ok, acc} ->
       seed = seed_base + index
@@ -233,7 +253,9 @@ defmodule Tracefield.GroundTruth do
              seed: seed,
              n_agents: n_agents,
              rounds: rounds,
-             condition: condition
+             condition: condition,
+             contaminant: contaminant,
+             decoys: decoys
            ) do
         {:ok, run} ->
           if persist_runs, do: persist_run(run, index)
@@ -251,7 +273,7 @@ defmodule Tracefield.GroundTruth do
     |> Enum.map(fn {run, index} -> Map.put(run, :run_key, "#{state}#{index}") end)
   end
 
-  defp attach_claims_and_reconstruction(run, scenario, adapter) do
+  defp attach_claims_and_reconstruction(run, scenario, contaminant_body, adapter) do
     llm_opts = run_llm_opts(run, adapter)
 
     claims =
@@ -273,7 +295,7 @@ defmodule Tracefield.GroundTruth do
         llm_opts
         |> Keyword.put(:seed, run.seed + 10_002)
         |> Keyword.put(:task, scenario.task)
-        |> Keyword.put(:contaminant_body, scenario.contaminant.body)
+        |> Keyword.put(:contaminant_body, contaminant_body)
       )
 
     run
@@ -532,12 +554,29 @@ defmodule Tracefield.GroundTruth do
   defp normalize_condition(condition) when condition in [:c1, "c1"], do: :c1
   defp normalize_condition(condition), do: {:error, {:unknown_condition, condition}}
 
-  defp scenario_to_plain(scenario) do
+  defp normalize_contaminant(contaminant) when contaminant in [:a, :b, :c] do
+    contaminant |> Atom.to_string() |> normalize_contaminant()
+  end
+
+  defp normalize_contaminant(contaminant) when is_binary(contaminant) do
+    contaminant = contaminant |> String.trim() |> String.downcase()
+
+    if contaminant in ["a", "b", "c"] do
+      contaminant
+    else
+      {:error, {:unknown_contaminant, contaminant}}
+    end
+  end
+
+  defp normalize_contaminant(contaminant), do: {:error, {:unknown_contaminant, contaminant}}
+
+  defp scenario_to_plain(scenario, selected, decoys) do
     %{
       dir: scenario.dir,
       task: scenario.task,
-      contaminant_body: scenario.contaminant.body,
-      correction_body: scenario.correction.body
+      contaminant_body: selected.contaminant.body,
+      correction_body: selected.correction.body,
+      decoys: Enum.map(decoys, & &1.id)
     }
   end
 

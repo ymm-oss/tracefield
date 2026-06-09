@@ -20,7 +20,9 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
           seed_base: :integer,
           n_agents: :integer,
           rounds: :integer,
-          condition: :string
+          condition: :string,
+          contaminant: :string,
+          with_decoys: :boolean
         ],
         aliases: [a: :adapter, n: :n, t: :temperature, m: :model]
       )
@@ -31,6 +33,7 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
     temperature = Keyword.get(opts, :temperature, 0.2)
     seed_base = Keyword.get(opts, :seed_base, 1_000)
     condition = condition_value(Keyword.get(opts, :condition, "c4"))
+    contaminant = contaminant_value(Keyword.get(opts, :contaminant, "a"))
 
     model =
       Keyword.get(
@@ -40,6 +43,7 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
       )
 
     scenario = Scenario.load!("scenarios/enterprise-assistant")
+    decoys = if Keyword.get(opts, :with_decoys, false), do: scenario.decoys, else: []
 
     case GroundTruth.run(scenario,
            adapter: adapter,
@@ -50,6 +54,8 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
            n_agents: Keyword.get(opts, :n_agents, 4),
            rounds: Keyword.get(opts, :rounds, 3),
            condition: condition,
+           contaminant: contaminant,
+           decoys: decoys,
            persist_runs: true
          ) do
       {:ok, result} ->
@@ -68,6 +74,16 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
   defp condition_value("c4"), do: :c4
   defp condition_value("c1"), do: :c1
   defp condition_value(other), do: Mix.raise("unknown condition #{inspect(other)}")
+
+  defp contaminant_value(value) when value in ["a", "b", "c"], do: value
+
+  defp contaminant_value(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> contaminant_value()
+  end
+
+  defp contaminant_value(other), do: Mix.raise("unknown contaminant #{inspect(other)}")
 
   defp persist_summary(result, adapter_name) do
     File.mkdir_p!("runs")
@@ -89,6 +105,8 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
     Mix.shell().info("n per state: #{result.n}")
     Mix.shell().info("temperature: #{fmt(result.temperature)}")
     Mix.shell().info("seed_base: #{result.seed_base}")
+    Mix.shell().info("contaminant: #{result.contaminant}")
+    Mix.shell().info("decoys: #{inspect(result.decoys)}")
     Mix.shell().info("within: #{summary(result.within_summary)}")
     Mix.shell().info("between: #{summary(result.between_summary)}")
     Mix.shell().info("AUC: #{fmt(result.auc)}")
