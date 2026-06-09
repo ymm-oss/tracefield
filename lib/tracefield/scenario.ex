@@ -109,7 +109,8 @@ defmodule Tracefield.Scenario do
     end
   end
 
-  defp normalize_contaminant_key(key) when is_atom(key), do: key |> Atom.to_string() |> normalize_contaminant_key()
+  defp normalize_contaminant_key(key) when is_atom(key),
+    do: key |> Atom.to_string() |> normalize_contaminant_key()
 
   defp normalize_contaminant_key(key) when is_binary(key),
     do: key |> String.trim() |> String.downcase()

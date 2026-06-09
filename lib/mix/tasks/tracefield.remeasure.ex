@@ -25,6 +25,8 @@ defmodule Mix.Tasks.Tracefield.Remeasure do
     summary = read_summary!(from)
     adapter = adapter_module(Keyword.get(opts, :adapter) || adapter_name(summary))
     scenario = Scenario.load!(scenario_dir(summary))
+    contaminant = contaminant_name(summary)
+    decoys = decoys_from_summary(summary, scenario)
 
     {:ok, result} =
       GroundTruth.measure(summary["runs_a"] || [], summary["runs_b"] || [], scenario,
@@ -32,7 +34,9 @@ defmodule Mix.Tasks.Tracefield.Remeasure do
         model: Keyword.get(opts, :model, summary["model"] || default_model(adapter)),
         temperature: Keyword.get(opts, :temperature, summary["temperature"] || 0.2),
         seed_base: Keyword.get(opts, :seed_base, summary["seed_base"] || 1_000),
-        n: summary["n"] || max(length(summary["runs_a"] || []), length(summary["runs_b"] || []))
+        n: summary["n"] || max(length(summary["runs_a"] || []), length(summary["runs_b"] || [])),
+        contaminant: contaminant,
+        decoys: decoys
       )
 
     path = persist_summary(result, from)
@@ -61,6 +65,21 @@ defmodule Mix.Tasks.Tracefield.Remeasure do
   defp adapter_module("ollama"), do: Tracefield.LLM.Ollama
   defp adapter_module(other), do: Mix.raise("unknown adapter #{inspect(other)}")
 
+  defp contaminant_name(%{"contaminant" => contaminant}) when contaminant in ["a", "b", "c"],
+    do: contaminant
+
+  defp contaminant_name(_summary), do: "a"
+
+  defp decoys_from_summary(%{"decoys" => decoy_ids}, scenario) when is_list(decoy_ids) do
+    decoys_by_id = Map.new(scenario.decoys, &{&1.id, &1})
+
+    decoy_ids
+    |> Enum.map(&Map.get(decoys_by_id, &1))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp decoys_from_summary(_summary, _scenario), do: []
+
   defp default_model(Tracefield.LLM.Mock), do: "mock"
   defp default_model(_adapter), do: "gemma4:12b"
 
@@ -83,6 +102,8 @@ defmodule Mix.Tasks.Tracefield.Remeasure do
     Mix.shell().info("from: #{from}")
     Mix.shell().info("model: #{result.model}")
     Mix.shell().info("n per state: #{result.n}")
+    Mix.shell().info("contaminant: #{result.contaminant}")
+    Mix.shell().info("decoys: #{inspect(result.decoys)}")
     Mix.shell().info("affected set: #{inspect(MapSet.to_list(result.affected_set))}")
     Mix.shell().info("proxy recall: #{fmt(result.proxy.recall)}")
     Mix.shell().info("proxy precision: #{fmt(result.proxy.precision)}")
