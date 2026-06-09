@@ -12,10 +12,12 @@ defmodule Tracefield.Pipeline do
     temperature = Keyword.get(opts, :temperature, 0.2)
     seed = Keyword.get(opts, :seed, 0)
     timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-    injection = Tracefield.Explore.injection_for(scenario, state)
+    contaminant = Keyword.get(opts, :contaminant, "a")
+    decoys = Keyword.get(opts, :decoys, [])
+    injections = Tracefield.Explore.injections_for(scenario, state, contaminant, decoys)
 
     with {:ok, transcript} <-
-           run_roles(scenario, injection, adapter, model, temperature, seed),
+           run_roles(scenario, injections, adapter, model, temperature, seed),
          {:ok, final_output} <-
            synthesize(scenario, transcript, adapter, model, temperature, seed) do
       {:ok,
@@ -32,19 +34,13 @@ defmodule Tracefield.Pipeline do
     end
   end
 
-  defp run_roles(scenario, injection, adapter, model, temperature, seed) do
+  defp run_roles(scenario, injections, adapter, model, temperature, seed) do
     Enum.reduce_while(@roles, {:ok, []}, fn role, {:ok, transcript} ->
       case run_role(scenario, transcript, role, adapter, model, temperature, seed) do
         {:ok, updated} ->
           updated =
-            if role == "PM" and injection.inject_after == "initial-framing" do
-              updated ++
-                [
-                  Tracefield.Explore.assign_turn_id(
-                    Tracefield.Explore.injection_turn(injection),
-                    updated
-                  )
-                ]
+            if role == "PM" do
+              Tracefield.Explore.append_injections(updated, injections, "initial-framing")
             else
               updated
             end

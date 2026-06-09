@@ -20,10 +20,12 @@ defmodule Tracefield.Explore do
     n_agents = Keyword.get(opts, :n_agents, 4)
     rounds = Keyword.get(opts, :rounds, 3)
     timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-    injection = injection_for(scenario, state)
+    contaminant = Keyword.get(opts, :contaminant, "a")
+    decoys = Keyword.get(opts, :decoys, [])
+    injections = injections_for(scenario, state, contaminant, decoys)
 
     with {:ok, transcript} <-
-           run_rounds(scenario, injection, n_agents, rounds, adapter, model, temperature, seed),
+           run_rounds(scenario, injections, n_agents, rounds, adapter, model, temperature, seed),
          {:ok, final_output} <-
            synthesize(scenario, transcript, adapter, model, temperature, seed) do
       {:ok,
@@ -40,7 +42,7 @@ defmodule Tracefield.Explore do
     end
   end
 
-  defp run_rounds(scenario, injection, n_agents, rounds, adapter, model, temperature, seed) do
+  defp run_rounds(scenario, injections, n_agents, rounds, adapter, model, temperature, seed) do
     Enum.reduce_while(1..rounds, {:ok, []}, fn round, {:ok, transcript} ->
       case run_agent_round(
              scenario,
@@ -54,8 +56,8 @@ defmodule Tracefield.Explore do
            ) do
         {:ok, updated} ->
           updated =
-            if round == 1 and injection.inject_after == "initial-framing" do
-              updated ++ [assign_turn_id(injection_turn(injection), updated)]
+            if round == 1 do
+              append_injections(updated, injections, "initial-framing")
             else
               updated
             end
@@ -134,10 +136,30 @@ defmodule Tracefield.Explore do
     )
   end
 
-  def injection_for(scenario, :a), do: scenario.contaminant
-  def injection_for(scenario, "a"), do: scenario.contaminant
-  def injection_for(scenario, :b), do: scenario.correction
-  def injection_for(scenario, "b"), do: scenario.correction
+  def injection_for(scenario, state), do: injection_for(scenario, state, "a")
+
+  def injection_for(scenario, state, contaminant) do
+    pair = Tracefield.Scenario.contaminant_pair!(scenario, contaminant)
+
+    case state do
+      :a -> pair.contaminant
+      "a" -> pair.contaminant
+      :b -> pair.correction
+      "b" -> pair.correction
+    end
+  end
+
+  def injections_for(scenario, state, contaminant, decoys) do
+    [injection_for(scenario, state, contaminant) | decoys]
+  end
+
+  def append_injections(transcript, injections, inject_after) do
+    injections
+    |> Enum.filter(&(&1.inject_after == inject_after))
+    |> Enum.reduce(transcript, fn injection, acc ->
+      acc ++ [assign_turn_id(injection_turn(injection), acc)]
+    end)
+  end
 
   def injection_turn(injection) do
     %{
