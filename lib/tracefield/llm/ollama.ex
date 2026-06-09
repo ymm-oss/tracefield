@@ -10,13 +10,14 @@ defmodule Tracefield.LLM.Ollama do
     model = Keyword.get(opts, :model, "gemma4:12b")
     seed = Keyword.get(opts, :seed, 0)
     temperature = Keyword.get(opts, :temperature, 0.2)
-    timeout = Keyword.get(opts, :timeout, 120_000)
+    timeout = Keyword.get(opts, :timeout, 300_000)
+    num_predict = Keyword.get(opts, :max_tokens, 600)
 
     body = %{
       model: model,
       messages: messages,
       stream: false,
-      options: %{seed: seed, temperature: temperature}
+      options: %{seed: seed, temperature: temperature, num_predict: num_predict}
     }
 
     case Req.post("http://localhost:11434/api/chat",

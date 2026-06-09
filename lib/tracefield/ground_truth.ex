@@ -13,11 +13,13 @@ defmodule Tracefield.GroundTruth do
     model = Keyword.get(opts, :model, default_model(adapter))
     threshold = Keyword.get(opts, :threshold, 0.5)
     persist_runs = Keyword.get(opts, :persist_runs, true)
+    n_agents = Keyword.get(opts, :n_agents, 4)
+    rounds = Keyword.get(opts, :rounds, 3)
 
     with {:ok, runs_a} <-
-           run_state(scenario, :a, n, adapter, model, temperature, seed_base, persist_runs),
+           run_state(scenario, :a, n, adapter, model, temperature, seed_base, persist_runs, n_agents, rounds),
          {:ok, runs_b} <-
-           run_state(scenario, :b, n, adapter, model, temperature, seed_base, persist_runs) do
+           run_state(scenario, :b, n, adapter, model, temperature, seed_base, persist_runs, n_agents, rounds) do
       runs_a = Enum.map(runs_a, &attach_claims(&1, adapter))
       runs_b = Enum.map(runs_b, &attach_claims(&1, adapter))
 
@@ -65,7 +67,7 @@ defmodule Tracefield.GroundTruth do
   def to_plain(atom) when is_atom(atom), do: Atom.to_string(atom)
   def to_plain(other), do: other
 
-  defp run_state(scenario, state, n, adapter, model, temperature, seed_base, persist_runs) do
+  defp run_state(scenario, state, n, adapter, model, temperature, seed_base, persist_runs, n_agents, rounds) do
     Enum.reduce_while(0..(n - 1), {:ok, []}, fn index, {:ok, acc} ->
       seed = seed_base + index
 
@@ -74,7 +76,9 @@ defmodule Tracefield.GroundTruth do
              adapter: adapter,
              model: model,
              temperature: temperature,
-             seed: seed
+             seed: seed,
+             n_agents: n_agents,
+             rounds: rounds
            ) do
         {:ok, run} ->
           if persist_runs, do: persist_run(run, index)
