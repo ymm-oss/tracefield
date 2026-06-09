@@ -59,6 +59,9 @@ defmodule Tracefield.LLM.Mock do
       String.contains?(prompt, "TRACEFIELD_CLUSTER") ->
         {:ok, Jason.encode!(cluster_groups(prompt))}
 
+      String.contains?(prompt, "TRACEFIELD_INTERSTITIAL") ->
+        {:ok, Jason.encode!(interstitial_judgments(prompt))}
+
       String.contains?(prompt, "TRACEFIELD_DOMAINS") ->
         {:ok, Jason.encode!(domain_tags(prompt))}
 
@@ -124,6 +127,20 @@ defmodule Tracefield.LLM.Mock do
     |> Map.new(fn {index, text} -> {Integer.to_string(index), domains_from_text(text)} end)
   end
 
+  defp interstitial_judgments(prompt) do
+    prompt
+    |> numbered_domain_concerns()
+    |> Map.new(fn {index, text} ->
+      pair = text |> domains_from_text() |> Enum.take(2)
+
+      {Integer.to_string(index),
+       %{
+         interstitial: length(pair) >= 2,
+         pair: pair
+       }}
+    end)
+  end
+
   defp numbered_domain_concerns(prompt) do
     regex = ~r/^\s*(?<index>\d+)\.\s+(?<text>.*?)\s*$/m
 
@@ -163,12 +180,10 @@ defmodule Tracefield.LLM.Mock do
 
   defp dissolution_regime(prompt) do
     cond do
-      String.contains?(prompt, "単一の統合見解に収束せよ") ->
+      String.contains?(prompt, "TEAM IDENTITY") ->
         :merged
 
-      String.contains?(prompt, "[SEC notes]") or String.contains?(prompt, "[BIZ notes]") or
-        String.contains?(prompt, "[UX notes]") or
-          String.contains?(prompt, "WORKSPACE NOTES AND CONCERNS") ->
+      String.contains?(prompt, "BIAS ANCHOR") ->
         :semi
 
       true ->

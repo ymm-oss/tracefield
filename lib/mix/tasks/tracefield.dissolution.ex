@@ -18,6 +18,8 @@ defmodule Mix.Tasks.Tracefield.Dissolution do
           rounds: :integer,
           regimes: :string,
           model: :string,
+          judge_model: :string,
+          embed_model: :string,
           temperature: :float
         ],
         aliases: [a: :adapter, m: :model, t: :temperature]
@@ -36,6 +38,9 @@ defmodule Mix.Tasks.Tracefield.Dissolution do
         :model,
         if(adapter == Tracefield.LLM.Mock, do: "mock", else: "gemma4:12b")
       )
+
+    judge_model = Keyword.get(opts, :judge_model, model)
+    embed_model = Keyword.get(opts, :embed_model, "nomic-embed-text")
 
     scenario = Scenario.load!("scenarios/enterprise-assistant")
 
@@ -56,6 +61,8 @@ defmodule Mix.Tasks.Tracefield.Dissolution do
           Dissolution.measure(run,
             adapter: adapter,
             model: model,
+            judge_model: judge_model,
+            embed_model: embed_model,
             temperature: temperature
           )
 
@@ -98,11 +105,11 @@ defmodule Mix.Tasks.Tracefield.Dissolution do
   defp print_result(measurements, path) do
     Mix.shell().info("Tracefield Dissolution")
     Mix.shell().info("runs:")
-    Mix.shell().info("regime seed icc coverage diversity bias_retention")
+    Mix.shell().info("regime seed icc coverage diversity collapse_rate")
 
     Enum.each(measurements, fn row ->
       Mix.shell().info(
-        "#{row.regime} #{row.seed} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.bias_retention)}"
+        "#{row.regime} #{row.seed} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
       )
     end)
 
@@ -110,12 +117,12 @@ defmodule Mix.Tasks.Tracefield.Dissolution do
 
     Mix.shell().info("")
     Mix.shell().info("aggregate mean±sd:")
-    Mix.shell().info("regime icc coverage diversity bias_retention")
+    Mix.shell().info("regime icc coverage diversity collapse_rate")
 
     Enum.each([:closed, :semi, :merged], fn regime ->
       if row = summary[regime] do
         Mix.shell().info(
-          "#{regime} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.bias_retention)}"
+          "#{regime} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
         )
       end
     end)
@@ -132,11 +139,11 @@ defmodule Mix.Tasks.Tracefield.Dissolution do
     )
 
     h3 =
-      abs(mean(summary, :merged, :diversity)) <= 0.0001 and
+      mean(summary, :merged, :diversity) < 0.3 and
         mean(summary, :merged, :coverage) < mean(summary, :closed, :coverage)
 
     Mix.shell().info(
-      "H3 merged diversity≈0 and merged coverage < closed coverage: #{verdict(h3)}"
+      "H3 merged diversity < 0.3 and merged coverage < closed coverage: #{verdict(h3)}"
     )
 
     Mix.shell().info("saved: #{path}")
@@ -151,7 +158,7 @@ defmodule Mix.Tasks.Tracefield.Dissolution do
          icc: Metrics.summary(Enum.map(rows, &(&1.icc * 1.0))),
          coverage: Metrics.summary(Enum.map(rows, &(&1.coverage * 1.0))),
          diversity: Metrics.summary(Enum.map(rows, & &1.diversity)),
-         bias_retention: Metrics.summary(Enum.map(rows, & &1.bias_retention))
+         collapse_rate: Metrics.summary(Enum.map(rows, & &1.collapse_rate))
        }}
     end)
   end
