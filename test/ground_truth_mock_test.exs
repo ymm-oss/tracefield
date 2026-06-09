@@ -55,4 +55,24 @@ defmodule Tracefield.GroundTruthMockTest do
     assert points_by_label["PROV-Y"] in result.c5_minus_c4
     assert points_by_label["PROV-Z"] in result.c5_minus_c4
   end
+
+  test "mock c1 condition completes with affected set and provenance" do
+    scenario = Scenario.load!("scenarios/enterprise-assistant")
+
+    {:ok, result} =
+      GroundTruth.run(scenario,
+        adapter: LLM.Mock,
+        n: 2,
+        temperature: 0.2,
+        seed_base: 940,
+        condition: :c1,
+        persist_runs: false
+      )
+
+    assert result.condition == :c1
+    assert %MapSet{} = result.affected_set
+    assert %MapSet{} = result.c5_affected_points
+    assert %MapSet{} = result.c5_quarantine
+    assert Enum.all?(result.runs_a ++ result.runs_b, &(&1.condition == :c1))
+  end
 end

@@ -4,6 +4,14 @@ defmodule Tracefield.Explore do
   """
 
   def run(%Tracefield.Scenario{} = scenario, opts \\ []) do
+    case normalize_condition(Keyword.get(opts, :condition, :c4)) do
+      :c4 -> run_c4(scenario, opts)
+      :c1 -> Tracefield.Pipeline.run(scenario, Keyword.put(opts, :condition, :c1))
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp run_c4(%Tracefield.Scenario{} = scenario, opts) do
     state = Keyword.get(opts, :state, :a)
     adapter = Keyword.get(opts, :adapter, Tracefield.LLM.Mock)
     model = Keyword.get(opts, :model, "mock")
@@ -126,12 +134,12 @@ defmodule Tracefield.Explore do
     )
   end
 
-  defp injection_for(scenario, :a), do: scenario.contaminant
-  defp injection_for(scenario, "a"), do: scenario.contaminant
-  defp injection_for(scenario, :b), do: scenario.correction
-  defp injection_for(scenario, "b"), do: scenario.correction
+  def injection_for(scenario, :a), do: scenario.contaminant
+  def injection_for(scenario, "a"), do: scenario.contaminant
+  def injection_for(scenario, :b), do: scenario.correction
+  def injection_for(scenario, "b"), do: scenario.correction
 
-  defp injection_turn(injection) do
+  def injection_turn(injection) do
     %{
       role: "user",
       actor: injection.source_actor,
@@ -142,16 +150,16 @@ defmodule Tracefield.Explore do
     }
   end
 
-  defp next_turn_id(transcript), do: length(transcript) + 1
+  def next_turn_id(transcript), do: length(transcript) + 1
 
-  defp assign_turn_id(turn, transcript) do
+  def assign_turn_id(turn, transcript) do
     case Map.get(turn, :turn_id) do
       id when is_integer(id) -> turn
       _ -> Map.put(turn, :turn_id, next_turn_id(transcript))
     end
   end
 
-  defp parse_contribution(content, turn_id) do
+  def parse_contribution(content, turn_id) do
     case decode_points_json(content) do
       {:ok, %{"points" => raw_points}} when is_list(raw_points) ->
         points =
@@ -247,9 +255,9 @@ defmodule Tracefield.Explore do
 
   defp parse_turn_id(_turn_id), do: nil
 
-  defp format_transcript([]), do: "(empty)"
+  def format_transcript([]), do: "(empty)"
 
-  defp format_transcript(transcript) do
+  def format_transcript(transcript) do
     Enum.map_join(transcript, "\n\n", fn turn ->
       actor = Map.get(turn, :actor, Map.get(turn, "actor", "unknown"))
       content = Map.get(turn, :content, Map.get(turn, "content", ""))
@@ -280,4 +288,8 @@ defmodule Tracefield.Explore do
   end
 
   defp format_points(_points), do: ""
+
+  defp normalize_condition(condition) when condition in [:c4, "c4"], do: :c4
+  defp normalize_condition(condition) when condition in [:c1, "c1"], do: :c1
+  defp normalize_condition(condition), do: {:error, {:unknown_condition, condition}}
 end
