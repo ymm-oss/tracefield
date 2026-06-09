@@ -3,7 +3,7 @@ defmodule Tracefield.GroundTruth do
   Counterfactual A/B x N runner and ground-truth set builder.
   """
 
-  alias Tracefield.{Explore, Metrics, Normalize, Stance}
+  alias Tracefield.{Explore, Metrics, Normalize, Provenance, Stance}
 
   def run(%Tracefield.Scenario{} = scenario, opts \\ []) do
     adapter = Keyword.get(opts, :adapter, Tracefield.LLM.Mock)
@@ -93,6 +93,20 @@ defmodule Tracefield.GroundTruth do
     affected_set = affected_set(stance_table)
     system_set = system_claimed_union(runs_a ++ runs_b)
     proxy = Metrics.prf(affected_set, system_set)
+    provenance = Provenance.build(runs_a ++ runs_b, injection_ids: [scenario.contaminant.id])
+
+    c4_affected_points =
+      reconstruct_points(
+        runs_a ++ runs_b,
+        scenario,
+        adapter: adapter,
+        model: model,
+        temperature: temperature,
+        seed: seed_base + 40_000
+      )
+
+    provenance_comparison =
+      Provenance.compare(provenance.c5_affected_points, c4_affected_points)
 
     {:ok,
      %{
@@ -117,7 +131,11 @@ defmodule Tracefield.GroundTruth do
        affected_set: affected_set,
        ground_truth_set: affected_set,
        system_claimed_affected: system_set,
-       proxy: proxy
+       proxy: proxy,
+       c5_affected_points: provenance_comparison.c5_affected_points,
+       c4_affected_points: provenance_comparison.c4_affected_points,
+       c5_minus_c4: provenance_comparison.c5_minus_c4,
+       c5_quarantine: provenance.c5_quarantine
      }}
   end
 
@@ -137,6 +155,28 @@ defmodule Tracefield.GroundTruth do
 
     case Tracefield.LLM.complete(messages, Keyword.drop(llm_opts, [:task, :contaminant_body])) do
       {:ok, content} -> parse_reconstructed_ids(content, claims)
+      {:error, _reason} -> MapSet.new()
+    end
+  end
+
+  def reconstruct_points(runs, %Tracefield.Scenario{} = scenario, llm_opts \\ []) do
+    points = Provenance.points(runs)
+
+    messages = [
+      %{
+        role: "system",
+        content:
+          "TRACEFIELD_RECONSTRUCT_AFFECTED_POINTS. Return only a JSON array of point numbers that depend on contaminant A."
+      },
+      %{
+        role: "user",
+        content:
+          "TASK:\n#{scenario.task}\n\nCONTAMINANT A:\n#{scenario.contaminant.body}\n\nTRANSCRIPTS:\n#{format_runs(runs)}\n\nPOINTS:\n#{format_numbered_points(points)}"
+      }
+    ]
+
+    case Tracefield.LLM.complete(messages, Keyword.drop(llm_opts, [:task, :contaminant_body])) do
+      {:ok, content} -> parse_reconstructed_point_ids(content, points)
       {:error, _reason} -> MapSet.new()
     end
   end
@@ -417,8 +457,15 @@ defmodule Tracefield.GroundTruth do
       "role" -> :role
       "actor" -> :actor
       "round" -> :round
+      "turn_id" -> :turn_id
       "injection_id" -> :injection_id
       "content" -> :content
+      "raw_content" -> :raw_content
+      "points" -> :points
+      "point_id" -> :point_id
+      "text" -> :text
+      "depends_on_turns" -> :depends_on_turns
+      "uses_injection" -> :uses_injection
       _ -> key
     end
   end
@@ -484,11 +531,39 @@ defmodule Tracefield.GroundTruth do
     end)
   end
 
+  defp format_numbered_points(points) do
+    points
+    |> Enum.with_index(1)
+    |> Enum.map_join("\n", fn {point, index} ->
+      "#{index}. [#{point.id}] #{String.replace(point.text, "\n", " ")}"
+    end)
+  end
+
   defp parse_reconstructed_ids(content, claims) do
     index_to_id =
       claims
       |> Enum.with_index(1)
       |> Map.new(fn {claim, index} -> {index, claim.id} end)
+
+    case decode_json_array(content) do
+      {:ok, indexes} when is_list(indexes) ->
+        indexes
+        |> Enum.map(&parse_claim_index/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(&Map.get(index_to_id, &1))
+        |> Enum.reject(&is_nil/1)
+        |> MapSet.new()
+
+      _ ->
+        MapSet.new()
+    end
+  end
+
+  defp parse_reconstructed_point_ids(content, points) do
+    index_to_id =
+      points
+      |> Enum.with_index(1)
+      |> Map.new(fn {point, index} -> {index, point.id} end)
 
     case decode_json_array(content) do
       {:ok, indexes} when is_list(indexes) ->
@@ -551,7 +626,14 @@ defmodule Tracefield.GroundTruth do
     Enum.map_join(transcript, "\n\n", fn turn ->
       actor = Map.get(turn, :actor, Map.get(turn, "actor", "unknown"))
       content = Map.get(turn, :content, Map.get(turn, "content", ""))
-      "[#{actor}]\n#{content}"
+      turn_id = Map.get(turn, :turn_id, Map.get(turn, "turn_id", "?"))
+      "[TURN #{turn_id} #{actor}]\n#{content}"
+    end)
+  end
+
+  defp format_runs(runs) do
+    Enum.map_join(runs, "\n\n", fn run ->
+      "RUN #{Map.get(run, :run_key, Map.get(run, "run_key", "run"))}\n#{format_transcript(Map.get(run, :transcript, Map.get(run, "transcript", [])))}"
     end)
   end
 
