@@ -317,6 +317,7 @@ defmodule Tracefield.GroundTruth do
          topic: topic,
          a_present: a_present,
          b_present: b_present,
+         support: length(a_texts) + length(b_texts),
          presence_changed: a_present != b_present,
          differs: assessment.differs,
          g1: assessment.g1,
@@ -325,9 +326,14 @@ defmodule Tracefield.GroundTruth do
     end)
   end
 
-  defp affected_set(stance_table) do
+  # A topic is affected if its stance flips, or if it appears on only one side
+  # AND is backed by enough claims to be a real recurring topic (min_support).
+  # Single-claim clustering leftovers (support 1) are treated as noise, not effects.
+  defp affected_set(stance_table, min_support \\ 2) do
     stance_table
-    |> Enum.filter(fn {_topic, row} -> row.presence_changed or row.differs end)
+    |> Enum.filter(fn {_topic, row} ->
+      row.differs or (row.presence_changed and row.support >= min_support)
+    end)
     |> Enum.map(fn {topic, _row} -> topic end)
     |> MapSet.new()
   end
