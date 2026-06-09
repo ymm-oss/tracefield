@@ -17,7 +17,9 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
           n: :integer,
           temperature: :float,
           model: :string,
-          seed_base: :integer
+          seed_base: :integer,
+          n_agents: :integer,
+          rounds: :integer
         ],
         aliases: [a: :adapter, n: :n, t: :temperature, m: :model]
       )
@@ -43,6 +45,8 @@ defmodule Mix.Tasks.Tracefield.Phase1 do
            temperature: temperature,
            model: model,
            seed_base: seed_base,
+           n_agents: Keyword.get(opts, :n_agents, 4),
+           rounds: Keyword.get(opts, :rounds, 3),
            persist_runs: true
          ) do
       {:ok, result} ->
