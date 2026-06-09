@@ -59,6 +59,12 @@ defmodule Tracefield.LLM.Mock do
       String.contains?(prompt, "TRACEFIELD_CLUSTER") ->
         {:ok, Jason.encode!(cluster_groups(prompt))}
 
+      String.contains?(prompt, "TRACEFIELD_DOMAINS") ->
+        {:ok, Jason.encode!(domain_tags(prompt))}
+
+      String.contains?(prompt, "TRACEFIELD_DISSOLUTION") ->
+        {:ok, Jason.encode!(dissolution_turn(prompt))}
+
       String.contains?(prompt, "TRACEFIELD_STANCE") ->
         {:ok, Jason.encode!(stance_assessment(prompt))}
 
@@ -110,6 +116,161 @@ defmodule Tracefield.LLM.Mock do
       label = Map.get(canonical_by_text, text, normalize_text(text))
       Map.update(groups, label, [index], &(&1 ++ [index]))
     end)
+  end
+
+  defp domain_tags(prompt) do
+    prompt
+    |> numbered_domain_concerns()
+    |> Map.new(fn {index, text} -> {Integer.to_string(index), domains_from_text(text)} end)
+  end
+
+  defp numbered_domain_concerns(prompt) do
+    regex = ~r/^\s*(?<index>\d+)\.\s+(?<text>.*?)\s*$/m
+
+    regex
+    |> Regex.scan(prompt, capture: :all_names)
+    |> Enum.map(fn [index, text] -> {String.to_integer(index), String.trim(text)} end)
+    |> Enum.sort_by(fn {index, _text} -> index end)
+  end
+
+  defp domains_from_text(text) do
+    taxonomy = MapSet.new(~w(security legal-consent ux business-speed data-quality ops-org))
+
+    case Regex.run(~r/\((?<domains>[^()]*)\)\s*$/, text, capture: :all_names) do
+      [domains] ->
+        domains
+        |> String.split(~r/[\s,]+/, trim: true)
+        |> Enum.filter(&MapSet.member?(taxonomy, &1))
+        |> Enum.uniq()
+        |> Enum.take(3)
+
+      _ ->
+        []
+    end
+  end
+
+  defp dissolution_turn(prompt) do
+    regime = dissolution_regime(prompt)
+    agent = dissolution_agent(prompt)
+    round = dissolution_round(prompt)
+    concerns = dissolution_concerns(regime, agent, round)
+
+    %{
+      notes: dissolution_notes(regime, agent, round),
+      concerns: concerns
+    }
+  end
+
+  defp dissolution_regime(prompt) do
+    cond do
+      String.contains?(prompt, "単一の統合見解に収束せよ") ->
+        :merged
+
+      String.contains?(prompt, "[SEC notes]") or String.contains?(prompt, "[BIZ notes]") or
+        String.contains?(prompt, "[UX notes]") or
+          String.contains?(prompt, "WORKSPACE NOTES AND CONCERNS") ->
+        :semi
+
+      true ->
+        :closed
+    end
+  end
+
+  defp dissolution_agent(prompt) do
+    case Regex.named_captures(~r/AGENT\s+(?<agent>SEC|BIZ|UX)\b/, prompt) do
+      %{"agent" => agent} -> agent
+      _ -> "SEC"
+    end
+  end
+
+  defp dissolution_round(prompt) do
+    case Regex.named_captures(~r/ROUND\s+(?<round>\d+)/, prompt) do
+      %{"round" => round} -> String.to_integer(round)
+      _ -> 1
+    end
+  end
+
+  defp dissolution_notes(:merged, agent, round),
+    do: "#{agent} r#{round} aligns with the shared consensus."
+
+  defp dissolution_notes(:semi, agent, round),
+    do: "#{agent} r#{round} uses shared notes to preserve its bias while bridging domains."
+
+  defp dissolution_notes(:closed, agent, round),
+    do: "#{agent} r#{round} works from published concerns only."
+
+  defp dissolution_concerns(:merged, _agent, _round) do
+    [
+      "導入は段階的に行うべき(business-speed)",
+      "データ品質を確認すべき(data-quality)"
+    ]
+  end
+
+  defp dissolution_concerns(:semi, "SEC", _round) do
+    [
+      "権限分離が不十分で機密が漏洩しうる(security)",
+      "監査ログの保持期間が同意撤回と矛盾する(security legal-consent)"
+    ]
+  end
+
+  defp dissolution_concerns(:semi, "BIZ", _round) do
+    [
+      "意思決定速度を上げる効果が測定されない(business-speed)",
+      "速度優先のUI簡略化が誤操作を誘発する(business-speed ux)"
+    ]
+  end
+
+  defp dissolution_concerns(:semi, "UX", _round) do
+    [
+      "根拠表示が弱いと利用者が過信する(ux)",
+      "説明可能性の欠如が法的責任を曖昧にする(ux legal-consent)"
+    ]
+  end
+
+  defp dissolution_concerns(:closed, agent, round) do
+    closed_dissolution_concerns(agent, round)
+  end
+
+  defp closed_dissolution_concerns("SEC", 1) do
+    [
+      "権限分離が不十分で機密が漏洩しうる(security)",
+      "監査証跡が欠けると不正利用を追跡できない(security)"
+    ]
+  end
+
+  defp closed_dissolution_concerns("SEC", _round) do
+    [
+      "検索結果の権限継承が曖昧で越権閲覧が起きる(security)",
+      "推薦根拠に顧客ログが混入して漏洩経路になる(security)"
+    ]
+  end
+
+  defp closed_dissolution_concerns("BIZ", 1) do
+    [
+      "導入判断のROIが曖昧で投資対効果を説明できない(business-speed)",
+      "承認フローが重いと意思決定速度が落ちる(business-speed)"
+    ]
+  end
+
+  defp closed_dissolution_concerns("BIZ", _round) do
+    [
+      "段階導入の基準がないと現場展開が遅れる(business-speed)",
+      "推薦の責任者が不明だと実行判断が滞る(business-speed)"
+    ]
+  end
+
+  defp closed_dissolution_concerns("UX", 1) do
+    [
+      "根拠表示が弱いと利用者が過信する(ux)",
+      "誤推薦時の訂正導線がないと利用者が混乱する(ux)"
+    ]
+  end
+
+  defp closed_dissolution_concerns("UX", _round) do
+    [
+      "要約の不確実性が見えないと誤読を招く(ux)",
+      "フィードバック操作が複雑だと改善情報が集まらない(ux)"
+    ]
   end
 
   defp stance_assessment(prompt) do
