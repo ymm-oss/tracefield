@@ -143,3 +143,19 @@ organ ∈ { ローカルLLM, CLI(claude/codex), …, 人間（I/Oチャネル経
 - 半溶解性との整合: 人間は「閉じた存在」のまま（頭は開かない）。**外部化した判断だけ**が場に参加する
   ── 人間こそ最も「半」溶解的な Actor。
 - 語彙: 実験計画書Aの **Field Actor** がこの意味で里帰りする。Erlang/OTP の actor（GenServer）とは別概念（glossary 参照）。
+
+### 10b. 人間参加の3様式 — 「ループ」から「場」へ（2026-06-11 追加）
+
+ユーザー指摘: Actor 対称性により **HITL だけでなく Human in parallel/concurrent が表現できる**。
+協調媒体が store（pull 型黒板）なので同期ランデブーは不要 ── 参加様式は**ターンポリシーの違い**にすぎない:
+
+| 様式 | ポリシー | 動き |
+| --- | --- | --- |
+| **HITL（gate）** | `blocking` | 人間の番で中断。承認 entry まで次 stage 不可（権威ポリシー） |
+| **Human in parallel** | `async` | 人間も名簿の一員だが**ラウンドは待たない**。常設 inbox/outbox（pending）に書いた時点で absorb → 以後のターンが織り込む |
+| **Human on the field** | ターン外 | store を観察し任意時点で訂正・撤回・追記（`--correct` で実証済みの様式） |
+
+- 遅延・競合（人間の寄与が既存の積み上げと矛盾する）は**例外でなく通常運転** ── 矛盾指摘・訂正・撤回→閉包隔離が処理する（統治の対称性の実用面）。
+- actors.json: `turn: blocking | async`（human kind の既定は blocking=HITL。parallel は async 指定）。
+- **概念的閉環**: 人間は閉じたまま・自分の帯域とペースで、外部化した判断だけを来歴つきで場に入れる ──
+  **人間↔AI 協働が、AI↔AI で実証した半溶解理論の一インスタンスになる**。
