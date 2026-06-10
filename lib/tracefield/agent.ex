@@ -42,11 +42,14 @@ defmodule Tracefield.Agent do
       description: "Run one Tracefield agent shared-state turn",
       schema: [
         reference: [type: :any, required: true],
-        round: [type: :integer, required: true]
+        round: [type: :integer, required: true],
+        note: [type: :string, default: ""]
       ]
 
     @impl true
-    def run(%{reference: reference, round: round}, %{state: state}) do
+    def run(%{reference: reference, round: round} = params, %{state: state}) do
+      note = Map.get(params, :note, "")
+
       retrieved =
         Tracefield.Reference.serve(reference, query(state),
           k: max(state.k_s, 0),
@@ -61,7 +64,7 @@ defmodule Tracefield.Agent do
 
       entries =
         state
-        |> deliberate(round, retrieved, procedure)
+        |> deliberate(round, retrieved, procedure, note)
         |> Enum.take(2)
         |> Enum.map(&sanitize_entry(&1, presented_ids, state, round, procedure))
         |> Enum.reject(&(&1.text == ""))
@@ -93,7 +96,7 @@ defmodule Tracefield.Agent do
       }
     end
 
-    defp deliberate(state, round, retrieved, procedure) do
+    defp deliberate(state, round, retrieved, procedure, note) do
       messages = [
         %{
           role: "system",
@@ -101,7 +104,7 @@ defmodule Tracefield.Agent do
         },
         %{
           role: "user",
-          content: prompt(state, round, retrieved, procedure)
+          content: prompt(state, round, retrieved, procedure, note)
         }
       ]
 
@@ -134,7 +137,7 @@ defmodule Tracefield.Agent do
 
     defp situation_preamble(_state), do: ""
 
-    defp prompt(state, round, retrieved, procedure) do
+    defp prompt(state, round, retrieved, procedure, note) do
       """
       TASK:
       #{state.anchor}
@@ -150,9 +153,14 @@ defmodule Tracefield.Agent do
       PRESENTED ENTRIES:
       #{format_retrieved(retrieved)}
       #{format_procedure(procedure)}
+      #{format_note(note)}
       """
       |> String.trim()
     end
+
+    defp format_note(nil), do: ""
+    defp format_note(""), do: ""
+    defp format_note(note), do: "\n\n#{String.trim(note)}"
 
     defp format_procedure(nil), do: ""
 
@@ -269,9 +277,11 @@ defmodule Tracefield.Agent do
     %__MODULE__{core: core}
   end
 
-  def run_turn(%__MODULE__{core: core} = agent, reference, round) do
+  def run_turn(%__MODULE__{core: core} = agent, reference, round, opts \\ []) do
     {updated_core, directives} =
-      Core.cmd(core, {RunTurn, %{reference: reference, round: round}},
+      Core.cmd(
+        core,
+        {RunTurn, %{reference: reference, round: round, note: Keyword.get(opts, :note, "")}},
         timeout: 0,
         telemetry: :silent
       )

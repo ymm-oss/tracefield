@@ -33,6 +33,52 @@ defmodule Tracefield.Reference do
     GenServer.call(ref, {:retract, id})
   end
 
+  def quarantine(ref, ids) do
+    GenServer.call(ref, {:quarantine, List.wrap(ids)})
+  end
+
+  def most_cited(ref, opts \\ []) do
+    GenServer.call(ref, {:most_cited, opts})
+  end
+
+  def verify(ref, entries, opts \\ []) do
+    all_entries = all(ref)
+    by_id = Map.new(all_entries, &{entry_id(&1), &1})
+
+    pairs =
+      entries
+      |> List.wrap()
+      |> Enum.flat_map(fn entry ->
+        entry_citations(entry)
+        |> Enum.map(fn cited_id ->
+          %{
+            key: {entry_id(entry), cited_id},
+            citing: entry,
+            cited: Map.get(by_id, cited_id)
+          }
+        end)
+      end)
+
+    {decided, judge_pairs} =
+      Enum.reduce(pairs, {%{}, []}, fn pair, {decided, judge_pairs} ->
+        cond do
+          is_nil(pair.cited) ->
+            {Map.put(decided, pair.key, false), judge_pairs}
+
+          entry_type(pair.cited) == :procedure ->
+            {Map.put(decided, pair.key, true), judge_pairs}
+
+          entry_status(pair.cited) != :active ->
+            {Map.put(decided, pair.key, false), judge_pairs}
+
+          true ->
+            {decided, judge_pairs ++ [pair]}
+        end
+      end)
+
+    Map.merge(decided, judge_verify(judge_pairs, opts))
+  end
+
   def get(ref, id) do
     GenServer.call(ref, {:get, id})
   end
@@ -101,6 +147,46 @@ defmodule Tracefield.Reference do
       end)
 
     {:reply, closure, %{state | entries: entries}}
+  end
+
+  def handle_call({:quarantine, ids}, _from, state) do
+    ids = MapSet.new(Enum.map(ids, &to_string/1))
+
+    entries =
+      Enum.map(state.entries, fn
+        %Entry{id: id, status: :active} = entry ->
+          if MapSet.member?(ids, id), do: %{entry | status: :superseded}, else: entry
+
+        entry ->
+          entry
+      end)
+
+    quarantined = Enum.filter(entries, &MapSet.member?(ids, &1.id))
+    {:reply, quarantined, %{state | entries: entries}}
+  end
+
+  def handle_call({:most_cited, opts}, _from, state) do
+    min_count = Keyword.get(opts, :min_count, 1)
+
+    counts =
+      state.entries
+      |> Enum.filter(&(&1.status == :active))
+      |> Enum.flat_map(& &1.citations)
+      |> Enum.frequencies()
+
+    entry =
+      state.entries
+      |> Enum.filter(&(&1.status == :active))
+      |> Enum.reject(&(&1.type in [:chunk, :procedure]))
+      |> Enum.map(&{&1, Map.get(counts, &1.id, 0)})
+      |> Enum.filter(fn {_entry, count} -> count >= min_count end)
+      |> Enum.sort_by(fn {entry, count} -> {-count, entry_number(entry.id)} end)
+      |> case do
+        [{entry, _count} | _rest] -> entry
+        [] -> nil
+      end
+
+    {:reply, entry, state}
   end
 
   def handle_call({:get, id}, _from, state) do
@@ -317,6 +403,102 @@ defmodule Tracefield.Reference do
 
   defp entry_id(entry), do: entry_value(entry, :id, nil)
   defp entry_author(entry), do: entry_value(entry, :author, nil)
+  defp entry_type(entry), do: entry_value(entry, :type, nil)
   defp entry_status(entry), do: entry_value(entry, :status, nil)
   defp entry_citations(entry), do: entry_value(entry, :citations, [])
+
+  defp entry_text(entry), do: entry_value(entry, :text, "")
+
+  defp judge_verify([], _opts), do: %{}
+
+  defp judge_verify(pairs, opts) do
+    numbered =
+      pairs
+      |> Enum.with_index(1)
+      |> Enum.map(fn {pair, index} ->
+        %{
+          "n" => index,
+          "citing_id" => elem(pair.key, 0),
+          "cited_id" => elem(pair.key, 1),
+          "citing" => entry_text(pair.citing),
+          "cited" => entry_text(pair.cited)
+        }
+      end)
+
+    messages = [
+      %{
+        role: "system",
+        content:
+          "TRACEFIELD_VERIFY\nReturn only JSON like {\"1\":{\"verified\":true}}. Judge whether each cited text grounds the citing claim."
+      },
+      %{
+        role: "user",
+        content: "PAIRS_JSON:\n#{Jason.encode!(numbered)}"
+      }
+    ]
+
+    llm_opts = [
+      adapter:
+        Keyword.get(opts, :judge_adapter, Keyword.get(opts, :adapter, Tracefield.LLM.Mock)),
+      model: Keyword.get(opts, :judge_model, Keyword.get(opts, :model, "mock")),
+      temperature: Keyword.get(opts, :temperature, 0.0),
+      seed: Keyword.get(opts, :seed, 0)
+    ]
+
+    judgments =
+      case Tracefield.LLM.complete(messages, llm_opts) do
+        {:ok, content} -> parse_verify_response(content)
+        {:error, _reason} -> %{}
+      end
+
+    pairs
+    |> Enum.with_index(1)
+    |> Map.new(fn {pair, index} ->
+      value = Map.get(judgments, Integer.to_string(index), Map.get(judgments, index))
+      {pair.key, verified?(value)}
+    end)
+  end
+
+  defp parse_verify_response(content) when is_binary(content) do
+    with {:ok, decoded} <- decode_json_object(content),
+         true <- is_map(decoded) do
+      decoded
+    else
+      _ -> %{}
+    end
+  end
+
+  defp parse_verify_response(_content), do: %{}
+
+  defp decode_json_object(content) do
+    with {:error, _reason} <- Jason.decode(content),
+         {:ok, object_text} <- extract_object_text(content) do
+      Jason.decode(object_text)
+    end
+  end
+
+  defp extract_object_text(content) do
+    start = :binary.match(content, "{")
+    finish = content |> String.reverse() |> :binary.match("}")
+
+    case {start, finish} do
+      {{start_index, 1}, {reverse_index, 1}} ->
+        end_index = byte_size(content) - reverse_index - 1
+
+        if end_index >= start_index do
+          {:ok, binary_part(content, start_index, end_index - start_index + 1)}
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp verified?(%{"verified" => value}), do: verified?(value)
+  defp verified?(%{verified: value}), do: verified?(value)
+  defp verified?(true), do: true
+  defp verified?("true"), do: true
+  defp verified?(_value), do: false
 end
