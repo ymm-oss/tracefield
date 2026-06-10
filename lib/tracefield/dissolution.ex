@@ -147,16 +147,29 @@ defmodule Tracefield.Dissolution do
   end
 
   def measure(%{} = run, opts \\ []) do
+    opts = Keyword.put_new(opts, :seed, Map.get(run, :seed, 0))
+
+    run
+    |> Map.get(:concerns_by_agent, %{})
+    |> measure_concerns(opts)
+    |> Map.merge(%{
+      regime: Map.get(run, :regime),
+      seed: Map.get(run, :seed),
+      concerns_by_agent: Map.get(run, :concerns_by_agent, %{})
+    })
+  end
+
+  def measure_concerns(concerns_by_agent, opts \\ []) when is_map(concerns_by_agent) do
     adapter = Keyword.get(opts, :adapter, Tracefield.LLM.Mock)
     model = Keyword.get(opts, :model, "mock")
     temperature = Keyword.get(opts, :temperature, 0.4)
-    seed = Keyword.get(opts, :seed, Map.get(run, :seed, 0))
+    seed = Keyword.get(opts, :seed, 0)
     embed_adapter = Keyword.get(opts, :embed_adapter, default_embed_adapter(adapter))
     embed_model = Keyword.get(opts, :embed_model, "nomic-embed-text")
     judge_adapter = Keyword.get(opts, :judge_adapter, adapter)
     judge_model = Keyword.get(opts, :judge_model, model)
 
-    refs = concern_refs(run)
+    refs = concern_refs(concerns_by_agent)
 
     embedded_refs =
       refs
@@ -177,16 +190,13 @@ defmodule Tracefield.Dissolution do
       )
 
     %{
-      regime: Map.get(run, :regime),
-      seed: Map.get(run, :seed),
       coverage: length(representatives),
       diversity: diversity(embedded_refs),
       collapse_rate: collapse_rate(embedded_refs),
       icc: Enum.count(judgments, fn {_ref, judgment} -> judgment.interstitial end),
       representatives: Enum.map(representatives, &Map.take(&1, [:ref, :agent, :text])),
       assignments: assignments,
-      interstitial: judgments,
-      concerns_by_agent: Map.get(run, :concerns_by_agent, %{})
+      interstitial: judgments
     }
   end
 
@@ -230,7 +240,10 @@ defmodule Tracefield.Dissolution do
     do: Map.new(refs, &{&1.ref, %{interstitial: false, pair: []}})
 
   defp system_message(:closed, agent) do
-    Enum.join(["TRACEFIELD_DISSOLUTION", persona(agent), @common_instruction_x, @json_instruction], "\n")
+    Enum.join(
+      ["TRACEFIELD_DISSOLUTION", persona(agent), @common_instruction_x, @json_instruction],
+      "\n"
+    )
   end
 
   defp system_message(:semi, agent) do
@@ -370,7 +383,7 @@ defmodule Tracefield.Dissolution do
           agent_a < agent_b,
           refs_a != [],
           refs_b != [] do
-        1.0 - sym_mean_max_cos(refs_a, refs_b)
+        (1.0 - sym_mean_max_cos(refs_a, refs_b))
         |> zero_near_zero()
       end
 
@@ -461,9 +474,8 @@ defmodule Tracefield.Dissolution do
 
   defp normalize_pair(_pair), do: []
 
-  defp concern_refs(run) do
-    run
-    |> Map.get(:concerns_by_agent, %{})
+  defp concern_refs(concerns_by_agent) do
+    concerns_by_agent
     |> Enum.flat_map(fn {agent, concerns} ->
       concerns
       |> Enum.with_index(1)
