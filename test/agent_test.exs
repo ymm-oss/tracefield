@@ -154,6 +154,29 @@ defmodule Tracefield.AgentTest do
     refute Enum.any?(stored_texts, &String.contains?(&1, "This full sentence must never"))
   end
 
+  test "private_memory is rendered after private_doc and stays out of the reference store" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        private_doc: "SEC private document body",
+        private_memory: "- prior private judgment must remain prompt-only",
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    {_agent, absorbed, _perception} = Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+    prompt = Enum.at(messages, 1).content
+
+    assert prompt =~ "PRIVATE DOCUMENT (yours only):\nSEC private document body"
+    assert prompt =~ "PRIVATE MEMORY (あなた自身の過去の判断。経験として活かせ):\n- prior private judgment"
+    assert prompt =~ ~r/PRIVATE DOCUMENT[\s\S]+PRIVATE MEMORY[\s\S]+PRESENTED ENTRIES/
+    refute Enum.any?(Reference.all(ref), &String.contains?(&1.text, "prior private judgment"))
+    assert [%{text: "captured prompt state(security)"}] = absorbed
+  end
+
   test "procedure entries are injected and cited as adoption provenance" do
     {:ok, ref} = Reference.start_link()
 

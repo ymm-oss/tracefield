@@ -1,6 +1,31 @@
 [
-  {"id": "KURASHI", "domain": "customer-living", "desc": "顧客の暮らし・住まいの体験・アフターサービスを最重視する", "private_doc": "kurashi.md"},
-  {"id": "FINANCE", "domain": "business-finance", "desc": "事業性・資金・住宅ローン・収益モデルを最重視する", "private_doc": "finance.md"},
-  {"id": "GIJUTSU", "domain": "design-tech", "desc": "設計・施工・住宅性能・IoT技術を最重視する", "private_doc": "gijutsu.md"},
-  {"id": "CHIIKI", "domain": "community-region", "desc": "地域・コミュニティ・環境・レジリエンスを最重視する", "private_doc": "chiiki.md"}
+  {
+    "id": "KURASHI",
+    "domain": "customer-living",
+    "desc": "顧客の暮らし・住まいの体験・アフターサービスを最重視する",
+    "private_doc": "kurashi.md",
+    "procedure": "procedure-kurashi.md"
+  },
+  {
+    "id": "FINANCE",
+    "domain": "business-finance",
+    "desc": "事業性・資金・住宅ローン・収益モデルを最重視する",
+    "private_doc": "finance.md",
+    "procedure": "procedure-finance.md"
+  },
+  {
+    "id": "GIJUTSU",
+    "domain": "design-tech",
+    "desc": "設計・施工・住宅性能・IoT技術を最重視する",
+    "private_doc": "gijutsu.md",
+    "procedure": "procedure-gijutsu.md",
+    "model": "gemma4:26b"
+  },
+  {
+    "id": "CHIIKI",
+    "domain": "community-region",
+    "desc": "地域・コミュニティ・環境・レジリエンスを最重視する",
+    "private_doc": "chiiki.md",
+    "procedure": "procedure-chiiki.md"
+  }
 ]

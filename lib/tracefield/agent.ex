@@ -18,6 +18,7 @@ defmodule Tracefield.Agent do
         desc: [type: :string, required: true],
         anchor: [type: :string, default: ""],
         private_doc: [type: :string, default: ""],
+        private_memory: [type: :string, default: ""],
         k_s: [type: :integer, default: 2],
         adapter: [type: :any, default: Tracefield.LLM.Mock],
         model: [type: :string, default: "mock"],
@@ -150,6 +151,8 @@ defmodule Tracefield.Agent do
       PRIVATE DOCUMENT (yours only):
       #{state.private_doc}
 
+      #{format_private_memory(state.private_memory)}
+
       PRESENTED ENTRIES:
       #{format_retrieved(retrieved)}
       #{format_procedure(procedure)}
@@ -161,6 +164,19 @@ defmodule Tracefield.Agent do
     defp format_note(nil), do: ""
     defp format_note(""), do: ""
     defp format_note(note), do: "\n\n#{String.trim(note)}"
+
+    defp format_private_memory(memory) do
+      body =
+        memory
+        |> to_string()
+        |> String.trim()
+        |> case do
+          "" -> "(none)"
+          text -> text
+        end
+
+      "PRIVATE MEMORY (あなた自身の過去の判断。経験として活かせ):\n#{body}"
+    end
 
     defp format_procedure(nil), do: ""
 
@@ -263,6 +279,7 @@ defmodule Tracefield.Agent do
           desc: to_string(desc),
           anchor: Keyword.get(opts, :anchor, ""),
           private_doc: Keyword.get(opts, :private_doc, ""),
+          private_memory: Keyword.get(opts, :private_memory, ""),
           k_s: Keyword.get(opts, :k_s, 2),
           adapter: Keyword.get(opts, :adapter, Tracefield.LLM.Mock),
           model: Keyword.get(opts, :model, "mock"),
