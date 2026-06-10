@@ -11,6 +11,13 @@ defmodule Mix.Tasks.Tracefield.Dev do
                     """
                     |> String.trim()
 
+  @design_procedure """
+                    DESIGN手続き: 承認済みの要件を実現する設計判断を type "decision" で書け。各判断は
+                    (a) 対応する requirement entry と (b) 根拠となる REFERENCE DOCUMENTS チャンクを必ず引用。
+                    採用案と退けた代替案・その理由を含め、実装可能な粒度（変更するモジュール/関数/データが特定できる）で。日本語。
+                    """
+                    |> String.trim()
+
   @impl true
   def run(args) do
     Mix.Task.run("app.start")
@@ -39,12 +46,19 @@ defmodule Mix.Tasks.Tracefield.Dev do
         print_status(issue_dir, state, reference)
         %{state: state, entries: Reference.all(reference)}
 
-      state["status"] == "done" ->
-        print_done(reference)
+      state["stage"] == "refine" and state["status"] == "done" ->
+        start_design(reference, actors, issue_dir, state, opts)
+
+      state["stage"] == "refine" and state["status"] == "awaiting_human" ->
+        resume_refine(reference, actors, issue_dir, procedure_id, state, opts)
+
+      state["stage"] == "design" and state["status"] == "done" ->
+        Mix.shell().info("design 完了。次: implement（未実装）")
+        print_design_done(reference, actors, issue_dir)
         %{state: state, entries: Reference.all(reference)}
 
-      state["status"] == "awaiting_human" ->
-        resume_refine(reference, actors, issue_dir, procedure_id, state, opts)
+      state["stage"] == "design" ->
+        resume_design(reference, actors, issue_dir, state, opts)
 
       true ->
         start_refine(reference, actors, issue_dir, procedure_id, opts)
@@ -200,7 +214,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp start_refine(reference, actors, issue_dir, procedure_id, opts) do
     rounds = Keyword.get(opts, :rounds, 2)
-    run_llm_rounds(reference, actors, issue_dir, procedure_id, 1..rounds, opts)
+    run_llm_rounds(reference, actors, issue_dir, procedure_id, 1..rounds, opts, nil)
     state = await_human(reference, actors, issue_dir, procedure_id, rounds, 0, opts)
     %{state: state, entries: Reference.all(reference)}
   end
@@ -212,7 +226,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     before_ids = entry_ids(reference)
 
     {_agent, _absorbed, _perception} =
-      run_human_turn(reference, human, issue_dir, procedure_id, round)
+      run_human_turn(reference, human, issue_dir, procedure_id, round, refine_human_opts(reference))
 
     new_human_entries = new_entries(reference, before_ids, human.id)
 
@@ -230,13 +244,13 @@ defmodule Mix.Tasks.Tracefield.Dev do
         %{state: done, entries: Reference.all(reference)}
 
       new_human_entries == [] ->
-        state = awaiting_state(issue_dir, human, round, iteration)
-        print_awaiting(issue_dir, human)
+        state = awaiting_state(issue_dir, human, round, iteration, "refine")
+        print_awaiting(issue_dir, human, "refine")
         %{state: state, entries: Reference.all(reference)}
 
       true ->
         next_round = round + 1
-        run_llm_rounds(reference, actors, issue_dir, procedure_id, [next_round], opts)
+        run_llm_rounds(reference, actors, issue_dir, procedure_id, [next_round], opts, nil)
 
         state =
           await_human(reference, actors, issue_dir, procedure_id, next_round, iteration + 1, opts)
@@ -245,14 +259,83 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp run_llm_rounds(reference, actors, issue_dir, procedure_id, rounds, opts) do
+  defp start_design(reference, actors, issue_dir, state, opts) do
+    procedure_id = seed_design_procedure!(reference)
+    base_round = Map.get(state, "round", 2)
+    rounds = Keyword.get(opts, :rounds, 2)
+    ref_docs = design_reference_docs(reference)
+
+    run_llm_rounds(
+      reference,
+      actors,
+      issue_dir,
+      procedure_id,
+      (base_round + 1)..(base_round + rounds),
+      opts,
+      ref_docs
+    )
+
+    state = await_design(reference, actors, issue_dir, procedure_id, base_round + rounds, 0)
+    %{state: state, entries: Reference.all(reference)}
+  end
+
+  defp resume_design(reference, actors, issue_dir, state, opts) do
+    procedure_id = seed_design_procedure!(reference)
+    round = Map.get(state, "round", 4)
+    iteration = Map.get(state, "iteration", 0)
+    human = blocking_human!(actors)
+    before_ids = entry_ids(reference)
+
+    {_agent, _absorbed, _perception} =
+      run_human_turn(reference, human, issue_dir, procedure_id, round, design_human_opts(reference, actors))
+
+    new_human_entries = new_entries(reference, before_ids, human.id)
+
+    cond do
+      design_complete?(reference, actors) ->
+        done = %{
+          "stage" => "design",
+          "status" => "done",
+          "round" => round,
+          "iteration" => iteration
+        }
+
+        write_state!(issue_dir, done)
+        write_design_md!(issue_dir, reference, actors)
+        print_design_done(reference, actors, issue_dir)
+        %{state: done, entries: Reference.all(reference)}
+
+      new_human_entries == [] ->
+        state = awaiting_state(issue_dir, human, round, iteration, "design")
+        print_awaiting(issue_dir, human, "design")
+        %{state: state, entries: Reference.all(reference)}
+
+      true ->
+        next_round = round + 1
+
+        run_llm_rounds(
+          reference,
+          actors,
+          issue_dir,
+          procedure_id,
+          [next_round],
+          opts,
+          design_reference_docs(reference)
+        )
+
+        state = await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1)
+        %{state: state, entries: Reference.all(reference)}
+    end
+  end
+
+  defp run_llm_rounds(reference, actors, issue_dir, procedure_id, rounds, opts, ref_docs) do
     actors
     |> Enum.filter(&(&1.kind in [:llm, :cli]))
     |> then(fn actors ->
       Enum.each(rounds, fn round ->
         Enum.each(actors, fn actor ->
           actor
-          |> build_agent(reference, issue_dir, procedure_id, opts)
+          |> build_agent(reference, issue_dir, procedure_id, opts, ref_docs)
           |> Agent.run_turn(reference, round)
         end)
       end)
@@ -263,7 +346,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     human = blocking_human!(actors)
 
     {_agent, _absorbed, _perception} =
-      run_human_turn(reference, human, issue_dir, procedure_id, round)
+      run_human_turn(reference, human, issue_dir, procedure_id, round, refine_human_opts(reference))
 
     cond do
       human_decision?(reference, actors) ->
@@ -279,22 +362,65 @@ defmodule Mix.Tasks.Tracefield.Dev do
         state
 
       true ->
-        state = awaiting_state(issue_dir, human, round, iteration)
-        print_awaiting(issue_dir, human)
+        state = awaiting_state(issue_dir, human, round, iteration, "refine")
+        print_awaiting(issue_dir, human, "refine")
         state
     end
   end
 
-  defp run_human_turn(reference, human, issue_dir, procedure_id, round) do
+  defp await_design(reference, actors, issue_dir, procedure_id, round, iteration) do
+    human = blocking_human!(actors)
+
+    {_agent, _absorbed, _perception} =
+      run_human_turn(reference, human, issue_dir, procedure_id, round, design_human_opts(reference, actors))
+
+    cond do
+      design_complete?(reference, actors) ->
+        state = %{
+          "stage" => "design",
+          "status" => "done",
+          "round" => round,
+          "iteration" => iteration
+        }
+
+        write_state!(issue_dir, state)
+        write_design_md!(issue_dir, reference, actors)
+        print_design_done(reference, actors, issue_dir)
+        state
+
+      true ->
+        state = awaiting_state(issue_dir, human, round, iteration, "design")
+        print_awaiting(issue_dir, human, "design")
+        state
+    end
+  end
+
+  defp refine_human_opts(reference) do
+    %{
+      stage: "refine",
+      approve_targets: active_ids(reference, :requirement),
+      ref_docs: reference_docs(reference)
+    }
+  end
+
+  defp design_human_opts(reference, actors) do
+    %{
+      stage: "design",
+      approve_targets: machine_decision_ids(reference, actors),
+      ref_docs: design_reference_docs(reference)
+    }
+  end
+
+  defp run_human_turn(reference, human, issue_dir, procedure_id, round, human_opts) do
     human
-    |> build_human_agent(reference, issue_dir, procedure_id)
+    |> build_human_agent(reference, issue_dir, procedure_id, human_opts)
     |> Agent.run_turn(reference, round)
   end
 
-  defp build_agent(actor, reference, issue_dir, procedure_id, opts) do
+  defp build_agent(actor, reference, issue_dir, procedure_id, opts, ref_docs) do
     Agent.new(actor.id, actor.domain, actor.desc,
       anchor: File.read!(Path.join(issue_dir, "issue.md")),
-      reference_docs: reference_docs(reference),
+      reference_docs: ref_docs || reference_docs(reference),
       private_doc: actor.private_doc,
       k_s: 10,
       adapter: adapter(actor, opts),
@@ -307,10 +433,10 @@ defmodule Mix.Tasks.Tracefield.Dev do
     )
   end
 
-  defp build_human_agent(actor, reference, issue_dir, procedure_id) do
+  defp build_human_agent(actor, reference, issue_dir, procedure_id, human_opts) do
     Agent.new(actor.id, actor.domain, actor.desc,
       anchor: File.read!(Path.join(issue_dir, "issue.md")),
-      reference_docs: reference_docs(reference),
+      reference_docs: human_opts.ref_docs,
       private_doc: actor.private_doc,
       k_s: 200,
       adapter: Tracefield.LLM.Human,
@@ -322,12 +448,86 @@ defmodule Mix.Tasks.Tracefield.Dev do
       human: %{
         pending_dir: Path.join(issue_dir, "pending"),
         actor_id: actor.id,
-        stage: "refine",
-        approve_targets: active_ids(reference, :requirement),
+        stage: human_opts.stage,
+        approve_targets: human_opts.approve_targets,
         question_ids: active_ids(reference, :question)
       }
     )
   end
+
+  defp seed_design_procedure!(reference) do
+    [procedure] =
+      Reference.absorb_idempotent(
+        reference,
+        [%{type: :procedure, text: @design_procedure, meta: %{stage: "design"}}],
+        "FACILITATOR"
+      )
+
+    procedure.id
+  end
+
+  defp design_reference_docs(reference) do
+    requirements =
+      reference
+      |> Reference.all()
+      |> Enum.filter(&(&1.type == :requirement and &1.status == :active))
+      |> Enum.map(&%{id: &1.id, file: "requirement", text: &1.text})
+
+    reference_docs(reference) ++ requirements
+  end
+
+  defp machine_decision_ids(reference, actors) do
+    machine_authors =
+      actors
+      |> Enum.filter(&(&1.kind in [:llm, :cli]))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    reference
+    |> Reference.all()
+    |> Enum.filter(
+      &(&1.type == :decision and &1.status == :active and MapSet.member?(machine_authors, &1.author))
+    )
+    |> Enum.map(& &1.id)
+  end
+
+  defp design_complete?(reference, actors) do
+    machine_ids = MapSet.new(machine_decision_ids(reference, actors))
+
+    human_ids =
+      actors
+      |> Enum.filter(&(&1.kind == :human))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    reference
+    |> Reference.all()
+    |> Enum.any?(fn entry ->
+      entry.type == :decision and entry.status == :active and
+        MapSet.member?(human_ids, entry.author) and
+        Enum.any?(entry.citations, &MapSet.member?(machine_ids, &1))
+    end)
+  end
+
+  defp write_design_md!(issue_dir, reference, actors) do
+    machine_ids = MapSet.new(machine_decision_ids(reference, actors))
+
+    decisions =
+      reference
+      |> Reference.all()
+      |> Enum.filter(&MapSet.member?(machine_ids, &1.id))
+
+    body =
+      decisions
+      |> Enum.map_join("\n\n", fn decision ->
+        "### #{decision.id}（#{decision.author}）\n#{decision.text}\n\n根拠: #{format_citations(decision.citations)}"
+      end)
+
+    File.write!(Path.join(issue_dir, "design.md"), "# 設計判断\n\n#{body}\n")
+  end
+
+  defp format_citations([]), do: "-"
+  defp format_citations(citations), do: Enum.map_join(citations, " ", &"[#{&1}]")
 
   defp reference_docs(reference) do
     reference
@@ -363,7 +563,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp blocking_human!(actors) do
     Enum.find(actors, &(&1.kind == :human and &1.turn == :blocking)) ||
-      Mix.raise("refine stage requires a blocking human actor")
+      Mix.raise("dev pipeline requires a blocking human actor")
   end
 
   defp human_decision?(reference, actors) do
@@ -398,13 +598,13 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Enum.filter(&(&1.author == author))
   end
 
-  defp awaiting_state(issue_dir, human, round, iteration) do
+  defp awaiting_state(issue_dir, human, round, iteration, stage) do
     state = %{
-      "stage" => "refine",
+      "stage" => stage,
       "status" => "awaiting_human",
       "round" => round,
       "iteration" => iteration,
-      "pending" => pending_relative(issue_dir, human)
+      "pending" => pending_relative(issue_dir, human, stage)
     }
 
     write_state!(issue_dir, state)
@@ -423,8 +623,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     )
   end
 
-  defp print_awaiting(issue_dir, human) do
-    Mix.shell().info("⏸ 人間の回答待ち: #{pending_relative(issue_dir, human)}")
+  defp print_awaiting(issue_dir, human, stage) do
+    Mix.shell().info("⏸ 人間の回答待ち: #{pending_relative(issue_dir, human, stage)}")
   end
 
   defp print_done(reference) do
@@ -436,6 +636,53 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info("requirements: #{length(requirements)}")
     Mix.shell().info("human decisions: #{length(decisions)}")
     Mix.shell().info("provenance: #{provenance_chain(entries)}")
+  end
+
+  defp print_design_done(reference, actors, issue_dir) do
+    entries = Reference.all(reference)
+    machine_ids = machine_decision_ids(reference, actors)
+
+    Mix.shell().info("Tracefield Dev design done")
+    Mix.shell().info("design decisions: #{length(machine_ids)}")
+    Mix.shell().info("design.md: #{Path.join(issue_dir, "design.md")}")
+    Mix.shell().info("provenance: #{design_provenance_chain(entries, machine_ids)}")
+  end
+
+  defp design_provenance_chain(entries, machine_ids) do
+    by_id = Map.new(entries, &{&1.id, &1})
+    machine_set = MapSet.new(machine_ids)
+
+    requirement_hop =
+      entries
+      |> Enum.filter(&MapSet.member?(machine_set, &1.id))
+      |> Enum.find_value(fn decision ->
+        decision.citations
+        |> Enum.find(fn id ->
+          case Map.get(by_id, id) do
+            %{type: :requirement} -> true
+            _other -> false
+          end
+        end)
+        |> case do
+          nil -> nil
+          requirement_id -> {decision, Map.fetch!(by_id, requirement_id)}
+        end
+      end)
+
+    with {decision, requirement} <- requirement_hop,
+         issue_id when not is_nil(issue_id) <-
+           Enum.find(requirement.citations, fn id ->
+             case Map.get(by_id, id) do
+               %{type: :chunk, author: "ISSUE"} -> true
+               _other -> false
+             end
+           end) do
+      issue = Map.fetch!(by_id, issue_id)
+
+      "#{decision.id} decision -> #{requirement.id} requirement -> #{issue.id} issue chunk (#{Map.get(issue.meta, :file, "issue.md")})"
+    else
+      _missing -> "decision -> requirement -> issue chunk: unavailable"
+    end
   end
 
   defp provenance_chain(entries) do
@@ -460,10 +707,10 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp pending_relative(issue_dir, human) do
+  defp pending_relative(issue_dir, human, stage) do
     issue_dir
     |> Path.join("pending")
-    |> then(&Path.join(&1, "#{human.id}-refine.md"))
+    |> then(&Path.join(&1, "#{human.id}-#{stage}.md"))
     |> Path.relative_to(issue_dir)
   end
 end

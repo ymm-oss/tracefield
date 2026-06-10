@@ -101,9 +101,10 @@ defmodule Tracefield.Agent do
     defp query(state), do: Enum.join([state.anchor, state.domain], "\n")
 
     defp active_reference_docs(reference, fallback_docs) do
+      entries = Tracefield.Reference.all(reference)
+
       docs =
-        reference
-        |> Tracefield.Reference.all()
+        entries
         |> Enum.filter(
           &(&1.type == :chunk and &1.author in ["ISSUE", "DOCS"] and &1.status == :active)
         )
@@ -115,7 +116,24 @@ defmodule Tracefield.Agent do
           }
         end)
 
-      if docs == [], do: List.wrap(fallback_docs), else: docs
+      by_id = Map.new(entries, &{&1.id, &1})
+      chunk_ids = MapSet.new(Enum.map(docs, & &1.id))
+
+      extra =
+        fallback_docs
+        |> List.wrap()
+        |> Enum.reject(&MapSet.member?(chunk_ids, doc_id(&1)))
+        |> Enum.filter(fn doc ->
+          case Map.get(by_id, doc_id(doc)) do
+            nil -> true
+            entry -> entry.status == :active
+          end
+        end)
+
+      case docs ++ extra do
+        [] -> List.wrap(fallback_docs)
+        combined -> combined
+      end
     end
 
     defp procedure_entry(_reference, nil), do: nil

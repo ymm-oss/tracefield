@@ -91,6 +91,93 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert Jason.decode!(File.read!(Path.join(dir, "state.json")))["status"] == "done"
   end
 
+  test "design stage starts after refine, iterates on comments, completes with design.md and 2-hop provenance" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    Dev.run_dev(issue: dir, adapter: "mock")
+    append_response!(Path.join([dir, "pending", "HUMAN-refine.md"]), "APPROVE\n")
+    refined = Dev.run_dev(issue: dir, adapter: "mock")
+    assert refined.state["stage"] == "refine"
+    assert refined.state["status"] == "done"
+
+    design1 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert design1.state["stage"] == "design"
+    assert design1.state["status"] == "awaiting_human"
+    design_pending = Path.join([dir, "pending", "HUMAN-design.md"])
+    assert File.read!(design_pending) =~ "DESIGN手続き"
+
+    requirement_ids =
+      design1.entries
+      |> Enum.filter(&(&1.type == :requirement))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    machine_decisions = Enum.filter(design1.entries, &(&1.type == :decision and &1.author == "ARCH"))
+    assert machine_decisions != []
+
+    assert Enum.all?(machine_decisions, fn decision ->
+             Enum.any?(decision.citations, &MapSet.member?(requirement_ids, &1))
+           end)
+
+    append_response!(design_pending, "- 代替案の比較も判断に含めてください\n")
+    design2 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert design2.state["status"] == "awaiting_human"
+    assert design2.state["iteration"] == 1
+    assert File.exists?(design_pending)
+    assert File.exists?(Path.join([dir, "pending", "done", "HUMAN-design.md"]))
+
+    assert Enum.count(design2.entries, &(&1.type == :decision and &1.author == "ARCH")) >
+             length(machine_decisions)
+
+    append_response!(design_pending, "APPROVE\n")
+    design3 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert design3.state["stage"] == "design"
+    assert design3.state["status"] == "done"
+
+    machine_ids =
+      design3.entries
+      |> Enum.filter(&(&1.type == :decision and &1.author == "ARCH"))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    assert Enum.any?(design3.entries, fn entry ->
+             entry.type == :decision and entry.author == "HUMAN" and
+               Enum.any?(entry.citations, &MapSet.member?(machine_ids, &1))
+           end)
+
+    design_md = File.read!(Path.join(dir, "design.md"))
+    assert design_md =~ "# 設計判断"
+    assert design_md =~ "設計判断(ARCH)"
+    assert design_md =~ "根拠:"
+
+    by_id = Map.new(design3.entries, &{&1.id, &1})
+
+    decision = Enum.find(design3.entries, &(&1.type == :decision and &1.author == "ARCH"))
+
+    requirement =
+      decision.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :requirement))
+
+    assert requirement
+
+    issue_chunk =
+      requirement.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :chunk and &1.author == "ISSUE"))
+
+    assert issue_chunk
+
+    again = Dev.run_dev(issue: dir, adapter: "mock")
+    assert again.state["stage"] == "design"
+    assert again.state["status"] == "done"
+    assert Jason.decode!(File.read!(Path.join(dir, "state.json")))["stage"] == "design"
+  end
+
   defp tmp_issue_dir do
     dir = Path.join(System.tmp_dir!(), "tracefield-dev-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
