@@ -437,13 +437,16 @@ defmodule Tracefield.Reference do
       }
     ]
 
-    llm_opts = [
-      adapter:
-        Keyword.get(opts, :judge_adapter, Keyword.get(opts, :adapter, Tracefield.LLM.Mock)),
-      model: Keyword.get(opts, :judge_model, Keyword.get(opts, :model, "mock")),
-      temperature: Keyword.get(opts, :temperature, 0.0),
-      seed: Keyword.get(opts, :seed, 0)
-    ]
+    llm_opts =
+      [
+        adapter:
+          Keyword.get(opts, :judge_adapter, Keyword.get(opts, :adapter, Tracefield.LLM.Mock)),
+        model: Keyword.get(opts, :judge_model, Keyword.get(opts, :model, "mock")),
+        temperature: Keyword.get(opts, :temperature, 0.0),
+        seed: Keyword.get(opts, :seed, 0),
+        cli: Keyword.get(opts, :cli)
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
     judgments =
       case Tracefield.LLM.complete(messages, llm_opts) do

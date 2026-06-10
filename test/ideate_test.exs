@@ -43,6 +43,38 @@ defmodule Tracefield.IdeateTest do
     end
   end
 
+  defmodule DocCitationPromptMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, _opts) do
+      prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
+      doc_id = first_doc_id(prompt)
+
+      if pid = Process.whereis(__MODULE__) do
+        send(pid, {:doc_prompt, prompt, doc_id})
+      end
+
+      {:ok,
+       Jason.encode!(%{
+         entries: [
+           %{
+             type: "belief",
+             text: "doc-grounded decision",
+             citations: List.wrap(doc_id)
+           }
+         ]
+       })}
+    end
+
+    defp first_doc_id(prompt) do
+      case Regex.run(~r/^DOC\s+(?<id>e\d+)\s+file=/m, prompt, capture: :all_names) do
+        [id] -> id
+        _ -> nil
+      end
+    end
+  end
+
   test "loads agents.json and resolves private_doc files" do
     scenario = Ideate.load_scenario!(@scenario_path)
 
@@ -169,6 +201,122 @@ defmodule Tracefield.IdeateTest do
     assert result.correction.closure != []
     assert Enum.all?(result.correction.closure, &(&1.status == :superseded))
     assert length(result.correction.repair_entries) >= 1
+  end
+
+  test "tracefield-dev docs seed chunk entries and render as citable reference documents" do
+    Process.register(self(), DocCitationPromptMock)
+
+    result =
+      Ideate.run_ideation(
+        scenario: "scenarios/tracefield-dev",
+        adapter_name: "mock",
+        adapter_module: DocCitationPromptMock,
+        rounds: 1,
+        model: "mock",
+        memory: false,
+        persist?: false
+      )
+
+    doc_chunks = Enum.filter(result.entries, &(&1.type == :chunk and &1.author == "DOCS"))
+    assert length(doc_chunks) == 6
+    assert Enum.all?(doc_chunks, &(get_in(&1.meta, [:file]) =~ ".md"))
+
+    assert_receive {:doc_prompt, prompt, doc_id}, 1_000
+    assert prompt =~ "TASK:\n"
+    assert prompt =~ "REFERENCE DOCUMENTS（設計判断はここを引用せよ）:"
+    assert prompt =~ "DOC #{doc_id} file="
+
+    assert Enum.any?(result.ideas, fn idea -> doc_id in idea.citations end)
+  end
+
+  test "chunk correction resolves docs file, retracts it, quarantines closure, and repairs" do
+    result =
+      Ideate.run_ideation(
+        scenario: "scenarios/tracefield-dev",
+        adapter_name: "mock",
+        adapter_module: Tracefield.LLM.Mock,
+        rounds: 2,
+        k_s: 3,
+        correct: "chunk:r3-local-only.md",
+        model: "mock",
+        memory: false,
+        persist?: false
+      )
+
+    refute result.correction.skipped
+    assert result.correction.target.status == :retracted
+    assert result.correction.target.type == :chunk
+    assert get_in(result.correction.target.meta, [:file]) == "r3-local-only.md"
+    assert result.correction.closure != []
+    assert Enum.all?(result.correction.closure, &(&1.status == :superseded))
+    assert length(result.correction.repair_entries) >= 1
+    assert result.correction.note =~ "要件 r3-local-only.md が変更され撤回された"
+  end
+
+  test "procedure correction resolves the agent procedure and quarantines self-procedure decisions" do
+    result =
+      Ideate.run_ideation(
+        scenario: "scenarios/tracefield-dev",
+        adapter_name: "mock",
+        adapter_module: Tracefield.LLM.Mock,
+        rounds: 1,
+        correct: "procedure:ARCH",
+        model: "mock",
+        memory: false,
+        persist?: false
+      )
+
+    refute result.correction.skipped
+    assert result.correction.target.status == :retracted
+    assert result.correction.target.type == :procedure
+    assert get_in(result.correction.target.meta, [:owner]) == "ARCH"
+    assert Enum.any?(result.correction.closure, &(&1.author == "ARCH"))
+    assert result.correction.note =~ "ARCH の手続きに欠陥が見つかり撤回された"
+  end
+
+  test "cli adapter absorbs entries from a temp script during ideation" do
+    script =
+      cli_script("""
+      #!/bin/sh
+      echo '{"entries":[{"type":"belief","text":"cli generated decision(security)","citations":[]}]}'
+      """)
+
+    result =
+      Ideate.run_ideation(
+        scenario: tmp_scenario(),
+        adapter_name: "cli",
+        adapter_module: Tracefield.LLM.CLI,
+        cli: {script, []},
+        rounds: 1,
+        model: "mock",
+        memory: false,
+        persist?: false
+      )
+
+    assert Enum.any?(result.ideas, &(&1.text == "cli generated decision(security)"))
+  end
+
+  test "cli adapter non-zero exit becomes an empty agent turn" do
+    script =
+      cli_script("""
+      #!/bin/sh
+      echo 'failed cli'
+      exit 7
+      """)
+
+    assert {:error, {:cli_error, 7, "failed cli" <> _}} =
+             Tracefield.LLM.CLI.complete([%{role: "user", content: "prompt"}], cli: {script, []})
+
+    {:ok, ref} = Tracefield.Reference.start_link()
+
+    agent =
+      Tracefield.Agent.new("A", "alpha", "alpha agent",
+        adapter: Tracefield.LLM.CLI,
+        cli: {script, []}
+      )
+
+    {_agent, absorbed, _perception} = Tracefield.Agent.run_turn(agent, ref, 1)
+    assert absorbed == []
   end
 
   test "report is written with headings, citation marks, health, cross-author, and correction" do
@@ -397,6 +545,14 @@ defmodule Tracefield.IdeateTest do
   defp memory_line(text) do
     Jason.encode!(%{ts: "2026-06-10T00:00:00Z", mode: "converge", text: text, citations: []}) <>
       "\n"
+  end
+
+  defp cli_script(content) do
+    path = Path.join(System.tmp_dir!(), "tracefield-cli-#{System.unique_integer([:positive])}.sh")
+    File.write!(path, String.trim_leading(content))
+    File.chmod!(path, 0o755)
+    on_exit(fn -> File.rm(path) end)
+    path
   end
 
   defp drain_ideate_prompts do
