@@ -217,18 +217,53 @@ defmodule Tracefield.LLM.Mock do
   end
 
   defp agent_turn(prompt) do
-    agent = dissolution_agent(prompt)
+    agent = agent_turn_agent(prompt)
     domain = agent_domain(prompt, agent)
-    foreign_entries = presented_foreign_entries(prompt, agent)
     adopted_procedure? = String.contains?(prompt, "ADOPTED PROCEDURE:")
 
     entries =
-      case private_doc(prompt) do
-        "" -> shared_state_entries(agent, domain, foreign_entries)
-        doc -> private_doc_entries(domain, doc, foreign_entries, adopted_procedure?)
+      if agent in ~w(SEC BIZ UX) do
+        foreign_entries = presented_taxonomy_foreign_entries(prompt, agent)
+
+        case private_doc(prompt) do
+          "" -> shared_state_entries(agent, domain, foreign_entries)
+          doc -> private_doc_entries(domain, doc, foreign_entries, adopted_procedure?)
+        end
+      else
+        generic_private_doc_entries(agent, prompt)
       end
 
     %{entries: entries}
+  end
+
+  defp generic_private_doc_entries(agent, prompt) do
+    citations =
+      prompt
+      |> presented_foreign_entries(agent)
+      |> Enum.reject(&(&1.author in ["TASK", "FACILITATOR"]))
+      |> case do
+        [foreign | _] -> [foreign.id]
+        [] -> []
+      end
+
+    [
+      %{
+        type: "belief",
+        text: prompt |> private_doc() |> first_private_word(),
+        citations: citations
+      }
+    ]
+  end
+
+  defp first_private_word(doc) do
+    doc
+    |> String.replace(~r/[#*_`>\-\[\]（）()、。・:：]/u, " ")
+    |> String.split(~r/\s+/, trim: true)
+    |> List.first()
+    |> case do
+      nil -> "UNKNOWN"
+      word -> word
+    end
   end
 
   defp shared_state_entries(agent, domain, foreign_entries) do
@@ -376,6 +411,12 @@ defmodule Tracefield.LLM.Mock do
     end
   end
 
+  defp presented_taxonomy_foreign_entries(prompt, agent) do
+    prompt
+    |> presented_foreign_entries(agent)
+    |> Enum.filter(fn entry -> entry.domain in @domain_taxonomy end)
+  end
+
   defp presented_foreign_entries(prompt, agent) do
     regex =
       ~r/^ENTRY\s+(?<id>e\d+)\s+author=(?<author>\S+)\s+domain=(?<domain>[a-z-]*)\s+text=(?<text>.*)$/m
@@ -387,9 +428,7 @@ defmodule Tracefield.LLM.Mock do
     |> Enum.map(fn %{"id" => id, "author" => author, "domain" => domain, "text" => text} ->
       %{id: id, author: author, domain: domain, text: String.trim(text)}
     end)
-    |> Enum.filter(fn entry ->
-      entry.author != agent and entry.domain in @domain_taxonomy
-    end)
+    |> Enum.reject(fn entry -> entry.author == agent end)
   end
 
   defp domain_for_agent("SEC"), do: "security"
@@ -414,6 +453,13 @@ defmodule Tracefield.LLM.Mock do
     case Regex.named_captures(~r/AGENT\s+(?<agent>SEC|BIZ|UX)\b/, prompt) do
       %{"agent" => agent} -> agent
       _ -> "SEC"
+    end
+  end
+
+  defp agent_turn_agent(prompt) do
+    case Regex.named_captures(~r/AGENT\s+(?<agent>[A-Z0-9_-]+)\b/, prompt) do
+      %{"agent" => agent} -> agent
+      _ -> dissolution_agent(prompt)
     end
   end
 
