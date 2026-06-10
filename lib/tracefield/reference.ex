@@ -12,7 +12,17 @@ defmodule Tracefield.Reference do
     defstruct [:id, :type, :author, :version, :status, :text, :citations, :embedding, :meta]
   end
 
-  @types [:belief, :hypothesis, :observation, :stance, :decision, :question, :chunk, :procedure]
+  @types [
+    :belief,
+    :hypothesis,
+    :observation,
+    :stance,
+    :decision,
+    :question,
+    :chunk,
+    :procedure,
+    :genesis
+  ]
   @statuses [:active, :retracted, :superseded]
 
   def start_link(opts \\ []) do
@@ -212,7 +222,8 @@ defmodule Tracefield.Reference do
         %Entry{id: ^id, status: status} = entry when status != :retracted ->
           %{entry | status: :retracted}
 
-        entry -> entry
+        entry ->
+          entry
       end)
 
     if existing && existing.status != :retracted do
@@ -494,7 +505,12 @@ defmodule Tracefield.Reference do
 
     if source_cluster && source_id do
       existing = entry_value(meta, :source_chain, []) |> normalize_source_chain()
-      Map.put(meta, :source_chain, existing ++ [%{source_cluster: source_cluster, source_id: source_id}])
+
+      Map.put(
+        meta,
+        :source_chain,
+        existing ++ [%{source_cluster: source_cluster, source_id: source_id}]
+      )
     else
       meta
     end
@@ -579,7 +595,11 @@ defmodule Tracefield.Reference do
   end
 
   defp normalize_meta(meta) when is_map(meta) do
-    Map.new(meta, fn {key, value} -> {normalize_meta_key(key), value} end)
+    Map.new(meta, fn {key, value} ->
+      key = normalize_meta_key(key)
+      value = if key == :source_chain, do: normalize_source_chain(value), else: value
+      {key, value}
+    end)
   end
 
   defp normalize_meta(_meta), do: %{}
