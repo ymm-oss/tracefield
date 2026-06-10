@@ -1,0 +1,5 @@
+[
+  {"id": "LENS1", "domain": "perspective-one", "desc": "<この視点が最重視すること>", "private_doc": "lens1.md"},
+  {"id": "LENS2", "domain": "perspective-two", "desc": "<この視点が最重視すること>", "private_doc": "lens2.md"},
+  {"id": "LENS3", "domain": "perspective-three", "desc": "<この視点が最重視すること>", "private_doc": "lens3.md"}
+]
