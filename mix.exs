@@ -21,7 +21,8 @@ defmodule Tracefield.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:jido, "~> 2.3"}
     ]
   end
 end
