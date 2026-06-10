@@ -98,4 +98,49 @@ defmodule Tracefield.ReferenceTest do
     assert MapSet.new(Enum.map(closure, & &1.id)) == MapSet.new([e2.id, e3.id])
     assert Reference.get(ref, e1.id).status == :retracted
   end
+
+  test "verify grounds citations with mock rules and always accepts procedure citations" do
+    {:ok, ref} = Reference.start_link()
+
+    [procedure] = Reference.absorb(ref, [%{type: :procedure, text: "adopted procedure"}], "FAC")
+    [support] = Reference.absorb(ref, [%{text: "solar comfort finance support"}], "A")
+    [unrelated] = Reference.absorb(ref, [%{text: "zzzz yyyy xxxx"}], "B")
+
+    [claim] =
+      Reference.absorb(
+        ref,
+        [
+          %{
+            text: "solar comfort plan reduces budget risk",
+            citations: [support.id, unrelated.id, procedure.id]
+          }
+        ],
+        "C"
+      )
+
+    judgments = Reference.verify(ref, [claim], judge_adapter: Tracefield.LLM.Mock)
+
+    assert judgments[{claim.id, support.id}]
+    refute judgments[{claim.id, unrelated.id}]
+    assert judgments[{claim.id, procedure.id}]
+  end
+
+  test "quarantine supersedes active ids and most_cited chooses active non-procedure by count" do
+    {:ok, ref} = Reference.start_link()
+
+    [_chunk] = Reference.absorb(ref, [%{type: :chunk, text: "task"}], "TASK")
+    [a] = Reference.absorb(ref, [%{text: "candidate a"}], "A")
+    [b] = Reference.absorb(ref, [%{text: "candidate b"}], "B")
+
+    Reference.absorb(ref, [%{text: "cites b once", citations: [b.id]}], "C")
+    Reference.absorb(ref, [%{text: "cites b twice", citations: [b.id]}], "D")
+    Reference.absorb(ref, [%{text: "cites a once", citations: [a.id]}], "E")
+
+    assert Reference.most_cited(ref).id == b.id
+
+    [quarantined] = Reference.quarantine(ref, [b.id])
+    assert quarantined.status == :superseded
+    assert Reference.get(ref, b.id).status == :superseded
+    assert Reference.most_cited(ref).id == a.id
+  end
 end

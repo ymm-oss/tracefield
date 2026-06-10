@@ -5,6 +5,16 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   alias Tracefield.{Dissolution, GroundTruth, Reference}
 
   @shortdoc "Run Tracefield ideation"
+  @review_procedure """
+                    リスクレビュー手続き v1: PRESENTED ENTRIES と PRIVATE DOCUMENT を突き合わせ、この計画のリスク・矛盾・見落としを具体的に指摘せよ。賛辞や言い換えは書くな。各指摘は根拠（私的事実 or 提示 entry の引用）を必ず持て。日本語で書け。
+                    """
+                    |> String.trim()
+
+  @mode_presets %{
+    diverge: %{rounds: 2, k: 1, temperature: 0.8},
+    converge: %{rounds: 3, k: 4, temperature: 0.5},
+    review: %{rounds: 2, k: 3, temperature: 0.4}
+  }
 
   @impl true
   def run(args) do
@@ -17,21 +27,27 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   end
 
   def run_ideation(opts) do
+    mode = normalize_mode(Keyword.get(opts, :mode, :converge))
+    preset = mode_preset(mode)
+
     adapter_name =
       Keyword.get(opts, :adapter_name, adapter_name(Keyword.get(opts, :adapter, "mock")))
 
     adapter = adapter(opts, adapter_name)
     embed_adapter = Keyword.get(opts, :embed_adapter, default_embed_adapter(adapter))
     scenario_path = Keyword.fetch!(opts, :scenario)
-    scenario = Keyword.get_lazy(opts, :loaded_scenario, fn -> load_scenario!(scenario_path) end)
-    rounds = Keyword.get(opts, :rounds, 3)
+
+    scenario =
+      Keyword.get_lazy(opts, :loaded_scenario, fn -> load_scenario!(scenario_path, mode) end)
+
+    rounds = Keyword.get(opts, :rounds, preset.rounds)
 
     serve =
       Keyword.get(opts, :serve_policy, Keyword.get(opts, :serve, :diverse)) |> normalize_serve()
 
     aware = Keyword.get(opts, :aware, 1)
-    k_s = Keyword.get(opts, :k_s, Keyword.get(opts, :k, 3))
-    temperature = Keyword.get(opts, :temperature, 0.6)
+    k_s = Keyword.get(opts, :k_s, Keyword.get(opts, :k, preset.k))
+    temperature = Keyword.get(opts, :temperature, preset.temperature)
 
     model =
       Keyword.get(
@@ -76,13 +92,27 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         )
       end)
 
-    {_agents, ideas, perception} =
+    {agents, main_ideas, perception} =
       Enum.reduce(1..rounds, {agents, [], []}, fn round, {agents, ideas, perception} ->
         {agents, round_ideas, round_perception} = run_round(agents, reference, round)
         {agents, ideas ++ round_ideas, perception ++ round_perception}
       end)
 
+    correction = maybe_correct(Keyword.get(opts, :correct), agents, reference, rounds + 1)
+    repair_ideas = if correction, do: Map.get(correction, :repair_entries, []), else: []
+    repair_perception = if correction, do: Map.get(correction, :perception, []), else: []
+
     all_entries = Reference.all(reference)
+    ideas = entries_for_ids(all_entries, Enum.map(main_ideas ++ repair_ideas, & &1.id))
+
+    verification =
+      Reference.verify(reference, ideas,
+        judge_adapter: adapter,
+        judge_model: model,
+        temperature: temperature,
+        seed: 80_000
+      )
+
     concerns_by_agent = concerns_by_agent(ideas)
 
     raw_metrics =
@@ -96,13 +126,18 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         measure_icc: false
       )
 
-    metrics = Map.take(raw_metrics, [:coverage, :diversity, :collapse_rate])
-    synthesis = cross_author_synthesis(ideas, all_entries, procedure_id)
+    metrics =
+      raw_metrics
+      |> Map.take([:coverage, :diversity, :collapse_rate])
+      |> Map.put(:verification_rate, verification_rate(ideas, verification, procedure_id))
+
+    synthesis = cross_author_synthesis(ideas, all_entries, procedure_id, verification)
 
     result = %{
       task: scenario.task,
       scenario_path: scenario.path,
       config: %{
+        mode: mode,
         adapter: adapter_name,
         rounds: rounds,
         serve: serve,
@@ -115,10 +150,13 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       },
       agents: scenario.agents,
       entries: plain_entries(all_entries),
-      ideas: plain_entries(ideas),
+      ideas: plain_entries(ideas, verification, procedure_id),
+      citation_verification: plain_verification(verification),
       metrics: metrics,
       cross_author_synthesis: synthesis,
-      perception: perception
+      perception: perception ++ repair_perception,
+      correction: plain_correction(correction, verification, procedure_id),
+      report_path: Keyword.get(opts, :report)
     }
 
     path =
@@ -126,10 +164,17 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         persist(result, adapter_name)
       end
 
-    Map.put(result, :path, path)
+    result = Map.put(result, :path, path)
+
+    if report_path = Keyword.get(opts, :report) do
+      write_report!(result, report_path)
+    end
+
+    result
   end
 
-  def load_scenario!(path) do
+  def load_scenario!(path, mode \\ :converge) do
+    mode = normalize_mode(mode)
     task = File.read!(Path.join(path, "task.md"))
 
     agents =
@@ -139,18 +184,18 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       |> Jason.decode!()
       |> Enum.map(&load_agent!(path, &1))
 
-    procedure_path = Path.join(path, "procedure.md")
-    procedure = if File.exists?(procedure_path), do: File.read!(procedure_path), else: nil
+    {procedure, procedure_source} = load_procedure(path, mode)
 
     %{
       path: path,
       task: task,
       agents: agents,
-      procedure: procedure
+      procedure: procedure,
+      procedure_source: procedure_source
     }
   end
 
-  def cross_author_synthesis(ideas, all_entries, procedure_id) do
+  def cross_author_synthesis(ideas, all_entries, procedure_id, verification \\ %{}) do
     by_id = Map.new(all_entries, &{&1.id, &1})
 
     items =
@@ -166,7 +211,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           end
         end)
       end)
-      |> plain_entries()
+      |> plain_entries(verification, procedure_id)
 
     %{count: length(items), ideas: items}
   end
@@ -183,24 +228,32 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           k: :integer,
           model: :string,
           embed_model: :string,
-          temperature: :float
+          temperature: :float,
+          mode: :string,
+          correct: :string,
+          report: :string
         ],
         aliases: [a: :adapter, m: :model, t: :temperature]
       )
 
     adapter_name = Keyword.get(opts, :adapter, "mock")
+    mode = opts |> Keyword.get(:mode, "converge") |> normalize_mode()
+    preset = mode_preset(mode)
 
     [
       scenario: Keyword.get(opts, :scenario, "scenarios/housing-service"),
+      mode: mode,
       adapter_name: adapter_name,
       adapter_module: adapter_module(adapter_name),
-      rounds: Keyword.get(opts, :rounds, 3),
+      rounds: Keyword.get(opts, :rounds, preset.rounds),
       serve_policy: parse_serve(Keyword.get(opts, :serve, "diverse")),
       aware: Keyword.get(opts, :aware, 1),
-      k_s: Keyword.get(opts, :k, 3),
+      k_s: Keyword.get(opts, :k, preset.k),
       model: Keyword.get(opts, :model),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
-      temperature: Keyword.get(opts, :temperature, 0.6)
+      temperature: Keyword.get(opts, :temperature, preset.temperature),
+      correct: Keyword.get(opts, :correct),
+      report: Keyword.get(opts, :report)
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -246,10 +299,12 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     procedure.id
   end
 
-  defp run_round(agents, reference, round) do
+  defp run_round(agents, reference, round, opts \\ []) do
     agents
     |> Enum.reduce({[], [], []}, fn agent, {updated_agents, ideas, perception} ->
-      {agent, entries, log} = Tracefield.Agent.run_turn(agent, reference, round)
+      {agent, entries, log} =
+        Tracefield.Agent.run_turn(agent, reference, round, Keyword.take(opts, [:note]))
+
       ideas = ideas ++ Enum.reject(entries, &(&1.type in [:chunk, :procedure]))
       {updated_agents ++ [agent], ideas, perception ++ [log]}
     end)
@@ -276,6 +331,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   defp print_result(result) do
     Mix.shell().info("Tracefield Ideate")
     Mix.shell().info("scenario: #{result.scenario_path}")
+    Mix.shell().info("mode: #{result.config.mode}")
     Mix.shell().info("adapter: #{result.config.adapter}")
     Mix.shell().info("")
     Mix.shell().info("Ideas")
@@ -296,9 +352,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         {Map.get(agent_order, idea.author, 999), entry_number(idea.id)}
       end)
       |> Enum.each(fn idea ->
-        Mix.shell().info(
-          "[#{idea.author}] (cites: #{format_citations(idea.citations)}) #{idea.text}"
-        )
+        Mix.shell().info("[#{idea.author}] (cites: #{format_citations(idea)}) #{idea.text}")
       end)
 
       Mix.shell().info("")
@@ -308,15 +362,22 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Mix.shell().info("coverage: #{result.metrics.coverage}")
     Mix.shell().info("diversity: #{fmt(result.metrics.diversity)}")
     Mix.shell().info("collapse_rate: #{fmt(result.metrics.collapse_rate)}")
+    Mix.shell().info("verification_rate: #{fmt(result.metrics.verification_rate)}")
     Mix.shell().info("")
+
+    print_correction(result.correction)
+
     Mix.shell().info("Cross-author synthesis")
     Mix.shell().info("count: #{result.cross_author_synthesis.count}")
 
     Enum.each(result.cross_author_synthesis.ideas, fn idea ->
-      Mix.shell().info(
-        "[#{idea.author}] (cites: #{format_citations(idea.citations)}) #{idea.text}"
-      )
+      Mix.shell().info("[#{idea.author}] (cites: #{format_citations(idea)}) #{idea.text}")
     end)
+
+    if result.report_path do
+      Mix.shell().info("")
+      Mix.shell().info("report: #{result.report_path}")
+    end
 
     if result.path do
       Mix.shell().info("")
@@ -324,7 +385,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     end
   end
 
-  defp plain_entries(entries) do
+  defp plain_entries(entries, verification \\ %{}, procedure_id \\ nil) do
     Enum.map(entries, fn entry ->
       %{
         id: entry.id,
@@ -334,9 +395,257 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         status: entry.status,
         text: entry.text,
         citations: entry.citations,
+        annotated_citations: annotated_citations(entry, verification, procedure_id),
+        citation_verification: citation_verification(entry, verification, procedure_id),
         meta: entry.meta
       }
     end)
+  end
+
+  defp load_procedure(path, :review) do
+    review_path = Path.join(path, "procedure-review.md")
+
+    cond do
+      File.exists?(review_path) -> {File.read!(review_path), review_path}
+      true -> {@review_procedure, :built_in_review}
+    end
+  end
+
+  defp load_procedure(path, _mode) do
+    procedure_path = Path.join(path, "procedure.md")
+
+    if File.exists?(procedure_path) do
+      {File.read!(procedure_path), procedure_path}
+    else
+      {nil, nil}
+    end
+  end
+
+  defp maybe_correct(nil, _agents, _reference, _repair_round), do: nil
+
+  defp maybe_correct(value, agents, reference, repair_round) do
+    target =
+      case value do
+        "auto" -> Reference.most_cited(reference)
+        id -> Reference.get(reference, id)
+      end
+
+    if is_nil(target) do
+      %{skipped: true, reason: "訂正対象なし", closure: [], repair_entries: [], perception: []}
+    else
+      closure = Reference.retract(reference, target.id)
+      quarantined = Reference.quarantine(reference, Enum.map(closure, & &1.id))
+
+      note =
+        "NOTE: 直前に entry #{target.id} が誤りと判明し撤回された。それに依存しない代替案を出せ。"
+
+      {_agents, repair_entries, perception} =
+        run_round(agents, reference, repair_round, note: note)
+
+      %{
+        skipped: false,
+        target: Reference.get(reference, target.id),
+        closure: quarantined,
+        closure_ids: Enum.map(quarantined, & &1.id),
+        repair_entries: repair_entries,
+        perception: perception,
+        note: note
+      }
+    end
+  end
+
+  defp plain_correction(nil, _verification, _procedure_id), do: nil
+
+  defp plain_correction(%{skipped: true} = correction, _verification, _procedure_id) do
+    Map.take(correction, [:skipped, :reason])
+  end
+
+  defp plain_correction(correction, verification, procedure_id) do
+    %{
+      skipped: false,
+      target: hd(plain_entries([correction.target], verification, procedure_id)),
+      closure: plain_entries(correction.closure, verification, procedure_id),
+      closure_ids: correction.closure_ids,
+      repair_entries: plain_entries(correction.repair_entries, verification, procedure_id),
+      note: correction.note
+    }
+  end
+
+  defp entries_for_ids(entries, ids) do
+    by_id = Map.new(entries, &{&1.id, &1})
+    Enum.flat_map(ids, fn id -> if entry = Map.get(by_id, id), do: [entry], else: [] end)
+  end
+
+  defp verification_rate(ideas, verification, procedure_id) do
+    pairs =
+      for idea <- ideas,
+          cited_id <- idea.citations,
+          cited_id != procedure_id do
+        {idea.id, cited_id}
+      end
+
+    if pairs == [] do
+      1.0
+    else
+      verified = Enum.count(pairs, &Map.get(verification, &1, false))
+      verified / length(pairs)
+    end
+  end
+
+  defp plain_verification(verification) do
+    Map.new(verification, fn {{citing_id, cited_id}, verified?} ->
+      {"#{citing_id}->#{cited_id}", verified?}
+    end)
+  end
+
+  defp annotated_citations(entry, verification, procedure_id) do
+    Enum.map(entry.citations, &citation_label(&1, entry.id, verification, procedure_id))
+  end
+
+  defp citation_verification(entry, verification, procedure_id) do
+    Map.new(entry.citations, fn cited_id ->
+      {cited_id, citation_verified?(entry.id, cited_id, verification, procedure_id)}
+    end)
+  end
+
+  defp citation_label(cited_id, citing_id, verification, procedure_id) do
+    mark =
+      if citation_verified?(citing_id, cited_id, verification, procedure_id), do: "✓", else: "✗"
+
+    "#{cited_id}#{mark}"
+  end
+
+  defp citation_verified?(_citing_id, cited_id, _verification, cited_id), do: true
+
+  defp citation_verified?(citing_id, cited_id, verification, _procedure_id) do
+    Map.get(verification, {citing_id, cited_id}, false)
+  end
+
+  defp print_correction(nil), do: :ok
+
+  defp print_correction(%{skipped: true, reason: reason}) do
+    Mix.shell().info("訂正")
+    Mix.shell().info(reason)
+    Mix.shell().info("")
+  end
+
+  defp print_correction(correction) do
+    target = correction.target
+    closure = correction.closure || []
+    repair_entries = correction.repair_entries || []
+
+    Mix.shell().info("訂正")
+    Mix.shell().info("訂正: #{target.id}「#{excerpt(target.text)}」を撤回 → 依存 #{length(closure)} 件を隔離")
+
+    Enum.each(closure, fn entry ->
+      Mix.shell().info("隔離: #{entry.id} [#{entry.author}] #{entry.text}")
+    end)
+
+    Mix.shell().info("修復ラウンドの代替案")
+
+    Enum.each(repair_entries, fn entry ->
+      Mix.shell().info("[#{entry.author}] (cites: #{format_citations(entry)}) #{entry.text}")
+    end)
+
+    Mix.shell().info("")
+  end
+
+  defp write_report!(result, path) do
+    dir = Path.dirname(path)
+    if dir not in [".", ""], do: File.mkdir_p!(dir)
+
+    File.write!(path, report_markdown(result))
+  end
+
+  defp report_markdown(result) do
+    scenario_name = result.scenario_path |> Path.expand() |> Path.basename()
+
+    [
+      "# アイデア出しレポート — #{scenario_name}",
+      "- 日時: #{DateTime.utc_now() |> DateTime.to_iso8601()}",
+      "- mode: #{result.config.mode}",
+      "- モデル: #{result.config.model}",
+      "- rounds: #{result.config.rounds}",
+      "- k: #{result.config.k}",
+      "- serve: #{result.config.serve}",
+      "- aware: #{result.config.aware}",
+      "",
+      "## タスク",
+      String.trim(result.task),
+      "",
+      "## アイデア（Round 別）",
+      report_ideas(result),
+      report_correction(result.correction),
+      "## 健全性",
+      "- coverage: #{result.metrics.coverage}",
+      "- diversity: #{fmt(result.metrics.diversity)}",
+      "- collapse_rate: #{fmt(result.metrics.collapse_rate)}",
+      "- verification_rate: #{fmt(result.metrics.verification_rate)}",
+      "",
+      "## 領域横断の合成（cross-author）",
+      "- #{result.cross_author_synthesis.count} 件",
+      report_cross_author(result)
+    ]
+    |> Enum.reject(&(&1 == nil))
+    |> Enum.join("\n")
+    |> Kernel.<>("\n")
+  end
+
+  defp report_ideas(result) do
+    result.ideas
+    |> Enum.group_by(&get_in(&1, [:meta, :round]))
+    |> Enum.sort_by(fn {round, _ideas} -> round || 0 end)
+    |> Enum.map_join("\n", fn {round, ideas} ->
+      lines =
+        ideas
+        |> Enum.sort_by(&entry_number(&1.id))
+        |> Enum.map_join("\n", fn idea ->
+          "- **[#{idea.author}]** #{idea.text}（引用: #{format_citations(idea)}）"
+        end)
+
+      "### Round #{round}\n#{lines}"
+    end)
+  end
+
+  defp report_correction(nil), do: nil
+
+  defp report_correction(%{skipped: true, reason: reason}) do
+    "\n## 訂正（--correct 時のみ）\n- #{reason}\n"
+  end
+
+  defp report_correction(correction) do
+    closure =
+      correction.closure
+      |> Enum.map_join("\n", fn entry -> "- 隔離: #{entry.id} #{entry.text}" end)
+
+    repairs =
+      correction.repair_entries
+      |> Enum.map_join("\n", fn entry ->
+        "- 代替案: [#{entry.author}] #{entry.text}（引用: #{format_citations(entry)}）"
+      end)
+
+    [
+      "",
+      "## 訂正（--correct 時のみ）",
+      "- 撤回: #{correction.target.id} #{correction.target.text}",
+      closure,
+      repairs,
+      ""
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp report_cross_author(result) do
+    result.cross_author_synthesis.ideas
+    |> Enum.map_join("\n", fn idea ->
+      "- **[#{idea.author}]** #{idea.text}（引用: #{format_citations(idea)}）"
+    end)
+  end
+
+  defp excerpt(text) do
+    text = String.trim(to_string(text))
+    if String.length(text) > 48, do: String.slice(text, 0, 48) <> "...", else: text
   end
 
   defp entry_number("e" <> number) do
@@ -348,8 +657,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp entry_number(_id), do: 0
 
-  defp format_citations([]), do: "-"
-  defp format_citations(citations), do: Enum.join(citations, ",")
+  defp format_citations(%{annotated_citations: []}), do: "-"
+  defp format_citations(%{annotated_citations: citations}), do: Enum.join(citations, ",")
 
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)
 
@@ -383,6 +692,16 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   defp aware?(_value), do: false
 
   defp parse_serve(value), do: normalize_serve(value)
+
+  defp mode_preset(mode), do: Map.fetch!(@mode_presets, normalize_mode(mode))
+
+  defp normalize_mode(:diverge), do: :diverge
+  defp normalize_mode(:converge), do: :converge
+  defp normalize_mode(:review), do: :review
+  defp normalize_mode("diverge"), do: :diverge
+  defp normalize_mode("converge"), do: :converge
+  defp normalize_mode("review"), do: :review
+  defp normalize_mode(other), do: Mix.raise("invalid mode #{inspect(other)}")
 
   defp normalize_serve(:similar), do: :similar
   defp normalize_serve(:diverse), do: :diverse

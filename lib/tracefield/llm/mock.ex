@@ -48,6 +48,9 @@ defmodule Tracefield.LLM.Mock do
       String.contains?(prompt, "TRACEFIELD_RECONSTRUCT_AFFECTED_POINTS") ->
         {:ok, Jason.encode!(affected_point_indexes(prompt))}
 
+      String.contains?(prompt, "TRACEFIELD_VERIFY") ->
+        {:ok, Jason.encode!(verify_judgments(prompt))}
+
       String.contains?(prompt, "TRACEFIELD_RECONSTRUCT_AFFECTED") ->
         {:ok, Jason.encode!(affected_claim_indexes(prompt))}
 
@@ -85,6 +88,72 @@ defmodule Tracefield.LLM.Mock do
 
   def signal_claim_ids, do: [@consent_topic]
   def consent_topic, do: @consent_topic
+
+  defp verify_judgments(prompt) do
+    prompt
+    |> verify_pairs()
+    |> Map.new(fn pair ->
+      {Integer.to_string(pair["n"]), %{verified: verify_pair?(pair["citing"], pair["cited"])}}
+    end)
+  end
+
+  defp verify_pairs(prompt) do
+    case Regex.run(~r/PAIRS_JSON:\s*(?<json>\[[\s\S]*\])\s*$/m, prompt, capture: :all_names) do
+      [json] ->
+        case Jason.decode(json) do
+          {:ok, pairs} when is_list(pairs) -> Enum.filter(pairs, &is_map/1)
+          _ -> []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp verify_pair?(citing, cited) do
+    citing = normalize_verify_text(citing)
+    cited = normalize_verify_text(cited)
+    cited_tokens = MapSet.new(verify_tokens(cited))
+
+    Enum.any?(verify_tokens(citing), fn token ->
+      String.length(token) >= 4 and
+        (MapSet.member?(cited_tokens, token) or String.contains?(cited, token))
+    end)
+  end
+
+  defp normalize_verify_text(text) do
+    text
+    |> to_string()
+    |> String.downcase()
+    |> String.replace(~r/[^\p{L}\p{N}-]+/u, " ")
+    |> String.trim()
+  end
+
+  defp verify_tokens(text) do
+    text
+    |> String.split(~r/\s+/u, trim: true)
+    |> Enum.flat_map(fn token ->
+      if String.length(token) >= 4 do
+        [token | token_substrings(token, 4)]
+      else
+        []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp token_substrings(token, size) do
+    chars = String.graphemes(token)
+    max_start = length(chars) - size
+
+    if max_start < 0 do
+      []
+    else
+      for start <- 0..max_start do
+        chars |> Enum.slice(start, size) |> Enum.join()
+      end
+    end
+  end
 
   defp claims_from_prompt(prompt) do
     prompt
