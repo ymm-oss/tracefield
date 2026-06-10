@@ -214,6 +214,123 @@ defmodule Tracefield.ReferenceTest do
     assert length(Reference.all(restored)) == 2
   end
 
+  test "export/import creates idempotent copies with provenance and reused embeddings" do
+    {:ok, source} = Reference.start_link()
+    {:ok, target} = Reference.start_link()
+
+    [entry] =
+      Reference.absorb(
+        source,
+        [%{type: :observation, text: "measured energy savings", meta: %{domain: "energy"}}],
+        "ENG"
+      )
+
+    exported = Reference.export(source, [entry.id, "missing"])
+    assert length(exported) == 1
+    assert hd(exported).id == entry.id
+    assert hd(exported).type == "observation"
+
+    [copy] = Reference.import(target, exported, "A")
+
+    assert copy.author == "A/ENG"
+    assert copy.status == entry.status
+    assert copy.embedding == entry.embedding
+    assert copy.meta.domain == "energy"
+    assert copy.meta.source_cluster == "A"
+    assert copy.meta.source_id == entry.id
+
+    [again] = Reference.import(target, exported, "A")
+
+    assert again.id == copy.id
+    assert Reference.all(target) == [copy]
+  end
+
+  test "import remaps batch citations and records out-of-batch citations as unresolved" do
+    {:ok, source} = Reference.start_link()
+    {:ok, target} = Reference.start_link()
+
+    [_seed] = Reference.absorb(target, [%{text: "local seed"}], "LOCAL")
+    [root] = Reference.absorb(source, [%{text: "source root"}], "A")
+
+    [child] =
+      Reference.absorb(
+        source,
+        [%{text: "source child", citations: [root.id, "e999"]}],
+        "B"
+      )
+
+    [root_copy, child_copy] =
+      Reference.import(target, Reference.export(source, [root.id, child.id]), "SRC")
+
+    assert root_copy.id != root.id
+    assert child_copy.id != child.id
+    assert child_copy.citations == [root_copy.id]
+    assert child_copy.meta.unresolved_citations == ["e999"]
+  end
+
+  test "propagate_retractions retracts imported copy and quarantines local closure" do
+    {:ok, source} = Reference.start_link()
+    {:ok, target} = Reference.start_link()
+
+    [a1] = Reference.absorb(source, [%{text: "field measurement supports loan"}], "ENERGY")
+    [copy] = Reference.import(target, Reference.export(source, [a1.id]), "A")
+
+    [b1] =
+      Reference.absorb(
+        target,
+        [%{type: :decision, text: "design loan", citations: [copy.id]}],
+        "FIN"
+      )
+
+    Reference.retract(source, a1.id)
+    [result] = Reference.propagate_retractions(target, "A", Reference.export(source, [a1.id]))
+
+    assert result.source_id == a1.id
+    assert result.copy.id == copy.id
+    assert result.copy.status == :retracted
+    assert Enum.map(result.closure, & &1.id) == [b1.id]
+    assert Reference.get(target, copy.id).status == :retracted
+    assert Reference.get(target, b1.id).status == :superseded
+  end
+
+  test "persistent imported copies and propagated statuses round-trip" do
+    source_path = tmp_store_path()
+    target_path = tmp_store_path()
+
+    {:ok, source} = Reference.start_link(persist_path: source_path)
+    {:ok, target} = Reference.start_link(persist_path: target_path)
+
+    [a1] = Reference.absorb(source, [%{text: "correctable measurement"}], "ENERGY")
+    [copy] = Reference.import(target, Reference.export(source, [a1.id]), "A")
+
+    [b1] =
+      Reference.absorb(
+        target,
+        [%{text: "depends on imported measurement", citations: [copy.id]}],
+        "FIN"
+      )
+
+    GenServer.stop(target)
+
+    Reference.retract(source, a1.id)
+    {:ok, restored_target} = Reference.start_link(persist_path: target_path)
+
+    assert Reference.get(restored_target, copy.id).meta.source_cluster == "A"
+
+    [result] =
+      Reference.propagate_retractions(restored_target, "A", Reference.export(source, [a1.id]))
+
+    assert result.copy.id == copy.id
+    assert Reference.get(restored_target, copy.id).status == :retracted
+    assert Reference.get(restored_target, b1.id).status == :superseded
+    GenServer.stop(restored_target)
+
+    {:ok, restored_again} = Reference.start_link(persist_path: target_path)
+
+    assert Reference.get(restored_again, copy.id).status == :retracted
+    assert Reference.get(restored_again, b1.id).status == :superseded
+  end
+
   defp tmp_store_path do
     path =
       Path.join(
