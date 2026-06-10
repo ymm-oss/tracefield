@@ -25,6 +25,12 @@ defmodule Tracefield.Reference do
 
   def absorb(ref, entry, author), do: absorb(ref, [entry], author)
 
+  def absorb_idempotent(ref, entries, author) when is_list(entries) do
+    GenServer.call(ref, {:absorb_idempotent, entries, author})
+  end
+
+  def absorb_idempotent(ref, entry, author), do: absorb_idempotent(ref, [entry], author)
+
   def serve(ref, query_text, opts \\ []) do
     GenServer.call(ref, {:serve, query_text, opts})
   end
@@ -87,6 +93,10 @@ defmodule Tracefield.Reference do
     GenServer.call(ref, :all)
   end
 
+  def stats(ref) do
+    GenServer.call(ref, :stats)
+  end
+
   def closure(entries, id) do
     by_id = Map.new(entries, &{entry_id(&1), &1})
 
@@ -102,13 +112,19 @@ defmodule Tracefield.Reference do
 
   @impl true
   def init(opts) do
+    persist_path = Keyword.get(opts, :persist_path)
+
     state = %{
       entries: [],
       next_id: 1,
       embed_adapter: Keyword.get(opts, :embed_adapter, Tracefield.Embed.Mock),
-      embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text")
+      embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
+      persist_path: persist_path,
+      restored: 0,
+      skipped_lines: 0
     }
 
+    state = restore_persisted(state, persist_path)
     entries = Keyword.get(opts, :entries, [])
 
     {:ok, absorb_initial(state, entries)}
@@ -117,7 +133,27 @@ defmodule Tracefield.Reference do
   @impl true
   def handle_call({:absorb, entries, author}, _from, state) do
     {stored, state} = build_entries(entries, author, state)
+    persist_absorbs!(state, stored)
     {:reply, stored, %{state | entries: state.entries ++ stored}}
+  end
+
+  def handle_call({:absorb_idempotent, entries, author}, _from, state) do
+    {stored, state} =
+      Enum.map_reduce(entries, state, fn entry, state ->
+        normalized = normalize_entry(entry, author)
+
+        case find_existing_seed(state.entries, normalized) do
+          nil ->
+            {[stored], state} = build_entries([entry], author, state)
+            persist_absorbs!(state, [stored])
+            {stored, %{state | entries: state.entries ++ [stored]}}
+
+          existing ->
+            {existing, state}
+        end
+      end)
+
+    {:reply, stored, state}
   end
 
   def handle_call({:serve, query_text, opts}, _from, state) do
@@ -146,6 +182,10 @@ defmodule Tracefield.Reference do
         entry -> entry
       end)
 
+    if Enum.any?(state.entries, &(&1.id == id)) do
+      persist_status!(state, id, :retracted)
+    end
+
     {:reply, closure, %{state | entries: entries}}
   end
 
@@ -160,6 +200,10 @@ defmodule Tracefield.Reference do
         entry ->
           entry
       end)
+
+    entries
+    |> Enum.filter(&(&1.status == :superseded and MapSet.member?(ids, &1.id)))
+    |> Enum.each(&persist_status!(state, &1.id, :superseded))
 
     quarantined = Enum.filter(entries, &MapSet.member?(ids, &1.id))
     {:reply, quarantined, %{state | entries: entries}}
@@ -197,10 +241,20 @@ defmodule Tracefield.Reference do
     {:reply, state.entries, state}
   end
 
+  def handle_call(:stats, _from, state) do
+    {:reply,
+     %{
+       entries: length(state.entries),
+       restored: state.restored,
+       skipped_lines: state.skipped_lines
+     }, state}
+  end
+
   defp absorb_initial(state, entries) do
     Enum.reduce(List.wrap(entries), state, fn entry, acc ->
       author = entry_author(entry) || "seed"
       {stored, acc} = build_entries([entry], author, acc)
+      persist_absorbs!(acc, stored)
       %{acc | entries: acc.entries ++ stored}
     end)
   end
@@ -242,6 +296,13 @@ defmodule Tracefield.Reference do
     }
   end
 
+  defp find_existing_seed(entries, normalized) do
+    Enum.find(entries, fn entry ->
+      entry.type == normalized.type and entry.author == normalized.author and
+        entry.text == normalized.text
+    end)
+  end
+
   defp normalize_type(type) when type in @types, do: type
 
   defp normalize_type(type) when is_binary(type) do
@@ -277,8 +338,147 @@ defmodule Tracefield.Reference do
     |> Enum.uniq()
   end
 
-  defp normalize_meta(meta) when is_map(meta), do: meta
+  defp normalize_meta(meta) when is_map(meta) do
+    Map.new(meta, fn {key, value} -> {normalize_meta_key(key), value} end)
+  end
+
   defp normalize_meta(_meta), do: %{}
+
+  defp normalize_meta_key(key) when is_atom(key), do: key
+
+  defp normalize_meta_key(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> key
+  end
+
+  defp normalize_meta_key(key), do: key
+
+  defp restore_persisted(state, nil), do: state
+
+  defp restore_persisted(state, path) do
+    if File.exists?(path) do
+      path
+      |> File.stream!(:line, [])
+      |> Enum.reduce(state, &replay_line/2)
+      |> then(fn state ->
+        %{state | next_id: next_restored_id(state.entries)}
+      end)
+    else
+      state
+    end
+  end
+
+  defp replay_line(line, state) do
+    case Jason.decode(line) do
+      {:ok, %{"op" => "absorb", "entry" => entry}} when is_map(entry) ->
+        case restore_entry(entry) do
+          %Entry{} = restored ->
+            %{state | entries: state.entries ++ [restored], restored: state.restored + 1}
+
+          nil ->
+            %{state | skipped_lines: state.skipped_lines + 1}
+        end
+
+      {:ok, %{"op" => "status", "id" => id, "status" => status}} ->
+        %{
+          state
+          | entries: put_entry_status(state.entries, to_string(id), normalize_status(status))
+        }
+
+      {:ok, _other} ->
+        state
+
+      {:error, _reason} ->
+        %{state | skipped_lines: state.skipped_lines + 1}
+    end
+  end
+
+  defp restore_entry(entry) do
+    id = entry_value(entry, :id, nil)
+
+    if is_binary(id) do
+      %Entry{
+        id: id,
+        type: normalize_type(entry_value(entry, :type, :belief)),
+        author: entry_value(entry, :author, "seed") |> to_string(),
+        version: normalize_version(entry_value(entry, :version, 1)),
+        status: normalize_status(entry_value(entry, :status, :active)),
+        text: entry_value(entry, :text, "") |> to_string(),
+        citations: normalize_citations(entry_value(entry, :citations, [])),
+        embedding: normalize_embedding(entry_value(entry, :embedding, [])),
+        meta: normalize_meta(entry_value(entry, :meta, %{}))
+      }
+    end
+  end
+
+  defp normalize_version(version) when is_integer(version) and version > 0, do: version
+  defp normalize_version(_version), do: 1
+
+  defp normalize_embedding(embedding) when is_list(embedding) do
+    Enum.map(embedding, fn
+      value when is_number(value) -> value * 1.0
+      _value -> 0.0
+    end)
+  end
+
+  defp normalize_embedding(_embedding), do: []
+
+  defp put_entry_status(entries, id, status) do
+    Enum.map(entries, fn
+      %Entry{id: ^id} = entry -> %{entry | status: status}
+      entry -> entry
+    end)
+  end
+
+  defp next_restored_id(entries) do
+    entries
+    |> Enum.map(&entry_number(&1.id))
+    |> Enum.max(fn -> 0 end)
+    |> Kernel.+(1)
+  end
+
+  defp persist_absorbs!(_state, []), do: :ok
+
+  defp persist_absorbs!(state, entries) do
+    Enum.each(entries, fn entry ->
+      append_persist!(state.persist_path, %{op: "absorb", entry: plain_entry(entry)})
+    end)
+  end
+
+  defp persist_status!(state, id, status) do
+    append_persist!(state.persist_path, %{op: "status", id: id, status: Atom.to_string(status)})
+  end
+
+  defp append_persist!(nil, _event), do: :ok
+
+  defp append_persist!(path, event) do
+    ensure_persist_file!(path)
+    File.write!(path, Jason.encode!(event) <> "\n", [:append])
+  end
+
+  defp ensure_persist_file!(path) do
+    unless File.exists?(path) do
+      dir = Path.dirname(path)
+      if dir not in [".", ""], do: File.mkdir_p!(dir)
+      File.touch!(path)
+      File.chmod!(path, 0o600)
+    end
+  end
+
+  defp plain_entry(%Entry{} = entry) do
+    %{
+      id: entry.id,
+      type: Atom.to_string(entry.type),
+      author: entry.author,
+      version: entry.version,
+      status: Atom.to_string(entry.status),
+      text: entry.text,
+      citations: entry.citations,
+      embedding: entry.embedding,
+      meta: entry.meta
+    }
+  end
 
   defp embed_all([], _state), do: []
 

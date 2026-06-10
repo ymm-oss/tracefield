@@ -476,6 +476,50 @@ defmodule Tracefield.IdeateTest do
     refute File.exists?(Path.join(memory_dir, "B.jsonl"))
   end
 
+  test "store restores a corrected docs chunk as retracted on the next ideate run" do
+    scenario_path = tmp_scenario_with_doc()
+
+    run1 =
+      Ideate.run_ideation(
+        scenario: scenario_path,
+        adapter_name: "mock",
+        adapter_module: Tracefield.LLM.Mock,
+        rounds: 1,
+        correct: "chunk:req.md",
+        model: "mock",
+        memory: false,
+        store: true,
+        persist?: false
+      )
+
+    assert run1.config.store.enabled
+    assert run1.config.store.restored == 0
+    assert run1.correction.target.status == :retracted
+    assert get_in(run1.correction.target.meta, [:file]) == "req.md"
+
+    run2 =
+      Ideate.run_ideation(
+        scenario: scenario_path,
+        adapter_name: "mock",
+        adapter_module: Tracefield.LLM.Mock,
+        rounds: 1,
+        model: "mock",
+        memory: false,
+        store: true,
+        persist?: false
+      )
+
+    doc_chunks =
+      Enum.filter(run2.entries, fn entry ->
+        entry.type == :chunk and entry.author == "DOCS" and
+          get_in(entry.meta, [:file]) == "req.md"
+      end)
+
+    assert run2.config.store.restored > 0
+    assert length(doc_chunks) == 1
+    assert hd(doc_chunks).status == :retracted
+  end
+
   test "memory window injects only the most recent entries" do
     Process.register(self(), PromptCaptureMock)
     scenario_path = tmp_scenario()
@@ -539,6 +583,13 @@ defmodule Tracefield.IdeateTest do
     File.write!(Path.join([root, "private", "a.md"]), "A private document")
     File.write!(Path.join([root, "private", "b.md"]), "B private document")
     on_exit(fn -> File.rm_rf(root) end)
+    root
+  end
+
+  defp tmp_scenario_with_doc do
+    root = tmp_scenario()
+    File.mkdir_p!(Path.join(root, "docs"))
+    File.write!(Path.join([root, "docs", "req.md"]), "req doc evidence")
     root
   end
 
