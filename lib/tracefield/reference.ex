@@ -19,6 +19,8 @@ defmodule Tracefield.Reference do
     :stance,
     :decision,
     :question,
+    :requirement,
+    :answer,
     :chunk,
     :procedure,
     :genesis,

@@ -297,22 +297,63 @@ defmodule Tracefield.LLM.Mock do
 
   defp agent_turn(prompt) do
     agent = agent_turn_agent(prompt)
-    domain = agent_domain(prompt, agent)
-    adopted_procedure? = String.contains?(prompt, "ADOPTED PROCEDURE:")
 
-    entries =
-      if agent in ~w(SEC BIZ UX) do
-        foreign_entries = presented_taxonomy_foreign_entries(prompt, agent)
+    if String.contains?(prompt, "REFINE手続き") do
+      %{entries: refine_entries(agent, prompt)}
+    else
+      domain = agent_domain(prompt, agent)
+      adopted_procedure? = String.contains?(prompt, "ADOPTED PROCEDURE:")
 
-        case private_doc(prompt) do
-          "" -> shared_state_entries(agent, domain, foreign_entries)
-          doc -> private_doc_entries(domain, doc, foreign_entries, adopted_procedure?)
+      entries =
+        if agent in ~w(SEC BIZ UX) do
+          foreign_entries = presented_taxonomy_foreign_entries(prompt, agent)
+
+          case private_doc(prompt) do
+            "" -> shared_state_entries(agent, domain, foreign_entries)
+            doc -> private_doc_entries(domain, doc, foreign_entries, adopted_procedure?)
+          end
+        else
+          generic_private_doc_entries(agent, prompt)
         end
-      else
-        generic_private_doc_entries(agent, prompt)
-      end
 
-    %{entries: entries}
+      %{entries: entries}
+    end
+  end
+
+  defp refine_entries(agent, prompt) do
+    citation = first_doc_id(prompt)
+    issue = issue_head(prompt)
+    suffix = refine_agent_suffix(agent)
+
+    [
+      %{
+        type: "requirement",
+        text: "要件#{suffix}: #{issue} を満たすこと（受入基準: テスト green）",
+        citations: List.wrap(citation)
+      },
+      %{
+        type: "question",
+        text: "確認#{suffix}: 対象範囲はどこまでか？",
+        citations: List.wrap(citation)
+      }
+    ]
+  end
+
+  defp issue_head(prompt) do
+    case Regex.run(
+           ~r/^DOC\s+e\d+\s+file=issue\.md\n(?<text>[\s\S]*?)(?:\n\nDOC\s+e\d+\s+file=|\n\nAGENT\s)/m,
+           prompt, capture: :all_names) do
+      [text] -> text |> String.trim() |> String.slice(0, 40)
+      _ -> "issue"
+    end
+  end
+
+  defp refine_agent_suffix(agent) do
+    case rem(:erlang.phash2(agent), 3) do
+      0 -> ""
+      1 -> "（#{agent}観点）"
+      _ -> "（#{String.downcase(agent)}）"
+    end
   end
 
   defp generic_private_doc_entries(agent, prompt) do
