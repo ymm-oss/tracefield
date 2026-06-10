@@ -35,6 +35,10 @@ defmodule Tracefield.Reference do
     GenServer.call(ref, {:serve, query_text, opts})
   end
 
+  def subscribe(ref, pid) when is_pid(pid) do
+    GenServer.call(ref, {:subscribe, pid})
+  end
+
   def retract(ref, id) do
     GenServer.call(ref, {:retract, id})
   end
@@ -135,7 +139,8 @@ defmodule Tracefield.Reference do
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
       persist_path: persist_path,
       restored: 0,
-      skipped_lines: 0
+      skipped_lines: 0,
+      subscribers: %{}
     }
 
     state = restore_persisted(state, persist_path)
@@ -187,20 +192,38 @@ defmodule Tracefield.Reference do
     {:reply, entries, state}
   end
 
+  def handle_call({:subscribe, pid}, _from, state) do
+    subscribers =
+      if Map.has_key?(state.subscribers, pid) do
+        state.subscribers
+      else
+        Map.put(state.subscribers, pid, Process.monitor(pid))
+      end
+
+    {:reply, :ok, %{state | subscribers: subscribers}}
+  end
+
   def handle_call({:retract, id}, _from, state) do
     closure = closure(state.entries, id)
+    existing = Enum.find(state.entries, &(&1.id == id))
 
     entries =
       Enum.map(state.entries, fn
-        %Entry{id: ^id} = entry -> %{entry | status: :retracted}
+        %Entry{id: ^id, status: status} = entry when status != :retracted ->
+          %{entry | status: :retracted}
+
         entry -> entry
       end)
 
-    if Enum.any?(state.entries, &(&1.id == id)) do
+    if existing && existing.status != :retracted do
       persist_status!(state, id, :retracted)
     end
 
-    {:reply, closure, %{state | entries: entries}}
+    changed = changed_entries(state.entries, entries)
+    state = %{state | entries: entries}
+    notify_status_changes(state, changed)
+
+    {:reply, closure, state}
   end
 
   def handle_call({:quarantine, ids}, _from, state) do
@@ -215,12 +238,17 @@ defmodule Tracefield.Reference do
           entry
       end)
 
-    entries
-    |> Enum.filter(&(&1.status == :superseded and MapSet.member?(ids, &1.id)))
+    changed = changed_entries(state.entries, entries)
+
+    changed
+    |> Enum.filter(&(&1.status == :superseded))
     |> Enum.each(&persist_status!(state, &1.id, :superseded))
 
     quarantined = Enum.filter(entries, &MapSet.member?(ids, &1.id))
-    {:reply, quarantined, %{state | entries: entries}}
+    state = %{state | entries: entries}
+    notify_status_changes(state, changed)
+
+    {:reply, quarantined, state}
   end
 
   def handle_call({:export, ids}, _from, state) do
@@ -289,7 +317,11 @@ defmodule Tracefield.Reference do
         end
       end)
 
-    {:reply, results, %{state | entries: entries}}
+    changed = changed_entries(state.entries, entries)
+    state = %{state | entries: entries}
+    notify_status_changes(state, changed)
+
+    {:reply, results, state}
   end
 
   def handle_call({:most_cited, opts}, _from, state) do
@@ -331,6 +363,17 @@ defmodule Tracefield.Reference do
        restored: state.restored,
        skipped_lines: state.skipped_lines
      }, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, monitor_ref, :process, pid, _reason}, state) do
+    subscribers =
+      case Map.fetch(state.subscribers, pid) do
+        {:ok, ^monitor_ref} -> Map.delete(state.subscribers, pid)
+        _other -> state.subscribers
+      end
+
+    {:noreply, %{state | subscribers: subscribers}}
   end
 
   defp absorb_initial(state, entries) do
@@ -421,6 +464,7 @@ defmodule Tracefield.Reference do
 
     meta =
       exported.meta
+      |> push_source_chain()
       |> Map.merge(%{source_cluster: source_cluster, source_id: exported.id})
       |> merge_unresolved_citations(unresolved)
 
@@ -443,6 +487,37 @@ defmodule Tracefield.Reference do
     existing = meta |> entry_value(:unresolved_citations, []) |> normalize_citations()
     Map.put(meta, :unresolved_citations, Enum.uniq(existing ++ unresolved))
   end
+
+  defp push_source_chain(meta) do
+    source_cluster = meta_value(meta, :source_cluster)
+    source_id = meta_value(meta, :source_id)
+
+    if source_cluster && source_id do
+      existing = entry_value(meta, :source_chain, []) |> normalize_source_chain()
+      Map.put(meta, :source_chain, existing ++ [%{source_cluster: source_cluster, source_id: source_id}])
+    else
+      meta
+    end
+  end
+
+  defp normalize_source_chain(chain) when is_list(chain) do
+    Enum.flat_map(chain, fn
+      %{} = hop ->
+        source_cluster = meta_value(hop, :source_cluster)
+        source_id = meta_value(hop, :source_id)
+
+        if source_cluster && source_id do
+          [%{source_cluster: source_cluster, source_id: source_id}]
+        else
+          []
+        end
+
+      _other ->
+        []
+    end)
+  end
+
+  defp normalize_source_chain(_chain), do: []
 
   defp find_source_copy(entries, source_cluster, source_id) do
     source_cluster = to_string(source_cluster)
@@ -611,6 +686,26 @@ defmodule Tracefield.Reference do
   defp entries_for_ids(entries, ids) do
     ids = ids |> Enum.map(&to_string/1) |> MapSet.new()
     Enum.filter(entries, &MapSet.member?(ids, &1.id))
+  end
+
+  defp changed_entries(old_entries, new_entries) do
+    old_statuses = Map.new(old_entries, &{&1.id, &1.status})
+
+    Enum.filter(new_entries, fn entry ->
+      Map.get(old_statuses, entry.id) != entry.status
+    end)
+  end
+
+  defp notify_status_changes(_state, []), do: :ok
+
+  defp notify_status_changes(state, entries) do
+    Enum.each(entries, fn entry ->
+      payload = %{store: self(), id: entry.id, status: entry.status, entry: plain_entry(entry)}
+
+      Enum.each(Map.keys(state.subscribers), fn pid ->
+        send(pid, {:tracefield_status, payload})
+      end)
+    end)
   end
 
   defp next_restored_id(entries) do

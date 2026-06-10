@@ -70,7 +70,12 @@
 store は既に per-scenario のファイル（`store.jsonl`）なので、最小実装は近い:
 - ✅ `Reference.export/import`（author="src/orig" 合成・source_cluster/source_id meta・バッチ内引用再マップ・バッチ外は meta.unresolved_citations・冪等・embedding 再利用・persist 対応）
 - ✅ `Reference.propagate_retractions`（source の retracted/superseded を写しへ反映 → 閉包隔離。persist で再起動後も保持）＋ `mix tracefield.bridge`（--export/--sync/--demo）。
-- メタ場 = もう1つの Reference に各クラスタの代表 entries を import するだけ（同一機構の再利用）。
+- ✅ メタ場 `Tracefield.Meta`（publish=被引用数順の代表選択/ids 明示、discover=embedding 類似＋exclude_cluster、pull）。
+- ✅ **有機的接続の最小形（brief-19）**: `Reference.subscribe`（status イベント配信）＋ `Bridge.Link`（購読→自動 propagate）＋
+  `Tracefield.Field`（supervision tree で複数クラスタ＋META＋links:auto が**同時に生きる**）。
+  デモ: B が embedding 発見で A の知見を pull → 判断 → A の撤回が **META 経由で B まで無人伝播** → 依存判断隔離。
+  多段 provenance は `meta.source_chain`（A/e1 → META/e1）で保持。
+- 残: クラスタの自動生成（自己組織化）・ノード越え分散・Jido AgentServer 全面採用。
 
 ## 7. 未解決の設計問題（正直に）
 

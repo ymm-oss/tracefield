@@ -1,6 +1,9 @@
 defmodule Tracefield.ReferenceTest do
   use ExUnit.Case
 
+  alias Tracefield.Bridge.Link
+  alias Tracefield.Field
+  alias Tracefield.Meta
   alias Tracefield.Reference
 
   test "absorb assigns ids, versions, and embeddings" do
@@ -331,6 +334,135 @@ defmodule Tracefield.ReferenceTest do
     assert Reference.get(restored_again, b1.id).status == :superseded
   end
 
+  test "subscribe delivers retract and quarantine status events" do
+    {:ok, ref} = Reference.start_link()
+    :ok = Reference.subscribe(ref, self())
+
+    [root] = Reference.absorb(ref, [%{text: "root"}], "A")
+    [child] = Reference.absorb(ref, [%{text: "child", citations: [root.id]}], "B")
+
+    Reference.retract(ref, root.id)
+
+    assert_receive {:tracefield_status,
+                    %{store: ^ref, id: root_id, status: :retracted, entry: %{status: "retracted"}}}
+
+    assert root_id == root.id
+
+    Reference.quarantine(ref, [child.id])
+
+    assert_receive {:tracefield_status,
+                    %{store: ^ref, id: child_id, status: :superseded, entry: %{status: "superseded"}}}
+
+    assert child_id == child.id
+  end
+
+  test "live link propagates source retraction and records history" do
+    {:ok, source} = Reference.start_link()
+    {:ok, target} = Reference.start_link()
+    {:ok, link} = Link.start_link(source: source, target: target, source_name: "A")
+
+    [a1] = Reference.absorb(source, [%{text: "shared assumption"}], "ENG")
+    [copy] = Reference.import(target, Reference.export(source, [a1.id]), "A")
+    [b1] = Reference.absorb(target, [%{text: "local decision", citations: [copy.id]}], "FIN")
+
+    Reference.retract(source, a1.id)
+
+    wait_until(fn ->
+      Reference.get(target, copy.id).status == :retracted and
+        Reference.get(target, b1.id).status == :superseded
+    end)
+
+    assert Link.history(link) == [%{source_id: a1.id, copy_id: copy.id, quarantined: 1}]
+  end
+
+  test "import keeps source chain across two hops and stays idempotent on final hop" do
+    {:ok, a} = Reference.start_link()
+    {:ok, meta} = Reference.start_link()
+    {:ok, b} = Reference.start_link()
+
+    [a1] = Reference.absorb(a, [%{text: "two hop evidence"}], "ENG")
+    [meta_copy] = Reference.import(meta, Reference.export(a, [a1.id]), "A")
+    [b_copy] = Reference.import(b, Reference.export(meta, [meta_copy.id]), "META")
+    [again] = Reference.import(b, Reference.export(meta, [meta_copy.id]), "META")
+
+    assert b_copy.meta.source_chain == [%{source_cluster: "A", source_id: a1.id}]
+    assert b_copy.meta.source_cluster == "META"
+    assert b_copy.meta.source_id == meta_copy.id
+    assert again.id == b_copy.id
+    assert Reference.all(b) == [b_copy]
+  end
+
+  test "meta publish selects defaults and explicit ids, discover filters clusters, and pull imports" do
+    {:ok, a} = Reference.start_link()
+    {:ok, b} = Reference.start_link()
+    {:ok, meta} = Reference.start_link()
+
+    [_chunk] = Reference.absorb(a, [%{type: :chunk, text: "chunk solar loan"}], "DOC")
+    [low] = Reference.absorb(a, [%{text: "solar insulation low citation"}], "ENG")
+    [high] = Reference.absorb(a, [%{text: "solar insulation rebate green loan"}], "ENG")
+    [newer] = Reference.absorb(a, [%{text: "solar roof battery finance"}], "ENG")
+
+    Reference.absorb(a, [%{text: "cites high once", citations: [high.id]}], "X")
+    Reference.absorb(a, [%{text: "cites high twice", citations: [high.id]}], "Y")
+    Reference.absorb(a, [%{text: "cites low once", citations: [low.id]}], "Z")
+
+    default_copies = Meta.publish(meta, "A", a, limit: 2)
+    assert Enum.map(default_copies, & &1.meta.source_id) == [high.id, low.id]
+
+    [explicit_copy] = Meta.publish(meta, "A", a, ids: [newer.id])
+    assert explicit_copy.meta.source_id == newer.id
+
+    [found | _rest] = Meta.discover(meta, "rebate green loan insulation", k: 2)
+    assert found.source_cluster == "A"
+    assert found.source_id == high.id
+
+    assert Meta.discover(meta, "rebate green loan insulation", exclude_cluster: "A") == []
+
+    [pulled] = Meta.pull(b, meta, [found.entry.id])
+    assert pulled.meta.source_cluster == "META"
+    assert pulled.meta.source_id == found.entry.id
+    assert pulled.meta.source_chain == [%{source_cluster: "A", source_id: high.id}]
+  end
+
+  test "field auto links propagate A retraction through META into B" do
+    base = tmp_dir()
+
+    {:ok, field} =
+      Field.start_link(
+        clusters: [
+          %{name: "A", persist_path: Path.join(base, "A.jsonl")},
+          %{name: "B", persist_path: Path.join(base, "B.jsonl")}
+        ],
+        meta: Path.join(base, "META.jsonl"),
+        links: :auto
+      )
+
+    refs = Field.refs(field)
+    links = Field.links(field)
+    a = Map.fetch!(refs, "A")
+    b = Map.fetch!(refs, "B")
+    meta = Map.fetch!(refs, "META")
+
+    [a1] = Reference.absorb(a, [%{text: "field shared evidence"}], "ENG")
+    [meta_copy] = Meta.publish(meta, "A", a, ids: [a1.id])
+    [b_copy] = Meta.pull(b, meta, [meta_copy.id])
+    [b1] = Reference.absorb(b, [%{text: "uses imported evidence", citations: [b_copy.id]}], "FIN")
+
+    Reference.retract(a, a1.id)
+
+    wait_until(fn ->
+      Reference.get(b, b_copy.id).status == :retracted and
+        Reference.get(b, b1.id).status == :superseded
+    end)
+
+    assert Enum.any?(Link.history(Map.fetch!(links, {"A", "META"})), &(&1.source_id == a1.id))
+
+    assert Enum.any?(
+             Link.history(Map.fetch!(links, {"META", "B"})),
+             &(&1.source_id == meta_copy.id and &1.copy_id == b_copy.id and &1.quarantined == 1)
+           )
+  end
+
   defp tmp_store_path do
     path =
       Path.join(
@@ -340,5 +472,24 @@ defmodule Tracefield.ReferenceTest do
 
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  defp tmp_dir do
+    path = Path.join(System.tmp_dir!(), "tracefield-test-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf(path) end)
+    path
+  end
+
+  defp wait_until(predicate, attempts \\ 50)
+
+  defp wait_until(predicate, 0), do: flunk("condition did not become true: #{inspect(predicate)}")
+
+  defp wait_until(predicate, attempts) do
+    if predicate.() do
+      :ok
+    else
+      Process.sleep(20)
+      wait_until(predicate, attempts - 1)
+    end
   end
 end
