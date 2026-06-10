@@ -27,6 +27,8 @@ defmodule Tracefield.Agent do
         model: [type: :string, default: "mock"],
         temperature: [type: :float, default: 0.4],
         seed: [type: :integer, default: 0],
+        num_ctx: [type: :integer, default: 8192],
+        k_docs: [type: :integer, default: 3],
         procedure_id: [type: :string, default: nil],
         aware: [type: :boolean, default: false],
         serve_policy: [type: :any, default: :similar],
@@ -50,13 +52,17 @@ defmodule Tracefield.Agent do
         note: [type: :string, default: ""]
       ]
 
+    @num_predict 1200
+    @budget_margin 512
+
     @impl true
     def run(%{reference: reference, round: round} = params, %{state: state}) do
       state = %{state | reference_docs: active_reference_docs(reference, state.reference_docs)}
       note = Map.get(params, :note, "")
+      query_text = query(state)
 
       retrieved =
-        Tracefield.Reference.serve(reference, query(state),
+        Tracefield.Reference.serve(reference, query_text,
           k: max(state.k_s, 0),
           exclude_author: state.id,
           exclude_types: [:procedure],
@@ -66,11 +72,12 @@ defmodule Tracefield.Agent do
       procedure = procedure_entry(reference, state.procedure_id)
       presented_ids = MapSet.new(Enum.map(retrieved, & &1.id))
       reference_doc_ids = MapSet.new(Enum.map(state.reference_docs, &doc_id/1))
-      perception = perception_log(query(state), retrieved)
+      prompt = build_prompt(reference, state, round, retrieved, procedure, note, query_text)
+      perception = perception_log(query_text, retrieved, prompt)
 
       entries =
-        state
-        |> deliberate(round, retrieved, procedure, note)
+        prompt.messages
+        |> deliberate(state, round)
         |> Enum.take(2)
         |> Enum.map(
           &sanitize_entry(&1, presented_ids, reference_doc_ids, state, round, procedure)
@@ -113,14 +120,60 @@ defmodule Tracefield.Agent do
       Tracefield.Reference.get(reference, procedure_id)
     end
 
-    defp perception_log(query, retrieved) do
+    defp perception_log(query, retrieved, prompt) do
       %{
         query: query,
-        served: Enum.map(retrieved, &%{id: &1.id, author: &1.author})
+        served: Enum.map(retrieved, &%{id: &1.id, author: &1.author}),
+        prompt_tokens_est: prompt.prompt_tokens_est,
+        doc_mode: prompt.doc_mode,
+        docs_full_ids: prompt.docs_full_ids,
+        over_budget: prompt.over_budget
       }
     end
 
-    defp deliberate(state, round, retrieved, procedure, note) do
+    defp build_prompt(reference, state, round, retrieved, procedure, note, query_text) do
+      budget = context_budget(state)
+      full_section = format_reference_docs(state.reference_docs)
+      full_messages = messages(state, round, retrieved, procedure, note, full_section)
+      full_estimate = Tracefield.Tokens.estimate_messages(full_messages)
+
+      if full_estimate <= budget do
+        %{
+          messages: full_messages,
+          prompt_tokens_est: full_estimate,
+          doc_mode: :full,
+          docs_full_ids: Enum.map(state.reference_docs, &doc_id/1),
+          over_budget: false,
+          context_budget: budget
+        }
+      else
+        selected_docs =
+          Tracefield.Reference.serve(reference, query_text,
+            k: max(state.k_docs, 0),
+            only_author: "DOCS",
+            policy: :similar
+          )
+
+        selected_section = format_selected_reference_docs(state.reference_docs, selected_docs)
+        selected_messages = messages(state, round, retrieved, procedure, note, selected_section)
+        selected_estimate = Tracefield.Tokens.estimate_messages(selected_messages)
+
+        %{
+          messages: selected_messages,
+          prompt_tokens_est: selected_estimate,
+          doc_mode: :selected,
+          docs_full_ids: Enum.map(selected_docs, & &1.id),
+          over_budget: selected_estimate > budget,
+          context_budget: budget
+        }
+      end
+    end
+
+    defp context_budget(state) do
+      state.num_ctx - @num_predict - @budget_margin
+    end
+
+    defp messages(state, round, retrieved, procedure, note, reference_section) do
       messages = [
         %{
           role: "system",
@@ -128,16 +181,22 @@ defmodule Tracefield.Agent do
         },
         %{
           role: "user",
-          content: prompt(state, round, retrieved, procedure, note)
+          content: prompt(state, round, retrieved, procedure, note, reference_section)
         }
       ]
 
+      messages
+    end
+
+    defp deliberate(messages, state, round) do
       opts =
         [
           adapter: state.adapter,
           model: state.model,
           temperature: state.temperature,
           seed: state.seed + round * 100,
+          max_tokens: @num_predict,
+          num_ctx: state.num_ctx,
           cli: state.cli
         ]
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -164,12 +223,12 @@ defmodule Tracefield.Agent do
 
     defp situation_preamble(_state), do: ""
 
-    defp prompt(state, round, retrieved, procedure, note) do
+    defp prompt(state, round, retrieved, procedure, note, reference_section) do
       """
       TASK:
       #{state.anchor}
 
-      #{format_reference_docs(state.reference_docs)}
+      #{reference_section}
 
       AGENT #{state.id}
       DOMAIN #{state.domain}
@@ -210,6 +269,54 @@ defmodule Tracefield.Agent do
         end)
 
       "REFERENCE DOCUMENTS（設計判断はここを引用せよ）:\n#{body}"
+    end
+
+    defp format_selected_reference_docs([], _selected_docs) do
+      "REFERENCE DOCUMENTS（予算超過のため関連上位のみ全文・他は目次。引用は目次の id でも可）:\n(none)"
+    end
+
+    defp format_selected_reference_docs(docs, selected_docs) do
+      selected_ids = MapSet.new(Enum.map(selected_docs, & &1.id))
+
+      index =
+        docs
+        |> List.wrap()
+        |> Enum.map_join("\n", fn doc ->
+          id = Map.get(doc, :id, Map.get(doc, "id", ""))
+          file = Map.get(doc, :file, Map.get(doc, "file", ""))
+          text = Map.get(doc, :text, Map.get(doc, "text", ""))
+
+          "DOC #{id} file=#{file}: #{first_line(text)}"
+        end)
+
+      full_text =
+        docs
+        |> Enum.filter(fn doc -> MapSet.member?(selected_ids, doc_id(doc)) end)
+        |> Enum.map_join("\n\n", fn doc ->
+          id = Map.get(doc, :id, Map.get(doc, "id", ""))
+          file = Map.get(doc, :file, Map.get(doc, "file", ""))
+          text = Map.get(doc, :text, Map.get(doc, "text", ""))
+
+          "DOC #{id} file=#{file}\n#{text}"
+        end)
+
+      body =
+        if full_text == "" do
+          "INDEX:\n#{index}\n\nFULL TEXT:\n(none)"
+        else
+          "INDEX:\n#{index}\n\nFULL TEXT:\n#{full_text}"
+        end
+
+      "REFERENCE DOCUMENTS（予算超過のため関連上位のみ全文・他は目次。引用は目次の id でも可）:\n#{body}"
+    end
+
+    defp first_line(text) do
+      text
+      |> to_string()
+      |> String.split("\n", parts: 2)
+      |> List.first()
+      |> to_string()
+      |> String.trim()
     end
 
     defp format_private_memory(memory) do
@@ -352,6 +459,8 @@ defmodule Tracefield.Agent do
           model: Keyword.get(opts, :model, "mock"),
           temperature: Keyword.get(opts, :temperature, 0.4) * 1.0,
           seed: Keyword.get(opts, :seed, 0),
+          num_ctx: Keyword.get(opts, :num_ctx, 8192),
+          k_docs: Keyword.get(opts, :k_docs, 3),
           procedure_id: Keyword.get(opts, :procedure_id),
           aware: Keyword.get(opts, :aware, false),
           serve_policy: Keyword.get(opts, :serve_policy, :similar)

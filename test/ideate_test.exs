@@ -1,6 +1,8 @@
 defmodule Tracefield.IdeateTest do
   use ExUnit.Case
 
+  import ExUnit.CaptureIO
+
   alias Mix.Tasks.Tracefield.Ideate
 
   @scenario_path "scenarios/housing-service"
@@ -72,6 +74,30 @@ defmodule Tracefield.IdeateTest do
         [id] -> id
         _ -> nil
       end
+    end
+  end
+
+  defmodule NumCtxCaptureMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, opts) do
+      prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
+
+      if pid = Process.whereis(__MODULE__) do
+        send(pid, {:num_ctx_opts, Keyword.get(opts, :num_ctx), prompt})
+      end
+
+      {:ok,
+       Jason.encode!(%{
+         entries: [
+           %{
+             type: "belief",
+             text: "num ctx captured",
+             citations: []
+           }
+         ]
+       })}
     end
   end
 
@@ -704,6 +730,81 @@ defmodule Tracefield.IdeateTest do
     assert Enum.any?(house_views, &(&1.meta.house_view_version == 2 and &1.status == :active))
   end
 
+  test "num_ctx and k_docs flags are reflected in agent opts and config" do
+    Process.register(self(), NumCtxCaptureMock)
+
+    result =
+      Ideate.run_ideation(
+        scenario: tmp_scenario(),
+        adapter_name: "mock",
+        adapter_module: NumCtxCaptureMock,
+        rounds: 1,
+        model: "mock",
+        memory: false,
+        num_ctx: 4096,
+        k_docs: 2,
+        persist?: false
+      )
+
+    assert result.config.num_ctx == 4096
+    assert result.config.k_docs == 2
+    assert result.config.context_budget == 2384
+    assert result.config.doc_mode_stats.budget == 2384
+
+    assert_receive {:num_ctx_opts, 4096, "TRACEFIELD_AGENT_TURN" <> _}
+  end
+
+  test "ideate warning summary reports selected and over-budget turns and saved config" do
+    scenario_path = tmp_scenario_with_long_docs()
+    runs_existed? = File.dir?("runs")
+    before = "runs/*" |> Path.wildcard() |> MapSet.new()
+
+    on_exit(fn ->
+      after_files = "runs/*" |> Path.wildcard() |> MapSet.new()
+
+      after_files
+      |> MapSet.difference(before)
+      |> Enum.each(&File.rm/1)
+
+      if not runs_existed? and File.dir?("runs") and File.ls!("runs") == [] do
+        File.rmdir!("runs")
+      end
+    end)
+
+    Mix.Task.reenable("tracefield.ideate")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.Tracefield.Ideate.run([
+          "--scenario",
+          scenario_path,
+          "--adapter",
+          "mock",
+          "--rounds",
+          "1",
+          "--memory",
+          "false",
+          "--num-ctx",
+          "1024",
+          "--k-docs",
+          "1"
+        ])
+      end)
+
+    assert output =~ "⚠ 文脈予算: selected モード"
+    assert output =~ "超過"
+    assert output =~ "予算 -688"
+
+    after_files = "runs/*" |> Path.wildcard() |> MapSet.new()
+    [saved_path] = after_files |> MapSet.difference(before) |> MapSet.to_list()
+    saved = saved_path |> File.read!() |> Jason.decode!()
+
+    assert get_in(saved, ["config", "num_ctx"]) == 1024
+    assert get_in(saved, ["config", "k_docs"]) == 1
+    assert get_in(saved, ["config", "doc_mode_stats", "selected"]) > 0
+    assert get_in(saved, ["config", "doc_mode_stats", "over_budget"]) > 0
+  end
+
   defp tmp_scenario do
     root =
       Path.join(System.tmp_dir!(), "tracefield-scenario-#{System.unique_integer([:positive])}")
@@ -738,6 +839,22 @@ defmodule Tracefield.IdeateTest do
     root = tmp_scenario()
     File.mkdir_p!(Path.join(root, "docs"))
     File.write!(Path.join([root, "docs", "req.md"]), "req doc evidence")
+    root
+  end
+
+  defp tmp_scenario_with_long_docs do
+    root = tmp_scenario()
+    docs_dir = Path.join(root, "docs")
+    File.mkdir_p!(docs_dir)
+
+    Enum.each(1..3, fn index ->
+      File.write!(
+        Path.join(docs_dir, "long-#{index}.md"),
+        "LONG #{index} SUMMARY\nLONG_#{index}_FULL_MARKER\n" <>
+          String.duplicate("long document #{index} alpha beta gamma ", 180)
+      )
+    end)
+
     root
   end
 

@@ -74,6 +74,68 @@ defmodule Tracefield.AgentTest do
     end
   end
 
+  defmodule BudgetCitationMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, _opts) do
+      prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
+      index_only_doc_id = index_only_doc_id(prompt)
+
+      if pid = Process.whereis(__MODULE__) do
+        send(pid, {:budget_prompt, prompt, index_only_doc_id})
+      end
+
+      {:ok,
+       Jason.encode!(%{
+         entries: [
+           %{
+             type: "belief",
+             text: "index-only document citation remains allowed(security)",
+             citations: List.wrap(index_only_doc_id)
+           }
+         ]
+       })}
+    end
+
+    defp index_only_doc_id(prompt) do
+      index_ids =
+        prompt
+        |> String.split("\n")
+        |> Enum.flat_map(fn line ->
+          if String.starts_with?(line, "DOC ") and String.contains?(line, ": ") do
+            case Regex.run(~r/^DOC\s+(e\d+)\s+file=/, line) do
+              [_match, id] -> [id]
+              _other -> []
+            end
+          else
+            []
+          end
+        end)
+        |> MapSet.new()
+
+      full_ids =
+        prompt
+        |> String.split("\n")
+        |> Enum.flat_map(fn line ->
+          if String.starts_with?(line, "DOC ") and not String.contains?(line, ": ") do
+            case Regex.run(~r/^DOC\s+(e\d+)\s+file=/, line) do
+              [_match, id] -> [id]
+              _other -> []
+            end
+          else
+            []
+          end
+        end)
+        |> MapSet.new()
+
+      index_ids
+      |> MapSet.difference(full_ids)
+      |> MapSet.to_list()
+      |> List.first()
+    end
+  end
+
   test "run_turn perceives, deliberates, absorbs, and restricts citations to presented ids" do
     {:ok, ref} = Reference.start_link()
 
@@ -96,11 +158,18 @@ defmodule Tracefield.AgentTest do
 
     assert [%{citations: citations}] = absorbed
     assert citations == [foreign.id]
+    foreign_id = foreign.id
 
-    assert perception == %{
+    assert %{
              query: "enterprise assistant\nsecurity",
-             served: [%{id: foreign.id, author: "BIZ"}]
-           }
+             served: [%{id: ^foreign_id, author: "BIZ"}],
+             prompt_tokens_est: prompt_tokens_est,
+             doc_mode: :full,
+             docs_full_ids: [],
+             over_budget: false
+           } = perception
+
+    assert prompt_tokens_est > 0
 
     assert Reference.get(ref, hd(absorbed).id).text =~ "filtered citation"
   end
@@ -245,5 +314,131 @@ defmodule Tracefield.AgentTest do
     unaware_system = hd(unaware_messages).content
     refute unaware_system =~ "半溶解チーム"
     refute unaware_system =~ "唯一の窓"
+  end
+
+  test "document prompt stays full when estimated messages fit the context budget" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    docs =
+      Reference.absorb(
+        ref,
+        [
+          %{type: :chunk, text: "short full document alpha", meta: %{file: "a.md"}},
+          %{type: :chunk, text: "short full document beta", meta: %{file: "b.md"}}
+        ],
+        "DOCS"
+      )
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        anchor: "short task",
+        adapter: PromptCaptureMock,
+        model: "mock",
+        num_ctx: 8192
+      )
+
+    {_agent, _absorbed, perception} = Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+    prompt = Enum.at(messages, 1).content
+
+    assert perception.doc_mode == :full
+    assert perception.docs_full_ids == Enum.map(docs, & &1.id)
+    refute perception.over_budget
+    assert prompt =~ "REFERENCE DOCUMENTS（設計判断はここを引用せよ）:"
+    assert prompt =~ "short full document alpha"
+    assert prompt =~ "short full document beta"
+  end
+
+  test "document prompt degrades to selected index plus top-k full docs when over budget" do
+    Process.register(self(), BudgetCitationMock)
+    {:ok, ref} = Reference.start_link()
+
+    docs =
+      Reference.absorb(
+        ref,
+        [
+          long_doc("ALPHA SUMMARY", "ALPHA_FULL_MARKER", "alpha needle retrieval"),
+          long_doc("BETA SUMMARY", "BETA_FULL_MARKER", "beta archive"),
+          long_doc("GAMMA SUMMARY", "GAMMA_FULL_MARKER", "gamma archive")
+        ],
+        "DOCS"
+      )
+
+    agent =
+      Agent.new("SEC", "alpha needle retrieval", "security reviewer",
+        anchor: "alpha needle retrieval",
+        adapter: BudgetCitationMock,
+        model: "mock",
+        num_ctx: 2200,
+        k_docs: 1,
+        k_s: 0
+      )
+
+    {_agent, absorbed, perception} = Agent.run_turn(agent, ref, 1)
+    assert_receive {:budget_prompt, prompt, index_only_doc_id}
+
+    assert perception.doc_mode == :selected
+    assert length(perception.docs_full_ids) == 1
+    assert perception.prompt_tokens_est > 0
+
+    Enum.each(docs, fn doc ->
+      file = Map.fetch!(doc.meta, :file)
+      assert prompt =~ "DOC #{doc.id} file=#{file}:"
+    end)
+
+    markers_by_id =
+      Map.new(docs, fn doc ->
+        marker = doc.meta.marker
+        {doc.id, marker}
+      end)
+
+    Enum.each(markers_by_id, fn {id, marker} ->
+      if id in perception.docs_full_ids do
+        assert prompt =~ marker
+      else
+        refute prompt =~ marker
+      end
+    end)
+
+    refute is_nil(index_only_doc_id)
+    refute index_only_doc_id in perception.docs_full_ids
+    assert [%{citations: [^index_only_doc_id]}] = absorbed
+  end
+
+  test "document prompt records over_budget when selected prompt still exceeds budget" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    Reference.absorb(
+      ref,
+      [long_doc("ALPHA SUMMARY", "ALPHA_FULL_MARKER", String.duplicate("alpha ", 200))],
+      "DOCS"
+    )
+
+    agent =
+      Agent.new("SEC", "alpha", "security reviewer",
+        anchor: "alpha",
+        adapter: PromptCaptureMock,
+        model: "mock",
+        num_ctx: 1,
+        k_docs: 1
+      )
+
+    {_agent, _absorbed, perception} = Agent.run_turn(agent, ref, 1)
+
+    assert perception.doc_mode == :selected
+    assert perception.over_budget
+  end
+
+  defp long_doc(summary, marker, body_seed) do
+    %{
+      type: :chunk,
+      text: "#{summary}\n#{marker}\n#{body_seed}\n#{String.duplicate(body_seed <> " ", 90)}",
+      meta: %{
+        file: "#{String.downcase(String.split(summary) |> hd())}.md",
+        marker: marker
+      }
+    }
   end
 end

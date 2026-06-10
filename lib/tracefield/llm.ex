@@ -9,6 +9,7 @@ defmodule Tracefield.LLM do
           seed: integer(),
           temperature: float(),
           max_tokens: pos_integer(),
+          num_ctx: pos_integer(),
           timeout: pos_integer(),
           cli: {String.t(), [String.t()]}
         ]
