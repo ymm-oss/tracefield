@@ -88,7 +88,9 @@ defmodule Tracefield.DissolutionTest do
 
   test "embed mock is deterministic and cosine is symmetric" do
     {:ok, [a, same, other]} =
-      Embed.embed(["same concern text", "same concern text", "totally unrelated"], adapter: Embed.Mock)
+      Embed.embed(["same concern text", "same concern text", "totally unrelated"],
+        adapter: Embed.Mock
+      )
 
     assert Embed.cosine(a, same) == 1.0
     assert Embed.cosine(a, other) < 0.9

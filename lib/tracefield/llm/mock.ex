@@ -6,6 +6,7 @@ defmodule Tracefield.LLM.Mock do
   @behaviour Tracefield.LLM
 
   @consent_topic "consent-secondary-use"
+  @domain_taxonomy ~w(security legal-consent ux business-speed data-quality ops-org)
 
   @base_claims [
     {"access-control-boundaries", :concern,
@@ -58,6 +59,9 @@ defmodule Tracefield.LLM.Mock do
 
       String.contains?(prompt, "TRACEFIELD_CLUSTER") ->
         {:ok, Jason.encode!(cluster_groups(prompt))}
+
+      String.contains?(prompt, "TRACEFIELD_AGENT_TURN") ->
+        {:ok, Jason.encode!(agent_turn(prompt))}
 
       String.contains?(prompt, "TRACEFIELD_INTERSTITIAL") ->
         {:ok, Jason.encode!(interstitial_judgments(prompt))}
@@ -177,6 +181,99 @@ defmodule Tracefield.LLM.Mock do
       concerns: concerns
     }
   end
+
+  defp agent_turn(prompt) do
+    agent = dissolution_agent(prompt)
+    domain = agent_domain(prompt, agent)
+    foreign_entries = presented_foreign_entries(prompt, agent)
+
+    entries =
+      case foreign_entries do
+        [] ->
+          own_domain_entries(agent, domain, 2)
+
+        [foreign | _] ->
+          [
+            own_domain_entries(agent, domain, 1) |> hd(),
+            %{
+              type: "belief",
+              text: cross_domain_text(domain, foreign),
+              citations: [foreign.id]
+            }
+          ]
+      end
+
+    %{entries: entries}
+  end
+
+  defp agent_domain(prompt, agent) do
+    case Regex.named_captures(~r/DOMAIN\s+(?<domain>[a-z-]+)/, prompt) do
+      %{"domain" => domain} -> domain
+      _ -> domain_for_agent(agent)
+    end
+  end
+
+  defp own_domain_entries(agent, domain, count) do
+    agent
+    |> closed_dissolution_concerns(1)
+    |> prioritize_agent_concerns(agent, count)
+    |> Enum.take(count)
+    |> Enum.map(fn text ->
+      %{
+        type: "belief",
+        text: ensure_domain_suffix(text, domain),
+        citations: []
+      }
+    end)
+  end
+
+  defp prioritize_agent_concerns([first, second | rest], "SEC", 2), do: [second, first | rest]
+  defp prioritize_agent_concerns(concerns, _agent, _count), do: concerns
+
+  defp cross_domain_text("security", _foreign) do
+    "権限境界レビューが事業判断を前提にすると監査設計が変わる(security business-speed)"
+  end
+
+  defp cross_domain_text("business-speed", _foreign) do
+    "展開速度の投資判断がセキュリティ制約を取り込むと承認順序が変わる(business-speed security)"
+  end
+
+  defp cross_domain_text("ux", _foreign) do
+    "利用者説明の設計が事業制約と結びつくと誤操作リスクが変わる(ux business-speed)"
+  end
+
+  defp cross_domain_text(domain, foreign) do
+    "共有状態が#{foreign.author}の観点を#{domain}判断へ接続する懸念(#{domain} #{foreign.domain})"
+  end
+
+  defp ensure_domain_suffix(text, domain) do
+    if Regex.match?(~r/\([a-z-]+(?:\s+[a-z-]+)*\)\s*$/, text) do
+      text
+    else
+      "#{text}(#{domain})"
+    end
+  end
+
+  defp presented_foreign_entries(prompt, agent) do
+    regex =
+      ~r/^ENTRY\s+(?<id>e\d+)\s+author=(?<author>\S+)\s+domain=(?<domain>[a-z-]*)\s+text=(?<text>.*)$/m
+
+    regex
+    |> Regex.scan(prompt, capture: :first)
+    |> Enum.map(fn [line] -> Regex.named_captures(regex, line) end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(fn %{"id" => id, "author" => author, "domain" => domain, "text" => text} ->
+      %{id: id, author: author, domain: domain, text: String.trim(text)}
+    end)
+    |> Enum.filter(fn entry ->
+      entry.author != agent and entry.domain in @domain_taxonomy
+    end)
+  end
+
+  defp domain_for_agent("SEC"), do: "security"
+  defp domain_for_agent("BIZ"), do: "business-speed"
+  defp domain_for_agent("UX"), do: "ux"
+  defp domain_for_agent(_agent), do: "security"
 
   defp dissolution_regime(prompt) do
     cond do
