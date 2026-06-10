@@ -79,21 +79,14 @@ defmodule Tracefield.Reference do
     exclude_author = Keyword.get(opts, :exclude_author)
     only_author = Keyword.get(opts, :only_author)
     exclude_types = Keyword.get(opts, :exclude_types, [])
-    query_embedding = embed_one(query_text, state)
+    policy = Keyword.get(opts, :policy, :similar)
 
     entries =
       state.entries
       |> Enum.filter(&(&1.status == :active))
       |> filter_author(:exclude_author, exclude_author)
       |> filter_author(:only_author, only_author)
-      |> filter_types(:exclude_types, exclude_types)
-      |> Enum.with_index()
-      |> Enum.map(fn {entry, index} ->
-        {entry, Tracefield.Embed.cosine(query_embedding, entry.embedding), index}
-      end)
-      |> Enum.sort_by(fn {_entry, score, index} -> {-score, index} end)
-      |> Enum.take(k)
-      |> Enum.map(fn {entry, _score, _index} -> entry end)
+      |> serve_entries(query_text, k, exclude_types, policy, state)
 
     {:reply, entries, state}
   end
@@ -231,6 +224,61 @@ defmodule Tracefield.Reference do
     types = MapSet.new(Enum.map(List.wrap(types), &normalize_type/1))
     Enum.reject(entries, &MapSet.member?(types, &1.type))
   end
+
+  defp serve_entries(entries, query_text, k, exclude_types, :similar, state) do
+    query_embedding = embed_one(query_text, state)
+
+    entries
+    |> filter_types(:exclude_types, exclude_types)
+    |> Enum.with_index()
+    |> Enum.map(fn {entry, index} ->
+      {entry, Tracefield.Embed.cosine(query_embedding, entry.embedding), index}
+    end)
+    |> Enum.sort_by(fn {_entry, score, index} -> {-score, index} end)
+    |> Enum.take(k)
+    |> Enum.map(fn {entry, _score, _index} -> entry end)
+  end
+
+  defp serve_entries(entries, _query_text, k, exclude_types, :diverse, _state) do
+    entries
+    |> filter_types(:exclude_types, [:procedure | List.wrap(exclude_types)])
+    |> Enum.group_by(& &1.author)
+    |> Map.values()
+    |> Enum.map(&Enum.sort_by(&1, fn entry -> -entry_number(entry.id) end))
+    |> Enum.sort_by(fn [entry | _rest] -> -entry_number(entry.id) end)
+    |> round_robin()
+    |> Enum.take(k)
+  end
+
+  defp serve_entries(_entries, _query_text, _k, _exclude_types, other, _state) do
+    raise ArgumentError, "unknown serve policy #{inspect(other)}"
+  end
+
+  defp round_robin(groups), do: do_round_robin(groups, [])
+
+  defp do_round_robin([], acc), do: acc
+
+  defp do_round_robin(groups, acc) do
+    {heads, tails} =
+      Enum.reduce(groups, {[], []}, fn
+        [head | tail], {heads, tails} ->
+          {[head | heads], if(tail == [], do: tails, else: [tail | tails])}
+
+        [], {heads, tails} ->
+          {heads, tails}
+      end)
+
+    do_round_robin(Enum.reverse(tails), acc ++ Enum.reverse(heads))
+  end
+
+  defp entry_number("e" <> number) do
+    case Integer.parse(number) do
+      {value, ""} -> value
+      _ -> 0
+    end
+  end
+
+  defp entry_number(_id), do: 0
 
   defp reverse_citation_index(entries) do
     Enum.reduce(entries, %{}, fn entry, acc ->

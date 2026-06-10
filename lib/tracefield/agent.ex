@@ -24,6 +24,8 @@ defmodule Tracefield.Agent do
         temperature: [type: :float, default: 0.4],
         seed: [type: :integer, default: 0],
         procedure_id: [type: :string, default: nil],
+        aware: [type: :boolean, default: false],
+        serve_policy: [type: :any, default: :similar],
         last_round: [type: :integer, default: 0],
         absorbed_count: [type: :integer, default: 0],
         last_absorbed: [type: :any, default: []],
@@ -49,7 +51,8 @@ defmodule Tracefield.Agent do
         Tracefield.Reference.serve(reference, query(state),
           k: max(state.k_s, 0),
           exclude_author: state.id,
-          exclude_types: [:procedure]
+          exclude_types: [:procedure],
+          policy: state.serve_policy
         )
 
       procedure = procedure_entry(reference, state.procedure_id)
@@ -94,8 +97,7 @@ defmodule Tracefield.Agent do
       messages = [
         %{
           role: "system",
-          content:
-            "TRACEFIELD_AGENT_TURN\nReturn only JSON {\"entries\":[{\"type\":\"belief\",\"text\":\"...\",\"citations\":[\"e1\"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
+          content: system_prompt(state)
         },
         %{
           role: "user",
@@ -115,6 +117,22 @@ defmodule Tracefield.Agent do
         {:error, _reason} -> []
       end
     end
+
+    defp system_prompt(state) do
+      "TRACEFIELD_AGENT_TURN\n#{situation_preamble(state)}Return only JSON {\"entries\":[{\"type\":\"belief\",\"text\":\"...\",\"citations\":[\"e1\"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
+    end
+
+    defp situation_preamble(%{aware: true}) do
+      """
+      SITUATION: あなたは、異なる偏りを持つ複数の AI エージェントが共有ストアで協働する
+      「半溶解チーム」の一員である。他のエージェントはそれぞれ、あなたには見えない私的文書を持つ。
+      PRESENTED ENTRIES は彼らがその私的知識から外部化した状態であり、あなたがその情報に触れる唯一の窓である。
+      ただの文脈ではなく、あなたの知らない事実を含む証拠として扱え。あなたの entries も他のエージェントに読まれる。
+      自分の偏り（DOMAIN）を保ったまま、彼らの状態を自分の私的事実と突き合わせて活用せよ。
+      """
+    end
+
+    defp situation_preamble(_state), do: ""
 
     defp prompt(state, round, retrieved, procedure) do
       """
@@ -242,7 +260,9 @@ defmodule Tracefield.Agent do
           model: Keyword.get(opts, :model, "mock"),
           temperature: Keyword.get(opts, :temperature, 0.4) * 1.0,
           seed: Keyword.get(opts, :seed, 0),
-          procedure_id: Keyword.get(opts, :procedure_id)
+          procedure_id: Keyword.get(opts, :procedure_id),
+          aware: Keyword.get(opts, :aware, false),
+          serve_policy: Keyword.get(opts, :serve_policy, :similar)
         }
       )
 
