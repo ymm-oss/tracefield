@@ -50,6 +50,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     aware = Keyword.get(opts, :aware, 1)
     k_s = Keyword.get(opts, :k_s, Keyword.get(opts, :k, preset.k))
     temperature = Keyword.get(opts, :temperature, preset.temperature)
+    num_ctx = Keyword.get(opts, :num_ctx, 8192)
+    k_docs = Keyword.get(opts, :k_docs, 3)
 
     model =
       Keyword.get(
@@ -119,6 +121,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           model: config.model,
           temperature: temperature,
           seed: 1_000 + index,
+          num_ctx: num_ctx,
+          k_docs: k_docs,
           procedure_id: config.procedure_id,
           serve_policy: serve,
           aware: aware?(aware)
@@ -140,6 +144,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         model: model,
         temperature: temperature,
         seed: 90_000,
+        num_ctx: num_ctx,
         cli: cli,
         embed_adapter: embed_adapter,
         embed_model: embed_model
@@ -161,6 +166,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         judge_model: model,
         temperature: temperature,
         seed: 80_000,
+        num_ctx: num_ctx,
         cli: cli
       )
 
@@ -174,6 +180,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         embed_model: embed_model,
         temperature: temperature,
         seed: 1_000,
+        num_ctx: num_ctx,
         measure_icc: false
       )
 
@@ -183,6 +190,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       |> Map.put(:verification_rate, verification_rate(ideas, verification, procedure_ids))
 
     synthesis = cross_author_synthesis(ideas, all_entries, procedure_ids, verification)
+    doc_mode_stats = doc_mode_stats(perception ++ repair_perception, num_ctx)
 
     result = %{
       task: scenario.task,
@@ -194,6 +202,10 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         serve: serve,
         aware: aware,
         k: k_s,
+        num_ctx: num_ctx,
+        k_docs: k_docs,
+        context_budget: context_budget(num_ctx),
+        doc_mode_stats: doc_mode_stats,
         model: model,
         embed_model: embed_model,
         temperature: temperature,
@@ -330,6 +342,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           serve: :string,
           aware: :integer,
           k: :integer,
+          num_ctx: :integer,
+          k_docs: :integer,
           model: :string,
           embed_model: :string,
           temperature: :float,
@@ -359,6 +373,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       serve_policy: parse_serve(Keyword.get(opts, :serve, "diverse")),
       aware: Keyword.get(opts, :aware, 1),
       k_s: Keyword.get(opts, :k, preset.k),
+      num_ctx: Keyword.get(opts, :num_ctx, 8192),
+      k_docs: Keyword.get(opts, :k_docs, 3),
       model: Keyword.get(opts, :model),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
       temperature: Keyword.get(opts, :temperature, preset.temperature),
@@ -577,6 +593,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Enum.each(result.cross_author_synthesis.ideas, fn idea ->
       Mix.shell().info("[#{idea.author}] (cites: #{format_citations(idea)}) #{idea.text}")
     end)
+
+    Mix.shell().info("")
+    print_context_budget(result.config.doc_mode_stats)
 
     if result.report_path do
       Mix.shell().info("")
@@ -842,6 +861,32 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   defp normalize_distill_mode("llm"), do: :llm
   defp normalize_distill_mode(other), do: Mix.raise("invalid distill mode #{inspect(other)}")
 
+  defp context_budget(num_ctx), do: num_ctx - 1200 - 512
+
+  defp doc_mode_stats(perception, num_ctx) do
+    records = Enum.filter(List.wrap(perception), &is_map/1)
+
+    %{
+      full:
+        Enum.count(records, &(Map.get(&1, :doc_mode, Map.get(&1, "doc_mode")) in [:full, "full"])),
+      selected:
+        Enum.count(
+          records,
+          &(Map.get(&1, :doc_mode, Map.get(&1, "doc_mode")) in [:selected, "selected"])
+        ),
+      over_budget:
+        Enum.count(records, &truthy?(Map.get(&1, :over_budget, Map.get(&1, "over_budget")))),
+      max_prompt_tokens_est:
+        records
+        |> Enum.map(&Map.get(&1, :prompt_tokens_est, Map.get(&1, "prompt_tokens_est", 0)))
+        |> Enum.max(fn -> 0 end),
+      budget: context_budget(num_ctx)
+    }
+  end
+
+  defp truthy?(true), do: true
+  defp truthy?(_value), do: false
+
   defp plain_agent_configs(agent_configs) do
     Enum.map(agent_configs, fn agent ->
       %{
@@ -871,6 +916,26 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   end
 
   defp print_house_view_injection(_config), do: :ok
+
+  defp print_context_budget(%{
+         selected: 0,
+         over_budget: 0,
+         max_prompt_tokens_est: max_est,
+         budget: budget
+       }) do
+    Mix.shell().info("文脈予算: 全ターン full（最大 est #{max_est} / 予算 #{budget}）")
+  end
+
+  defp print_context_budget(%{
+         selected: selected,
+         over_budget: over_budget,
+         max_prompt_tokens_est: max_est,
+         budget: budget
+       }) do
+    Mix.shell().info(
+      "⚠ 文脈予算: selected モード #{selected} ターン / 超過 #{over_budget} ターン（最大 est #{max_est} tok, 予算 #{budget}）"
+    )
+  end
 
   defp print_correction(nil), do: :ok
 

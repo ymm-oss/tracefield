@@ -942,6 +942,7 @@ defmodule Tracefield.Reference do
         model: Keyword.get(opts, :judge_model, Keyword.get(opts, :model, "mock")),
         temperature: Keyword.get(opts, :temperature, 0.0),
         seed: Keyword.get(opts, :seed, 0),
+        num_ctx: Keyword.get(opts, :num_ctx),
         cli: Keyword.get(opts, :cli)
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)

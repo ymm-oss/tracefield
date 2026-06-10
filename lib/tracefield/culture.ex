@@ -107,7 +107,7 @@ defmodule Tracefield.Culture do
 
     llm_opts =
       opts
-      |> Keyword.take([:adapter, :model, :temperature, :seed, :cli])
+      |> Keyword.take([:adapter, :model, :temperature, :seed, :num_ctx, :cli])
       |> Keyword.put_new(:adapter, Tracefield.LLM.Mock)
 
     case Tracefield.LLM.complete(messages, llm_opts) do

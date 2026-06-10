@@ -8,10 +8,7 @@ defmodule Tracefield.LLM.Ollama do
   @impl true
   def complete(messages, opts) do
     model = Keyword.get(opts, :model, "gemma4:12b")
-    seed = Keyword.get(opts, :seed, 0)
-    temperature = Keyword.get(opts, :temperature, 0.2)
     timeout = Keyword.get(opts, :timeout, 300_000)
-    num_predict = Keyword.get(opts, :max_tokens, 1200)
     think = Keyword.get(opts, :think, false)
 
     body = %{
@@ -19,7 +16,7 @@ defmodule Tracefield.LLM.Ollama do
       messages: messages,
       stream: false,
       think: think,
-      options: %{seed: seed, temperature: temperature, num_predict: num_predict}
+      options: build_options(opts)
     }
 
     case Req.post("http://localhost:11434/api/chat",
@@ -53,4 +50,13 @@ defmodule Tracefield.LLM.Ollama do
     do: thinking
 
   defp extract_content(_message), do: ""
+
+  def build_options(opts) do
+    %{
+      seed: Keyword.get(opts, :seed, 0),
+      temperature: Keyword.get(opts, :temperature, 0.2),
+      num_predict: Keyword.get(opts, :max_tokens, 1200),
+      num_ctx: Keyword.get(opts, :num_ctx, 8192)
+    }
+  end
 end
