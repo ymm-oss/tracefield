@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   @moduledoc "Run Tracefield qualitative ideation over a scenario directory."
   use Mix.Task
 
-  alias Tracefield.{Culture, Dissolution, GroundTruth, Reference}
+  alias Tracefield.{Culture, Dissolution, GroundTruth, Memory, Reference}
 
   @shortdoc "Run Tracefield ideation"
   @review_procedure """
@@ -99,7 +99,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         shared_procedure_id,
         memory?,
         memory_window,
-        memory_dir
+        memory_dir,
+        if(store?, do: Reference.all(reference), else: nil)
       )
 
     agents =
@@ -434,7 +435,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
          shared_procedure_id,
          memory?,
          memory_window,
-         memory_dir
+         memory_dir,
+         store_entries
        ) do
     Enum.map(agents, fn agent ->
       {procedure_id, procedure_source} =
@@ -445,53 +447,21 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           {shared_procedure_id, "shared"}
         end
 
-      memory_entries =
+      {entries, stale} =
         if memory? do
-          load_memory_entries(memory_dir, agent.id, memory_window)
+          Memory.load(memory_dir, agent.id, memory_window, store_entries: store_entries)
         else
-          []
+          {[], 0}
         end
 
       agent
       |> Map.put(:model, agent.model || fallback_model)
       |> Map.put(:procedure_id, procedure_id)
       |> Map.put(:procedure_source, procedure_source)
-      |> Map.put(:memory_loaded, length(memory_entries))
-      |> Map.put(:private_memory, format_private_memory_entries(memory_entries))
+      |> Map.put(:memory_loaded, length(entries))
+      |> Map.put(:memory_stale, stale)
+      |> Map.put(:private_memory, format_private_memory_entries(entries))
     end)
-  end
-
-  defp load_memory_entries(_memory_dir, _agent_id, window) when window <= 0, do: []
-
-  defp load_memory_entries(memory_dir, agent_id, window) do
-    path = memory_path(memory_dir, agent_id)
-
-    if File.exists?(path) do
-      path
-      |> File.read!()
-      |> String.split("\n", trim: true)
-      |> Enum.flat_map(&decode_memory_line/1)
-      |> Enum.take(-window)
-    else
-      []
-    end
-  end
-
-  defp decode_memory_line(line) do
-    case Jason.decode(line) do
-      {:ok, %{} = entry} ->
-        [
-          %{
-            ts: Map.get(entry, "ts"),
-            mode: Map.get(entry, "mode"),
-            text: Map.get(entry, "text", "") |> to_string(),
-            citations: Map.get(entry, "citations", [])
-          }
-        ]
-
-      _ ->
-        []
-    end
   end
 
   defp format_private_memory_entries([]), do: ""
@@ -880,7 +850,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         model: agent.model,
         procedure_id: agent.procedure_id,
         procedure_source: agent.procedure_source,
-        memory_loaded: agent.memory_loaded
+        memory_loaded: agent.memory_loaded,
+        memory_stale: agent.memory_stale
       }
     end)
   end
@@ -1029,7 +1000,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp report_agent_configs(agent_configs) do
     Enum.map_join(agent_configs, "\n", fn agent ->
-      "- #{agent.id}: model=#{agent.model}, procedure=#{agent.procedure_source}, memory=#{agent.memory_loaded}件"
+      "- #{agent.id}: model=#{agent.model}, procedure=#{agent.procedure_source}, #{format_memory_count(agent)}"
     end)
   end
 
@@ -1121,9 +1092,15 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp format_agent_configs(agent_configs) do
     Enum.map_join(agent_configs, " ", fn agent ->
-      "#{agent.id}(model=#{agent.model}, proc=#{agent.procedure_source}, memory=#{agent.memory_loaded}件)"
+      "#{agent.id}(model=#{agent.model}, proc=#{agent.procedure_source}, #{format_memory_count(agent)})"
     end)
   end
+
+  defp format_memory_count(%{memory_loaded: loaded, memory_stale: stale}) when stale > 0 do
+    "memory=#{loaded}件（失効#{stale}除外）"
+  end
+
+  defp format_memory_count(%{memory_loaded: loaded}), do: "memory=#{loaded}件"
 
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)
 

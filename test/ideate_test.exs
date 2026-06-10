@@ -556,6 +556,86 @@ defmodule Tracefield.IdeateTest do
     refute a_prompt =~ "older memory"
   end
 
+  test "store-enabled memory loading drops lines citing inactive known entries and keeps unknown citations" do
+    Process.register(self(), PromptCaptureMock)
+    scenario_path = tmp_scenario()
+    memory_dir = Path.join(scenario_path, "memory")
+    File.mkdir_p!(memory_dir)
+
+    {:ok, ref} =
+      Tracefield.Reference.start_link(persist_path: Path.join(scenario_path, "store.jsonl"))
+
+    [active] = Tracefield.Reference.absorb(ref, [%{text: "active basis"}], "A")
+    [stale] = Tracefield.Reference.absorb(ref, [%{text: "stale basis"}], "A")
+    Tracefield.Reference.retract(ref, stale.id)
+    GenServer.stop(ref)
+
+    File.write!(
+      Path.join(memory_dir, "A.jsonl"),
+      memory_line("kept active", [active.id]) <>
+        memory_line("dropped stale", [stale.id]) <>
+        memory_line("kept unknown", ["unknown-e99"])
+    )
+
+    result =
+      Ideate.run_ideation(
+        scenario: scenario_path,
+        adapter_name: "mock",
+        adapter_module: PromptCaptureMock,
+        rounds: 1,
+        model: "mock",
+        memory: true,
+        memory_dir: memory_dir,
+        store: true,
+        persist?: false
+      )
+
+    assert_receive {:ideate_prompt, "A", "model-a", a_prompt}
+    assert a_prompt =~ "- kept active"
+    assert a_prompt =~ "- kept unknown"
+    refute a_prompt =~ "dropped stale"
+
+    a_config = Enum.find(result.config.agents, &(&1.id == "A"))
+    assert a_config.memory_loaded == 2
+    assert a_config.memory_stale == 1
+  end
+
+  test "store-disabled memory loading keeps lines even when a local store has inactive citations" do
+    Process.register(self(), PromptCaptureMock)
+    scenario_path = tmp_scenario()
+    memory_dir = Path.join(scenario_path, "memory")
+    File.mkdir_p!(memory_dir)
+
+    {:ok, ref} =
+      Tracefield.Reference.start_link(persist_path: Path.join(scenario_path, "store.jsonl"))
+
+    [stale] = Tracefield.Reference.absorb(ref, [%{text: "stale basis"}], "A")
+    Tracefield.Reference.retract(ref, stale.id)
+    GenServer.stop(ref)
+
+    File.write!(Path.join(memory_dir, "A.jsonl"), memory_line("kept without store", [stale.id]))
+
+    result =
+      Ideate.run_ideation(
+        scenario: scenario_path,
+        adapter_name: "mock",
+        adapter_module: PromptCaptureMock,
+        rounds: 1,
+        model: "mock",
+        memory: true,
+        memory_dir: memory_dir,
+        store: false,
+        persist?: false
+      )
+
+    assert_receive {:ideate_prompt, "A", "model-a", a_prompt}
+    assert a_prompt =~ "- kept without store"
+
+    a_config = Enum.find(result.config.agents, &(&1.id == "A"))
+    assert a_config.memory_loaded == 1
+    assert a_config.memory_stale == 0
+  end
+
   test "Agent prompt includes house view only when provided" do
     Process.register(self(), PromptCaptureMock)
     {:ok, ref} = Tracefield.Reference.start_link()
@@ -661,8 +741,13 @@ defmodule Tracefield.IdeateTest do
     root
   end
 
-  defp memory_line(text) do
-    Jason.encode!(%{ts: "2026-06-10T00:00:00Z", mode: "converge", text: text, citations: []}) <>
+  defp memory_line(text, citations \\ []) do
+    Jason.encode!(%{
+      ts: "2026-06-10T00:00:00Z",
+      mode: "converge",
+      text: text,
+      citations: citations
+    }) <>
       "\n"
   end
 
