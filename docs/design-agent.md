@@ -78,3 +78,28 @@ Tracefield.Agent (GenServer)
 
 - 手続き＝プロンプト/方策である限り、その**実行品質は器官（LLM）に依存**する（手続きを共有しても器官が弱ければ同じ実行はされない）。
 - private state と shared state の線引きはエージェント自身の申告に依る（外部化の誠実さ問題 ── provenance の真正性問題 §13 と同型）。
+
+## 8. Agent ライブラリ評価（2026-06 調査）
+
+**結論: [Jido](https://github.com/agentjido/jido)（v2.0、2026-02 リリース）が本プロジェクトの Agent モデルにほぼ一対一で適合する。**
+
+| 本設計の概念 | Jido での対応 | 適合 |
+| --- | --- | --- |
+| Agent = 状態+手続きの主体 | Agent = **schema 検証付き不変 state** + **Action**（コンパイル時 schema 付き純粋関数モジュール） | ◎ 概念一致 |
+| 手続きの実行 | `cmd/2`: action in → 新 state + **Directive**（副作用を**データとして記述**、実行は OTP ランタイム） | ◎ 副作用がデータ＝**ログ可能・決定的**で実験規律と好相性 |
+| LLM=器官（差し替え可能） | `jido_ai` は**任意パッケージ**。core だけ使い、Action 内から既存 `Tracefield.LLM`（Mock/seed 規律）を呼べる | ◎ |
+| 偏りアンカー/private state | schema 付き state の一部 | ○ |
+| Reference / provenance / 引用照合 / 撤回閉包 | **どのライブラリにも無い**（本プロジェクトの中核独自部） | — 自作のまま |
+| 手続き=データ（採用・引用・撤回可能な Entry） | Jido Action は**コンパイル済みモジュール**で runtime データではない → procedure-entry 層は自作し、汎用 `InterpretProcedure` Action が解釈する形 | △ 実行殻として利用 |
+
+他候補: **LangChain Elixir**（チェーン/プロバイダ層。agent-as-process でなく、LLM 層は自前規律を崩すため不採用）/
+**Ash AI**（Ash 全面採用が前提で研究ハーネスには過重）/ Agens・AgentForge・Magus 等（小規模・保守薄）。
+
+**リスク**: Jido 2.0 はリリース約4ヶ月で API 変動の可能性。codex にとって新規フレームワーク（実装リスク増）。
+3エージェント×2ラウンドの実験ループには過剰装備の面もある（素の GenServer なら~100行）。
+
+**採用方針（決定）**:
+1. **brief-9 で Jido core を試験採用**（jido_ai は使わず、LLM は既存 behaviour 経由）。ただし **`Tracefield.Agent` を薄い facade** とし
+   Jido への直接依存を1モジュールに封じる。タイムボックス内で seed/Mock 規律・テストと衝突したら**素の GenServer に fallback**
+   （facade のおかげで差し替えは局所）。
+2. 本実装（製品化）フェーズでは Jido の supervision・永続化・観測性・MCP センサーを本格活用。
