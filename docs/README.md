@@ -21,6 +21,7 @@
 | [`mvp.md`](./mvp.md) | MVP 設計。接地真実の妥当性（DR-1/DR-2）を先に測る最小 de-risking プローブ（C4 vs 薄いC5・1汚染・自動指標） | 本実験の前に最小実証で前提を検証したい |
 | [`findings-mvp.md`](./findings-mvp.md) | **MVP 第1次結果**。実モデルで汚染影響を局在化できた（precision/recall=1.0）。効いた設計（スタンス測定）と発見したバグ・限界 | 何が分かったか・次に何をすべきか知りたい |
 | [`experiment-results.md`](./experiment-results.md) | **本実験フェーズ結果**。C1〜C8 比較行列（C5=recall1.0、C6 ablation で provenance が load-bearing、C2 で「Role増やせば」null 棄却）+ 外的妥当性(§6a-6h)・結論・限界 | 条件比較の最終結果を知りたい |
+| [`conclusions.md`](./conclusions.md) | **総括**。founding question への回答（両翼とも条件付き成立）、統一原理（構造×契約の自覚）、資産・限界・次段、追試（n=6 再現） | プログラム全体の結論を読みたい |
 | [`design-reference.md`](./design-reference.md) | **Reference 設計**。ドキュメント接地＋検証可能な引用で C5 の過剰隔離(precision)を解決する再設計。Field Actor の sensitivity profile 具体化、段階的スコープ（静的→生きた） | C5 を実用化する次設計を知りたい |
 | [`design-agent.md`](./design-agent.md) | **Agent 境界の再定義**。Agent=状態+手続きの主体、LLM=無状態の器官。溶解の2次元化（状態×手続き）と統治の手続き拡張、OTP写像 | エージェントの主体モデルを知りたい |
 | `mvp-impl-brief*.md` / `../RUNNING.md` | codex への実装ブリーフ群と実行手順（Elixir ハーネス） | 実装の詳細・動かし方を知りたい |
