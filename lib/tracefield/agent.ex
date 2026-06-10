@@ -26,12 +26,14 @@ defmodule Tracefield.Agent do
         cli: [type: :any, default: nil],
         model: [type: :string, default: "mock"],
         temperature: [type: :float, default: 0.4],
+        human: [type: :any, default: nil],
         seed: [type: :integer, default: 0],
         num_ctx: [type: :integer, default: 8192],
         k_docs: [type: :integer, default: 3],
         procedure_id: [type: :string, default: nil],
         aware: [type: :boolean, default: false],
         serve_policy: [type: :any, default: :similar],
+        entry_limit: [type: :integer, default: 2],
         last_round: [type: :integer, default: 0],
         absorbed_count: [type: :integer, default: 0],
         last_absorbed: [type: :any, default: []],
@@ -78,7 +80,7 @@ defmodule Tracefield.Agent do
       entries =
         prompt.messages
         |> deliberate(state, round)
-        |> Enum.take(2)
+        |> Enum.take(state.entry_limit)
         |> Enum.map(
           &sanitize_entry(&1, presented_ids, reference_doc_ids, state, round, procedure)
         )
@@ -102,7 +104,9 @@ defmodule Tracefield.Agent do
       docs =
         reference
         |> Tracefield.Reference.all()
-        |> Enum.filter(&(&1.type == :chunk and &1.author == "DOCS" and &1.status == :active))
+        |> Enum.filter(
+          &(&1.type == :chunk and &1.author in ["ISSUE", "DOCS"] and &1.status == :active)
+        )
         |> Enum.map(fn entry ->
           %{
             id: entry.id,
@@ -197,7 +201,8 @@ defmodule Tracefield.Agent do
           seed: state.seed + round * 100,
           max_tokens: @num_predict,
           num_ctx: state.num_ctx,
-          cli: state.cli
+          cli: state.cli,
+          human: state.human
         ]
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
@@ -394,7 +399,7 @@ defmodule Tracefield.Agent do
           |> List.wrap()
           |> Enum.map(&to_string/1)
           |> Enum.filter(&allowed_citation?(&1, presented_ids, reference_doc_ids, procedure))
-          |> append_procedure_id(procedure)
+          |> append_procedure_id(procedure, state.adapter)
           |> Enum.uniq(),
         meta: %{domain: state.domain, round: round}
       }
@@ -410,8 +415,9 @@ defmodule Tracefield.Agent do
       allowed_citation?(id, presented_ids, reference_doc_ids, nil) or id == procedure.id
     end
 
-    defp append_procedure_id(citations, nil), do: citations
-    defp append_procedure_id(citations, procedure), do: citations ++ [procedure.id]
+    defp append_procedure_id(citations, _procedure, Tracefield.LLM.Human), do: citations
+    defp append_procedure_id(citations, nil, _adapter), do: citations
+    defp append_procedure_id(citations, procedure, _adapter), do: citations ++ [procedure.id]
 
     defp decode_json_object(content) do
       with {:error, _reason} <- Jason.decode(content),
@@ -458,12 +464,14 @@ defmodule Tracefield.Agent do
           cli: Keyword.get(opts, :cli),
           model: Keyword.get(opts, :model, "mock"),
           temperature: Keyword.get(opts, :temperature, 0.4) * 1.0,
+          human: Keyword.get(opts, :human),
           seed: Keyword.get(opts, :seed, 0),
           num_ctx: Keyword.get(opts, :num_ctx, 8192),
           k_docs: Keyword.get(opts, :k_docs, 3),
           procedure_id: Keyword.get(opts, :procedure_id),
           aware: Keyword.get(opts, :aware, false),
-          serve_policy: Keyword.get(opts, :serve_policy, :similar)
+          serve_policy: Keyword.get(opts, :serve_policy, :similar),
+          entry_limit: Keyword.get(opts, :entry_limit, 2)
         }
       )
 
