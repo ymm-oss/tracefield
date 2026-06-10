@@ -45,6 +45,9 @@ defmodule Tracefield.LLM.Mock do
     prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
 
     cond do
+      String.contains?(prompt, "TRACEFIELD_DISTILL") ->
+        {:ok, "mock蒸留: #{distill_head(prompt)}"}
+
       String.contains?(prompt, "TRACEFIELD_RECONSTRUCT_AFFECTED_POINTS") ->
         {:ok, Jason.encode!(affected_point_indexes(prompt))}
 
@@ -88,6 +91,13 @@ defmodule Tracefield.LLM.Mock do
 
   def signal_claim_ids, do: [@consent_topic]
   def consent_topic, do: @consent_topic
+
+  defp distill_head(prompt) do
+    case Regex.run(~r/^ENTRY\s+e\d+\s+text=(?<text>.*)$/m, prompt, capture: :all_names) do
+      [text] -> text |> String.trim() |> String.slice(0, 40)
+      _other -> ""
+    end
+  end
 
   defp verify_judgments(prompt) do
     prompt

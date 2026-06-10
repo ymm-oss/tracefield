@@ -556,6 +556,74 @@ defmodule Tracefield.IdeateTest do
     refute a_prompt =~ "older memory"
   end
 
+  test "Agent prompt includes house view only when provided" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Tracefield.Reference.start_link()
+
+    with_house_view =
+      Tracefield.Agent.new("A", "alpha", "alpha agent",
+        adapter: PromptCaptureMock,
+        house_view: "house view v1:\n- prefer cited judgments"
+      )
+
+    Tracefield.Agent.run_turn(with_house_view, ref, 1)
+    assert_receive {:ideate_prompt, "A", "mock", prompt}
+    assert prompt =~ "PRIVATE MEMORY (あなた自身の過去の判断。経験として活かせ):"
+    assert prompt =~ "HOUSE VIEW（チームのこれまでの判断方針。踏まえつつ、自分の偏りからの異見も歓迎）:"
+    assert prompt =~ "house view v1:\n- prefer cited judgments"
+
+    without_house_view =
+      Tracefield.Agent.new("B", "beta", "beta agent", adapter: PromptCaptureMock)
+
+    Tracefield.Agent.run_turn(without_house_view, ref, 1)
+    assert_receive {:ideate_prompt, "B", "mock", prompt_without}
+    refute prompt_without =~ "HOUSE VIEW（チームのこれまでの判断方針"
+  end
+
+  test "store and distill persist v1, inject it on run2, and distill v2" do
+    scenario_path = tmp_scenario()
+
+    run1 =
+      Ideate.run_ideation(
+        scenario: scenario_path,
+        adapter_name: "mock",
+        adapter_module: Tracefield.LLM.Mock,
+        rounds: 1,
+        model: "mock",
+        memory: false,
+        store: true,
+        distill: true,
+        persist?: false
+      )
+
+    assert run1.config.house_view_injected_version == nil
+    assert run1.config.house_view_new_version == 1
+    assert run1.config.distill
+    assert run1.distillation.house_view.meta.house_view_version == 1
+    assert File.read!(Path.join(scenario_path, "store.jsonl")) =~ ~s("type":"house_view")
+
+    run2 =
+      Ideate.run_ideation(
+        scenario: scenario_path,
+        adapter_name: "mock",
+        adapter_module: Tracefield.LLM.Mock,
+        rounds: 1,
+        model: "mock",
+        memory: false,
+        store: true,
+        distill: true,
+        persist?: false
+      )
+
+    assert run2.config.house_view_injected_version == 1
+    assert run2.config.house_view_new_version == 2
+    assert run2.distillation.house_view.meta.house_view_version == 2
+
+    house_views = Enum.filter(run2.entries, &(&1.type == :house_view))
+    assert Enum.any?(house_views, &(&1.meta.house_view_version == 1 and &1.status == :superseded))
+    assert Enum.any?(house_views, &(&1.meta.house_view_version == 2 and &1.status == :active))
+  end
+
   defp tmp_scenario do
     root =
       Path.join(System.tmp_dir!(), "tracefield-scenario-#{System.unique_integer([:positive])}")

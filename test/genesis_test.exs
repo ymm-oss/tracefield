@@ -8,6 +8,13 @@ defmodule Tracefield.GenesisTest do
   alias Tracefield.Meta
   alias Tracefield.Reference
 
+  defmodule DistillErrorMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(_messages, _opts), do: {:error, :distill_failed}
+  end
+
   test "detect finds a cross-cluster unclaimed attractor" do
     {:ok, meta} = Reference.start_link()
 
@@ -171,6 +178,95 @@ defmodule Tracefield.GenesisTest do
     assert high.alignment > low.alignment
     assert Map.keys(high.per_author) |> Enum.sort() == ["CARE_LENS", "OPS_LENS"]
     assert high.member_diversity > 0.0
+  end
+
+  test "Culture.distill selects active decision-like entries by citation count then newest" do
+    {:ok, ref} = Reference.start_link()
+
+    [_chunk] = Reference.absorb(ref, [%{type: :chunk, text: "chunk excluded"}], "TASK")
+    [_procedure] = Reference.absorb(ref, [%{type: :procedure, text: "procedure excluded"}], "FAC")
+    [_genesis] = Reference.absorb(ref, [%{type: :genesis, text: "genesis excluded"}], "GENESIS")
+    [a] = Reference.absorb(ref, [%{type: :belief, text: "alpha source"}], "A")
+    [b] = Reference.absorb(ref, [%{type: :decision, text: "beta source"}], "B")
+    [c] = Reference.absorb(ref, [%{type: :question, text: "gamma source newest"}], "C")
+
+    [_inactive] =
+      Reference.absorb(ref, [%{type: :belief, status: :retracted, text: "old"}], "OLD")
+
+    Reference.absorb(ref, [%{text: "cites beta", citations: [b.id]}], "X")
+    Reference.absorb(ref, [%{text: "cites beta again", citations: [b.id]}], "Y")
+    Reference.absorb(ref, [%{text: "cites gamma", citations: [c.id]}], "Z")
+    Reference.absorb(ref, [%{text: "cites gamma again", citations: [c.id]}], "W")
+    Reference.absorb(ref, [%{text: "cites alpha", citations: [a.id]}], "V")
+
+    assert {:ok, house_view} = Culture.distill(ref, limit: 2)
+
+    assert house_view.type == :house_view
+    assert house_view.author == "CULTURE"
+    assert house_view.meta.house_view_version == 1
+    assert house_view.citations == [c.id, b.id]
+    assert house_view.text == "house view v1:\n- gamma source newest\n- beta source"
+  end
+
+  test "Culture.distill versions house views and supersedes the predecessor" do
+    {:ok, ref} = Reference.start_link()
+    Reference.absorb(ref, [%{text: "durable team judgment"}], "A")
+
+    assert {:ok, v1} = Culture.distill(ref)
+    assert Culture.house_view(ref).id == v1.id
+    assert {:ok, v2} = Culture.distill(ref)
+
+    assert v2.meta.house_view_version == 2
+    assert List.last(v2.citations) == v1.id
+    assert Reference.get(ref, v1.id).status == :superseded
+    assert Culture.house_view(ref).id == v2.id
+  end
+
+  test "Culture.distill returns nothing_to_distill when no active candidates exist" do
+    {:ok, ref} = Reference.start_link()
+
+    Reference.absorb(ref, [%{type: :chunk, text: "task only"}], "TASK")
+    Reference.absorb(ref, [%{type: :procedure, text: "procedure only"}], "FAC")
+    Reference.absorb(ref, [%{type: :genesis, text: "genesis only"}], "GENESIS")
+
+    assert Culture.distill(ref) == {:error, :nothing_to_distill}
+  end
+
+  test "Culture.distill llm mode uses mock text and falls back to extractive on error" do
+    {:ok, ref} = Reference.start_link()
+
+    [source] =
+      Reference.absorb(ref, [%{text: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN tail"}], "A")
+
+    assert {:ok, llm_view} = Culture.distill(ref, mode: :llm, adapter: Tracefield.LLM.Mock)
+    assert llm_view.text == "mock蒸留: abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"
+    assert llm_view.citations == [source.id]
+
+    assert {:ok, fallback} = Culture.distill(ref, mode: :llm, adapter: DistillErrorMock)
+    assert fallback.text =~ "house view v2:"
+    assert fallback.text =~ "- abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN tail"
+  end
+
+  test "Culture.distill provenance is governed by retract closure and re-distill excludes retracted source" do
+    {:ok, ref} = Reference.start_link()
+    [bad] = Reference.absorb(ref, [%{text: "bad source should disappear"}], "A")
+    [good] = Reference.absorb(ref, [%{text: "good source remains"}], "B")
+
+    assert {:ok, v1} = Culture.distill(ref)
+    assert v1.citations == [good.id, bad.id]
+
+    closure = Reference.retract(ref, bad.id)
+    assert Enum.any?(closure, &(&1.id == v1.id))
+
+    Reference.quarantine(ref, Enum.map(closure, & &1.id))
+    assert Culture.house_view(ref) == nil
+
+    assert {:ok, v2} = Culture.distill(ref)
+    assert v2.meta.house_view_version == 2
+    refute bad.id in v2.citations
+    assert good.id in v2.citations
+    refute v2.text =~ "bad source should disappear"
+    assert v2.text =~ "good source remains"
   end
 
   test "genesis demo prints detection, exclusion reasons, birth certificate, scaffold, and transmission" do
