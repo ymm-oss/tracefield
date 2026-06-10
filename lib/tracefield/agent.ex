@@ -17,10 +17,12 @@ defmodule Tracefield.Agent do
         domain: [type: :string, required: true],
         desc: [type: :string, required: true],
         anchor: [type: :string, default: ""],
+        reference_docs: [type: :any, default: []],
         private_doc: [type: :string, default: ""],
         private_memory: [type: :string, default: ""],
         k_s: [type: :integer, default: 2],
         adapter: [type: :any, default: Tracefield.LLM.Mock],
+        cli: [type: :any, default: nil],
         model: [type: :string, default: "mock"],
         temperature: [type: :float, default: 0.4],
         seed: [type: :integer, default: 0],
@@ -49,6 +51,7 @@ defmodule Tracefield.Agent do
 
     @impl true
     def run(%{reference: reference, round: round} = params, %{state: state}) do
+      state = %{state | reference_docs: active_reference_docs(reference, state.reference_docs)}
       note = Map.get(params, :note, "")
 
       retrieved =
@@ -61,13 +64,16 @@ defmodule Tracefield.Agent do
 
       procedure = procedure_entry(reference, state.procedure_id)
       presented_ids = MapSet.new(Enum.map(retrieved, & &1.id))
+      reference_doc_ids = MapSet.new(Enum.map(state.reference_docs, &doc_id/1))
       perception = perception_log(query(state), retrieved)
 
       entries =
         state
         |> deliberate(round, retrieved, procedure, note)
         |> Enum.take(2)
-        |> Enum.map(&sanitize_entry(&1, presented_ids, state, round, procedure))
+        |> Enum.map(
+          &sanitize_entry(&1, presented_ids, reference_doc_ids, state, round, procedure)
+        )
         |> Enum.reject(&(&1.text == ""))
 
       absorbed = Tracefield.Reference.absorb(reference, entries, state.id)
@@ -83,6 +89,22 @@ defmodule Tracefield.Agent do
     end
 
     defp query(state), do: Enum.join([state.anchor, state.domain], "\n")
+
+    defp active_reference_docs(reference, fallback_docs) do
+      docs =
+        reference
+        |> Tracefield.Reference.all()
+        |> Enum.filter(&(&1.type == :chunk and &1.author == "DOCS" and &1.status == :active))
+        |> Enum.map(fn entry ->
+          %{
+            id: entry.id,
+            file: Map.get(entry.meta, :file, Map.get(entry.meta, "file")),
+            text: entry.text
+          }
+        end)
+
+      if docs == [], do: List.wrap(fallback_docs), else: docs
+    end
 
     defp procedure_entry(_reference, nil), do: nil
 
@@ -109,12 +131,15 @@ defmodule Tracefield.Agent do
         }
       ]
 
-      opts = [
-        adapter: state.adapter,
-        model: state.model,
-        temperature: state.temperature,
-        seed: state.seed + round * 100
-      ]
+      opts =
+        [
+          adapter: state.adapter,
+          model: state.model,
+          temperature: state.temperature,
+          seed: state.seed + round * 100,
+          cli: state.cli
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
       case Tracefield.LLM.complete(messages, opts) do
         {:ok, content} -> parse_entries(content)
@@ -143,6 +168,8 @@ defmodule Tracefield.Agent do
       TASK:
       #{state.anchor}
 
+      #{format_reference_docs(state.reference_docs)}
+
       AGENT #{state.id}
       DOMAIN #{state.domain}
       DESC #{state.desc}
@@ -164,6 +191,23 @@ defmodule Tracefield.Agent do
     defp format_note(nil), do: ""
     defp format_note(""), do: ""
     defp format_note(note), do: "\n\n#{String.trim(note)}"
+
+    defp format_reference_docs([]), do: "REFERENCE DOCUMENTS（設計判断はここを引用せよ）:\n(none)"
+
+    defp format_reference_docs(docs) do
+      body =
+        docs
+        |> List.wrap()
+        |> Enum.map_join("\n\n", fn doc ->
+          id = Map.get(doc, :id, Map.get(doc, "id", ""))
+          file = Map.get(doc, :file, Map.get(doc, "file", ""))
+          text = Map.get(doc, :text, Map.get(doc, "text", ""))
+
+          "DOC #{id} file=#{file}\n#{text}"
+        end)
+
+      "REFERENCE DOCUMENTS（設計判断はここを引用せよ）:\n#{body}"
+    end
 
     defp format_private_memory(memory) do
       body =
@@ -217,7 +261,7 @@ defmodule Tracefield.Agent do
 
     defp parse_entries(_content), do: []
 
-    defp sanitize_entry(entry, presented_ids, state, round, procedure) do
+    defp sanitize_entry(entry, presented_ids, reference_doc_ids, state, round, procedure) do
       %{
         type: Map.get(entry, "type", Map.get(entry, :type, "belief")),
         text: Map.get(entry, "text", Map.get(entry, :text, "")) |> to_string() |> String.trim(),
@@ -226,17 +270,21 @@ defmodule Tracefield.Agent do
           |> Map.get("citations", Map.get(entry, :citations, []))
           |> List.wrap()
           |> Enum.map(&to_string/1)
-          |> Enum.filter(&allowed_citation?(&1, presented_ids, procedure))
+          |> Enum.filter(&allowed_citation?(&1, presented_ids, reference_doc_ids, procedure))
           |> append_procedure_id(procedure)
           |> Enum.uniq(),
         meta: %{domain: state.domain, round: round}
       }
     end
 
-    defp allowed_citation?(id, presented_ids, nil), do: MapSet.member?(presented_ids, id)
+    defp doc_id(doc), do: Map.get(doc, :id, Map.get(doc, "id"))
 
-    defp allowed_citation?(id, presented_ids, procedure) do
-      MapSet.member?(presented_ids, id) or id == procedure.id
+    defp allowed_citation?(id, presented_ids, reference_doc_ids, nil) do
+      MapSet.member?(presented_ids, id) or MapSet.member?(reference_doc_ids, id)
+    end
+
+    defp allowed_citation?(id, presented_ids, reference_doc_ids, procedure) do
+      allowed_citation?(id, presented_ids, reference_doc_ids, nil) or id == procedure.id
     end
 
     defp append_procedure_id(citations, nil), do: citations
@@ -278,10 +326,12 @@ defmodule Tracefield.Agent do
           domain: to_string(domain),
           desc: to_string(desc),
           anchor: Keyword.get(opts, :anchor, ""),
+          reference_docs: Keyword.get(opts, :reference_docs, []),
           private_doc: Keyword.get(opts, :private_doc, ""),
           private_memory: Keyword.get(opts, :private_memory, ""),
           k_s: Keyword.get(opts, :k_s, 2),
           adapter: Keyword.get(opts, :adapter, Tracefield.LLM.Mock),
+          cli: Keyword.get(opts, :cli),
           model: Keyword.get(opts, :model, "mock"),
           temperature: Keyword.get(opts, :temperature, 0.4) * 1.0,
           seed: Keyword.get(opts, :seed, 0),

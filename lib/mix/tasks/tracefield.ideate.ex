@@ -37,6 +37,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     adapter = adapter(opts, adapter_name)
     embed_adapter = Keyword.get(opts, :embed_adapter, default_embed_adapter(adapter))
     scenario_path = Keyword.fetch!(opts, :scenario)
+    cli = Keyword.get_lazy(opts, :cli, fn -> cli_config(opts) end)
 
     scenario =
       Keyword.get_lazy(opts, :loaded_scenario, fn -> load_scenario!(scenario_path, mode) end)
@@ -66,16 +67,18 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       Reference.start_link(
         embed_adapter: embed_adapter,
         embed_model: embed_model,
-        entries: [
-          %{
-            type: :chunk,
-            author: "TASK",
-            text: scenario.task,
-            meta: %{domain: "task"}
-          }
-        ]
+        entries:
+          [
+            %{
+              type: :chunk,
+              author: "TASK",
+              text: scenario.task,
+              meta: %{domain: "task"}
+            }
+          ] ++ doc_seed_entries(scenario.docs)
       )
 
+    reference_docs = reference_docs(reference)
     shared_procedure_id = absorb_procedure(reference, scenario.procedure)
 
     agent_configs =
@@ -95,10 +98,12 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       |> Enum.map(fn {config, index} ->
         Tracefield.Agent.new(config.id, config.domain, config.desc,
           anchor: scenario.task,
+          reference_docs: reference_docs,
           private_doc: config.private_doc,
           private_memory: config.private_memory,
           k_s: k_s,
           adapter: adapter,
+          cli: cli,
           model: config.model,
           temperature: temperature,
           seed: 1_000 + index,
@@ -114,7 +119,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         {agents, ideas ++ round_ideas, perception ++ round_perception}
       end)
 
-    correction = maybe_correct(Keyword.get(opts, :correct), agents, reference, rounds + 1)
+    correction =
+      maybe_correct(Keyword.get(opts, :correct), agents, reference, agent_configs, rounds + 1)
+
     repair_ideas = if correction, do: Map.get(correction, :repair_entries, []), else: []
     repair_perception = if correction, do: Map.get(correction, :perception, []), else: []
 
@@ -129,7 +136,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         judge_adapter: adapter,
         judge_model: model,
         temperature: temperature,
-        seed: 80_000
+        seed: 80_000,
+        cli: cli
       )
 
     concerns_by_agent = concerns_by_agent(ideas)
@@ -214,9 +222,50 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       path: path,
       task: task,
       agents: agents,
+      docs: load_docs(path),
       procedure: procedure,
       procedure_source: procedure_source
     }
+  end
+
+  defp load_docs(path) do
+    docs_dir = Path.join(path, "docs")
+
+    if File.dir?(docs_dir) do
+      docs_dir
+      |> Path.join("*.md")
+      |> Path.wildcard()
+      |> Enum.sort()
+      |> Enum.map(fn path ->
+        %{file: Path.basename(path), text: File.read!(path)}
+      end)
+    else
+      []
+    end
+  end
+
+  defp doc_seed_entries(docs) do
+    Enum.map(docs, fn doc ->
+      %{
+        type: :chunk,
+        author: "DOCS",
+        text: doc.text,
+        meta: %{file: doc.file}
+      }
+    end)
+  end
+
+  defp reference_docs(reference) do
+    reference
+    |> Reference.all()
+    |> Enum.filter(&(&1.type == :chunk and &1.author == "DOCS"))
+    |> Enum.map(fn entry ->
+      %{
+        id: entry.id,
+        file: Map.get(entry.meta, :file, Map.get(entry.meta, "file")),
+        text: entry.text
+      }
+    end)
   end
 
   def cross_author_synthesis(ideas, all_entries, procedure_ids, verification \\ %{}) do
@@ -258,7 +307,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           correct: :string,
           report: :string,
           memory: :string,
-          memory_window: :integer
+          memory_window: :integer,
+          cli_cmd: :string
         ],
         aliases: [a: :adapter, m: :model, t: :temperature]
       )
@@ -282,7 +332,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       correct: Keyword.get(opts, :correct),
       report: Keyword.get(opts, :report),
       memory: opts |> Keyword.get(:memory, "true") |> parse_bool(),
-      memory_window: Keyword.get(opts, :memory_window, 10)
+      memory_window: Keyword.get(opts, :memory_window, 10),
+      cli_cmd: Keyword.get(opts, :cli_cmd)
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -478,6 +529,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Mix.shell().info("adapter: #{result.config.adapter}")
     Mix.shell().info("agents: #{format_agent_configs(result.config.agents)}")
     Mix.shell().info("")
+    print_reference_documents(result.entries)
     Mix.shell().info("Ideas")
 
     agent_order =
@@ -565,14 +617,11 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     end
   end
 
-  defp maybe_correct(nil, _agents, _reference, _repair_round), do: nil
+  defp maybe_correct(nil, _agents, _reference, _agent_configs, _repair_round), do: nil
 
-  defp maybe_correct(value, agents, reference, repair_round) do
-    target =
-      case value do
-        "auto" -> Reference.most_cited(reference)
-        id -> Reference.get(reference, id)
-      end
+  defp maybe_correct(value, agents, reference, agent_configs, repair_round) do
+    target_info = correction_target(value, reference, agent_configs)
+    target = target_info.entry
 
     if is_nil(target) do
       %{skipped: true, reason: "訂正対象なし", closure: [], repair_entries: [], perception: []}
@@ -580,8 +629,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       closure = Reference.retract(reference, target.id)
       quarantined = Reference.quarantine(reference, Enum.map(closure, & &1.id))
 
-      note =
-        "NOTE: 直前に entry #{target.id} が誤りと判明し撤回された。それに依存しない代替案を出せ。"
+      note = correction_note(target_info, target)
 
       {_agents, repair_entries, perception} =
         run_round(agents, reference, repair_round, note: note)
@@ -593,9 +641,56 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         closure_ids: Enum.map(quarantined, & &1.id),
         repair_entries: repair_entries,
         perception: perception,
-        note: note
+        note: note,
+        correction_kind: target_info.kind
       }
     end
+  end
+
+  defp correction_target("auto", reference, _agent_configs) do
+    %{kind: :entry, entry: Reference.most_cited(reference)}
+  end
+
+  defp correction_target("chunk:" <> file, reference, _agent_configs) do
+    entry =
+      reference
+      |> Reference.all()
+      |> Enum.find(fn entry ->
+        entry.type == :chunk and entry.author == "DOCS" and
+          Map.get(entry.meta, :file, Map.get(entry.meta, "file")) == file
+      end)
+
+    %{kind: :chunk, file: file, entry: entry}
+  end
+
+  defp correction_target("procedure:" <> agent_id, reference, agent_configs) do
+    procedure_id =
+      agent_configs
+      |> Enum.find_value(fn agent ->
+        if agent.id == agent_id, do: agent.procedure_id
+      end)
+
+    %{
+      kind: :procedure,
+      agent_id: agent_id,
+      entry: if(procedure_id, do: Reference.get(reference, procedure_id))
+    }
+  end
+
+  defp correction_target(id, reference, _agent_configs) do
+    %{kind: :entry, entry: Reference.get(reference, id)}
+  end
+
+  defp correction_note(%{kind: :chunk, file: file}, _target) do
+    "NOTE: 要件 #{file} が変更され撤回された。新しい前提で代替判断を出せ。"
+  end
+
+  defp correction_note(%{kind: :procedure, agent_id: agent_id}, _target) do
+    "NOTE: #{agent_id} の手続きに欠陥が見つかり撤回された。"
+  end
+
+  defp correction_note(_target_info, target) do
+    "NOTE: 直前に entry #{target.id} が誤りと判明し撤回された。それに依存しない代替案を出せ。"
   end
 
   defp plain_correction(nil, _verification, _procedure_id), do: nil
@@ -683,6 +778,10 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp parse_bool(value), do: normalize_bool(value)
 
+  defp cli_config(opts) do
+    {Keyword.get(opts, :cli_cmd, "claude"), ["-p"]}
+  end
+
   defp normalize_bool(true), do: true
   defp normalize_bool(false), do: false
   defp normalize_bool("true"), do: true
@@ -729,6 +828,22 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     end)
 
     Mix.shell().info("")
+  end
+
+  defp print_reference_documents(entries) do
+    docs = Enum.filter(entries, &(&1.type == :chunk and &1.author == "DOCS"))
+
+    if docs != [] do
+      Mix.shell().info("REFERENCE DOCUMENTS（設計判断はここを引用せよ）:")
+
+      Enum.each(docs, fn doc ->
+        file = Map.get(doc.meta, :file, Map.get(doc.meta, "file", ""))
+        Mix.shell().info("DOC #{doc.id} file=#{file}")
+        Mix.shell().info(String.trim(doc.text))
+      end)
+
+      Mix.shell().info("")
+    end
   end
 
   defp write_report!(result, path) do
@@ -860,6 +975,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp adapter_module("mock"), do: Tracefield.LLM.Mock
   defp adapter_module("ollama"), do: Tracefield.LLM.Ollama
+  defp adapter_module("cli"), do: Tracefield.LLM.CLI
   defp adapter_module(other), do: Mix.raise("unknown adapter #{inspect(other)}")
 
   defp adapter(opts, adapter_name) do
@@ -867,7 +983,11 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       Keyword.has_key?(opts, :adapter_module) ->
         Keyword.fetch!(opts, :adapter_module)
 
-      Keyword.get(opts, :adapter) in [Tracefield.LLM.Mock, Tracefield.LLM.Ollama] ->
+      Keyword.get(opts, :adapter) in [
+        Tracefield.LLM.Mock,
+        Tracefield.LLM.Ollama,
+        Tracefield.LLM.CLI
+      ] ->
         Keyword.fetch!(opts, :adapter)
 
       true ->
@@ -878,9 +998,11 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   defp adapter_name(name) when is_binary(name), do: name
   defp adapter_name(Tracefield.LLM.Mock), do: "mock"
   defp adapter_name(Tracefield.LLM.Ollama), do: "ollama"
+  defp adapter_name(Tracefield.LLM.CLI), do: "cli"
   defp adapter_name(other), do: Mix.raise("unknown adapter #{inspect(other)}")
 
   defp default_embed_adapter(Tracefield.LLM.Mock), do: Tracefield.Embed.Mock
+  defp default_embed_adapter(Tracefield.LLM.CLI), do: Tracefield.Embed.Mock
   defp default_embed_adapter(_adapter), do: Tracefield.Embed.Ollama
 
   defp aware?(true), do: true

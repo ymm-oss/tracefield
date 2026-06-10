@@ -306,7 +306,7 @@ defmodule Tracefield.LLM.Mock do
   end
 
   defp generic_private_doc_entries(agent, prompt) do
-    citations =
+    foreign_citations =
       prompt
       |> presented_foreign_entries(agent)
       |> Enum.reject(&(&1.author in ["TASK", "FACILITATOR"]))
@@ -315,6 +315,11 @@ defmodule Tracefield.LLM.Mock do
         [] -> []
       end
 
+    citations =
+      [first_doc_id(prompt), doc_id_for_file(prompt, "r3-local-only.md") | foreign_citations]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
     [
       %{
         type: "belief",
@@ -322,6 +327,22 @@ defmodule Tracefield.LLM.Mock do
         citations: citations
       }
     ]
+  end
+
+  defp first_doc_id(prompt) do
+    case Regex.run(~r/^DOC\s+(?<id>e\d+)\s+file=/m, prompt, capture: :all_names) do
+      [id] -> id
+      _ -> nil
+    end
+  end
+
+  defp doc_id_for_file(prompt, file) do
+    regex = ~r/^DOC\s+(?<id>e\d+)\s+file=#{Regex.escape(file)}$/m
+
+    case Regex.run(regex, prompt, capture: :all_names) do
+      [id] -> id
+      _ -> nil
+    end
   end
 
   defp first_private_word(doc) do
