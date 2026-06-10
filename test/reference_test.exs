@@ -49,6 +49,38 @@ defmodule Tracefield.ReferenceTest do
            |> Enum.all?(&(&1.author == "BIZ"))
   end
 
+  test "serve policy diverse returns newest author-balanced round robin excluding procedures" do
+    {:ok, ref} = Reference.start_link()
+
+    [a_old] = Reference.absorb(ref, [%{text: "a old"}], "A")
+    [b_old] = Reference.absorb(ref, [%{text: "b old"}], "B")
+    [c_old] = Reference.absorb(ref, [%{text: "c old"}], "C")
+    [a_new] = Reference.absorb(ref, [%{text: "a new"}], "A")
+    [b_new] = Reference.absorb(ref, [%{text: "b new"}], "B")
+    [_procedure] = Reference.absorb(ref, [%{type: :procedure, text: "c procedure"}], "C")
+    [c_new] = Reference.absorb(ref, [%{text: "c new"}], "C")
+    [_requester] = Reference.absorb(ref, [%{text: "requester latest"}], "REQ")
+
+    served =
+      Reference.serve(ref, "ignored for diverse",
+        k: 6,
+        exclude_author: "REQ",
+        policy: :diverse
+      )
+
+    assert Enum.map(served, & &1.id) == [
+             c_new.id,
+             b_new.id,
+             a_new.id,
+             c_old.id,
+             b_old.id,
+             a_old.id
+           ]
+
+    refute Enum.any?(served, &(&1.type == :procedure))
+    refute Enum.any?(served, &(&1.author == "REQ"))
+  end
+
   test "retract marks the target and returns active multi-hop reverse-citation closure" do
     {:ok, ref} = Reference.start_link()
 

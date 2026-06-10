@@ -56,6 +56,24 @@ defmodule Tracefield.AgentTest do
     end
   end
 
+  defmodule PromptCaptureMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, _opts) do
+      if pid = Process.whereis(__MODULE__) do
+        send(pid, {:agent_messages, messages})
+      end
+
+      {:ok,
+       Jason.encode!(%{
+         entries: [
+           %{type: "belief", text: "captured prompt state(security)", citations: []}
+         ]
+       })}
+    end
+  end
+
   test "run_turn perceives, deliberates, absorbs, and restricts citations to presented ids" do
     {:ok, ref} = Reference.start_link()
 
@@ -167,5 +185,42 @@ defmodule Tracefield.AgentTest do
     assert [%{citations: citations}] = absorbed
     assert citations == [foreign.id, procedure.id]
     assert perception.served == [%{id: foreign.id, author: "BIZ"}]
+  end
+
+  test "aware option inserts situation preamble into system prompt only when enabled" do
+    Process.register(self(), PromptCaptureMock)
+
+    {:ok, aware_ref} = Reference.start_link()
+
+    aware_agent =
+      Agent.new("SEC", "security", "security reviewer",
+        aware: true,
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(aware_agent, aware_ref, 1)
+    assert_receive {:agent_messages, aware_messages}
+
+    aware_system = hd(aware_messages).content
+    assert aware_system =~ "TRACEFIELD_AGENT_TURN\nSITUATION:"
+    assert aware_system =~ "半溶解チーム"
+    assert aware_system =~ "唯一の窓"
+
+    {:ok, unaware_ref} = Reference.start_link()
+
+    unaware_agent =
+      Agent.new("SEC", "security", "security reviewer",
+        aware: false,
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(unaware_agent, unaware_ref, 1)
+    assert_receive {:agent_messages, unaware_messages}
+
+    unaware_system = hd(unaware_messages).content
+    refute unaware_system =~ "半溶解チーム"
+    refute unaware_system =~ "唯一の窓"
   end
 end
