@@ -47,6 +47,7 @@ mise exec -- mix tracefield.ideate --scenario scenarios/<案件名> --adapter ol
 
 レポートは Markdown（アイデア＋引用✓✗＋健全性＋横断合成）。`--correct auto` を付けると
 「最も依拠された知見が誤りだったら」の撤回→隔離→代替案生成まで再現する。
+`--distill true --store true` を併用すると、終了時に house view を蒸留して次回 run の全エージェントへ有界注入する。
 
 ## 健全性メトリクスの読み方
 

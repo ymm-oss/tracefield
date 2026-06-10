@@ -20,6 +20,7 @@ defmodule Tracefield.Agent do
         reference_docs: [type: :any, default: []],
         private_doc: [type: :string, default: ""],
         private_memory: [type: :string, default: ""],
+        house_view: [type: :string, default: ""],
         k_s: [type: :integer, default: 2],
         adapter: [type: :any, default: Tracefield.LLM.Mock],
         cli: [type: :any, default: nil],
@@ -180,6 +181,8 @@ defmodule Tracefield.Agent do
 
       #{format_private_memory(state.private_memory)}
 
+      #{format_house_view(state.house_view)}
+
       PRESENTED ENTRIES:
       #{format_retrieved(retrieved)}
       #{format_procedure(procedure)}
@@ -220,6 +223,19 @@ defmodule Tracefield.Agent do
         end
 
       "PRIVATE MEMORY (あなた自身の過去の判断。経験として活かせ):\n#{body}"
+    end
+
+    defp format_house_view(house_view) do
+      house_view =
+        house_view
+        |> to_string()
+        |> String.trim()
+
+      if house_view == "" do
+        ""
+      else
+        "HOUSE VIEW（チームのこれまでの判断方針。踏まえつつ、自分の偏りからの異見も歓迎）:\n#{house_view}"
+      end
     end
 
     defp format_procedure(nil), do: ""
@@ -329,6 +345,7 @@ defmodule Tracefield.Agent do
           reference_docs: Keyword.get(opts, :reference_docs, []),
           private_doc: Keyword.get(opts, :private_doc, ""),
           private_memory: Keyword.get(opts, :private_memory, ""),
+          house_view: Keyword.get(opts, :house_view, ""),
           k_s: Keyword.get(opts, :k_s, 2),
           adapter: Keyword.get(opts, :adapter, Tracefield.LLM.Mock),
           cli: Keyword.get(opts, :cli),

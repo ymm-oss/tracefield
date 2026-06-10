@@ -21,7 +21,8 @@ defmodule Tracefield.Reference do
     :question,
     :chunk,
     :procedure,
-    :genesis
+    :genesis,
+    :house_view
   ]
   @statuses [:active, :retracted, :superseded]
 

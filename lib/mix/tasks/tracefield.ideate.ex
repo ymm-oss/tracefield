@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   @moduledoc "Run Tracefield qualitative ideation over a scenario directory."
   use Mix.Task
 
-  alias Tracefield.{Dissolution, GroundTruth, Reference}
+  alias Tracefield.{Culture, Dissolution, GroundTruth, Reference}
 
   @shortdoc "Run Tracefield ideation"
   @review_procedure """
@@ -64,6 +64,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     memory_dir = Keyword.get(opts, :memory_dir, Path.join(scenario_path, "memory"))
     store? = opts |> Keyword.get(:store, false) |> normalize_bool()
     store_path = if store?, do: Path.join(scenario_path, "store.jsonl")
+    distill? = opts |> Keyword.get(:distill, false) |> normalize_bool()
+    distill_mode = opts |> Keyword.get(:distill_mode, :extractive) |> normalize_distill_mode()
 
     {:ok, reference} =
       Reference.start_link(
@@ -86,6 +88,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
     reference_docs = reference_docs(reference)
     shared_procedure_id = absorb_procedure(reference, scenario.procedure)
+    injected_house_view = if distill?, do: Culture.house_view(reference)
+    injected_house_view_version = house_view_version(injected_house_view)
 
     agent_configs =
       build_agent_configs(
@@ -107,6 +111,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           reference_docs: reference_docs,
           private_doc: config.private_doc,
           private_memory: config.private_memory,
+          house_view: if(injected_house_view, do: injected_house_view.text, else: ""),
           k_s: k_s,
           adapter: adapter,
           cli: cli,
@@ -127,6 +132,17 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
     correction =
       maybe_correct(Keyword.get(opts, :correct), agents, reference, agent_configs, rounds + 1)
+
+    distillation =
+      maybe_distill(reference, distill?, distill_mode,
+        adapter: adapter,
+        model: model,
+        temperature: temperature,
+        seed: 90_000,
+        cli: cli,
+        embed_adapter: embed_adapter,
+        embed_model: embed_model
+      )
 
     repair_ideas = if correction, do: Map.get(correction, :repair_entries, []), else: []
     repair_perception = if correction, do: Map.get(correction, :perception, []), else: []
@@ -186,6 +202,10 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         memory_window: memory_window,
         memory_dir: memory_dir,
         store: store_config(store?, store_path, reference_stats),
+        distill: distill?,
+        distill_mode: distill_mode,
+        house_view_injected_version: injected_house_view_version,
+        house_view_new_version: distillation_version(distillation),
         agents: plain_agent_configs(agent_configs)
       },
       agents: scenario.agents,
@@ -196,6 +216,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       cross_author_synthesis: synthesis,
       perception: perception ++ repair_perception,
       correction: plain_correction(correction, verification, procedure_ids),
+      distillation: plain_distillation(distillation),
       report_path: Keyword.get(opts, :report)
     }
 
@@ -317,7 +338,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           memory: :string,
           memory_window: :integer,
           cli_cmd: :string,
-          store: :string
+          store: :string,
+          distill: :string,
+          distill_mode: :string
         ],
         aliases: [a: :adapter, m: :model, t: :temperature]
       )
@@ -343,7 +366,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       memory: opts |> Keyword.get(:memory, "true") |> parse_bool(),
       memory_window: Keyword.get(opts, :memory_window, 10),
       cli_cmd: Keyword.get(opts, :cli_cmd),
-      store: opts |> Keyword.get(:store, "false") |> parse_bool()
+      store: opts |> Keyword.get(:store, "false") |> parse_bool(),
+      distill: opts |> Keyword.get(:distill, "false") |> parse_bool(),
+      distill_mode: opts |> Keyword.get(:distill_mode, "extractive") |> normalize_distill_mode()
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -538,6 +563,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Mix.shell().info("mode: #{result.config.mode}")
     Mix.shell().info("adapter: #{result.config.adapter}")
     print_store(result.config.store)
+    print_house_view_injection(result.config)
     Mix.shell().info("agents: #{format_agent_configs(result.config.agents)}")
     Mix.shell().info("")
     print_reference_documents(result.entries)
@@ -573,6 +599,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Mix.shell().info("")
 
     print_correction(result.correction)
+    print_distillation(result.distillation)
 
     Mix.shell().info("Cross-author synthesis")
     Mix.shell().info("count: #{result.cross_author_synthesis.count}")
@@ -750,6 +777,34 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     end)
   end
 
+  defp maybe_distill(_reference, false, _mode, _opts), do: nil
+
+  defp maybe_distill(reference, true, mode, opts) do
+    case Culture.distill(reference, Keyword.put(opts, :mode, mode)) do
+      {:ok, house_view} ->
+        %{
+          house_view: house_view,
+          transmission: Culture.transmission(reference, house_view.text, opts)
+        }
+
+      {:error, reason} ->
+        %{error: reason}
+    end
+  end
+
+  defp plain_distillation(nil), do: nil
+  defp plain_distillation(%{error: reason}), do: %{error: reason}
+
+  defp plain_distillation(%{house_view: house_view, transmission: transmission}) do
+    %{
+      house_view: hd(plain_entries([house_view])),
+      transmission: transmission
+    }
+  end
+
+  defp distillation_version(%{house_view: house_view}), do: house_view_version(house_view)
+  defp distillation_version(_distillation), do: nil
+
   defp annotated_citations(entry, verification, procedure_id) do
     Enum.map(entry.citations, &citation_label(&1, entry.id, verification, procedure_id))
   end
@@ -811,6 +866,12 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   defp normalize_bool("false"), do: false
   defp normalize_bool(other), do: Mix.raise("invalid boolean #{inspect(other)}")
 
+  defp normalize_distill_mode(:extractive), do: :extractive
+  defp normalize_distill_mode(:llm), do: :llm
+  defp normalize_distill_mode("extractive"), do: :extractive
+  defp normalize_distill_mode("llm"), do: :llm
+  defp normalize_distill_mode(other), do: Mix.raise("invalid distill mode #{inspect(other)}")
+
   defp plain_agent_configs(agent_configs) do
     Enum.map(agent_configs, fn agent ->
       %{
@@ -829,6 +890,16 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   end
 
   defp print_store(_store), do: :ok
+
+  defp print_house_view_injection(%{distill: true, house_view_injected_version: nil}) do
+    Mix.shell().info("house view: なし")
+  end
+
+  defp print_house_view_injection(%{distill: true, house_view_injected_version: version}) do
+    Mix.shell().info("house view: v#{version} 注入")
+  end
+
+  defp print_house_view_injection(_config), do: :ok
 
   defp print_correction(nil), do: :ok
 
@@ -855,6 +926,27 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Enum.each(repair_entries, fn entry ->
       Mix.shell().info("[#{entry.author}] (cites: #{format_citations(entry)}) #{entry.text}")
     end)
+
+    Mix.shell().info("")
+  end
+
+  defp print_distillation(nil), do: :ok
+
+  defp print_distillation(%{error: :nothing_to_distill}) do
+    Mix.shell().info("蒸留: 対象なし")
+    Mix.shell().info("")
+  end
+
+  defp print_distillation(%{house_view: house_view, transmission: transmission}) do
+    source_ids = source_ids(house_view) |> Enum.join(",")
+
+    Mix.shell().info(
+      "蒸留: house view v#{house_view_version(house_view)} を生成（元 entries: #{source_ids}）"
+    )
+
+    Mix.shell().info(
+      "Culture.transmission: alignment=#{fmt(transmission.alignment)} member_diversity=#{fmt(transmission.member_diversity)} n=#{transmission.n}"
+    )
 
     Mix.shell().info("")
   end
@@ -980,6 +1072,39 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   defp excerpt(text) do
     text = String.trim(to_string(text))
     if String.length(text) > 48, do: String.slice(text, 0, 48) <> "...", else: text
+  end
+
+  defp house_view_version(nil), do: nil
+
+  defp house_view_version(entry) do
+    entry.meta
+    |> Map.get(:house_view_version, Map.get(entry.meta, "house_view_version"))
+    |> case do
+      version when is_integer(version) ->
+        version
+
+      version when is_binary(version) ->
+        case Integer.parse(version) do
+          {value, ""} -> value
+          _other -> nil
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp source_ids(house_view) do
+    predecessor = predecessor_id(house_view)
+    Enum.reject(house_view.citations, &(&1 == predecessor))
+  end
+
+  defp predecessor_id(house_view) do
+    previous_version = house_view_version(house_view) && house_view_version(house_view) - 1
+
+    if previous_version && previous_version > 0 do
+      List.last(house_view.citations)
+    end
   end
 
   defp entry_number("e" <> number) do
