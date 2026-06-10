@@ -63,6 +63,9 @@ defmodule Tracefield.LLM.Mock do
       String.contains?(prompt, "TRACEFIELD_AGENT_TURN") ->
         {:ok, Jason.encode!(agent_turn(prompt))}
 
+      String.contains?(prompt, "TRACEFIELD_DISCOVERY") ->
+        {:ok, Jason.encode!(discovery_judgments(prompt))}
+
       String.contains?(prompt, "TRACEFIELD_INTERSTITIAL") ->
         {:ok, Jason.encode!(interstitial_judgments(prompt))}
 
@@ -145,6 +148,37 @@ defmodule Tracefield.LLM.Mock do
     end)
   end
 
+  defp discovery_judgments(prompt) do
+    interactions =
+      ~r/^\s*(?<index>\d+)\.\s+(?<id>I\d+).*?keywords=(?<left>[a-z0-9-]+),(?<right>[a-z0-9-]+)/m
+      |> Regex.scan(prompt, capture: :all_names)
+      |> Enum.map(fn [index, _id, left, right] -> {index, left, right} end)
+
+    entries = numbered_discovery_entries(prompt)
+
+    Map.new(interactions, fn {index, left, right} ->
+      matching =
+        Enum.find(entries, fn {_entry_index, text} ->
+          String.contains?(text, left) and String.contains?(text, right)
+        end)
+
+      {index,
+       %{
+         discovered: matching != nil,
+         entry: if(matching, do: elem(matching, 0), else: nil)
+       }}
+    end)
+  end
+
+  defp numbered_discovery_entries(prompt) do
+    regex = ~r/^\s*(?<index>\d+)\.\s+entry_id=[^\s]*\s+text=(?<text>.*?)\s*$/m
+
+    regex
+    |> Regex.scan(prompt, capture: :all_names)
+    |> Enum.map(fn [index, text] -> {String.to_integer(index), String.trim(text)} end)
+    |> Enum.sort_by(fn {index, _text} -> index end)
+  end
+
   defp numbered_domain_concerns(prompt) do
     regex = ~r/^\s*(?<index>\d+)\.\s+(?<text>.*?)\s*$/m
 
@@ -188,22 +222,92 @@ defmodule Tracefield.LLM.Mock do
     foreign_entries = presented_foreign_entries(prompt, agent)
 
     entries =
-      case foreign_entries do
-        [] ->
-          own_domain_entries(agent, domain, 2)
-
-        [foreign | _] ->
-          [
-            own_domain_entries(agent, domain, 1) |> hd(),
-            %{
-              type: "belief",
-              text: cross_domain_text(domain, foreign),
-              citations: [foreign.id]
-            }
-          ]
+      case private_doc(prompt) do
+        "" -> shared_state_entries(agent, domain, foreign_entries)
+        doc -> private_doc_entries(domain, doc, foreign_entries)
       end
 
     %{entries: entries}
+  end
+
+  defp shared_state_entries(agent, domain, foreign_entries) do
+    case foreign_entries do
+      [] ->
+        own_domain_entries(agent, domain, 2)
+
+      [foreign | _] ->
+        [
+          own_domain_entries(agent, domain, 1) |> hd(),
+          %{
+            type: "belief",
+            text: cross_domain_text(domain, foreign),
+            citations: [foreign.id]
+          }
+        ]
+    end
+  end
+
+  defp private_doc_entries(domain, doc, foreign_entries) do
+    own_keywords = private_keywords(doc)
+
+    own_entry = %{
+      type: "belief",
+      text:
+        "Private document establishes #{Enum.join(own_keywords, " ")} for this review(#{Enum.join(own_keywords ++ [domain], " ")})",
+      citations: []
+    }
+
+    case contradiction_entry(own_keywords, foreign_entries, domain) do
+      nil -> [own_entry]
+      entry -> [own_entry, entry]
+    end
+  end
+
+  defp private_doc(prompt) do
+    regex = ~r/PRIVATE DOCUMENT \(yours only\):\n(?<doc>[\s\S]*?)\n\nPRESENTED ENTRIES:/
+
+    case Regex.named_captures(regex, prompt) do
+      %{"doc" => doc} -> String.trim(doc)
+      _ -> ""
+    end
+  end
+
+  defp private_keywords(doc) do
+    ~w(retention-90d delete-72h upsell-q3 access-support-only no-training-promise finetune-plan)
+    |> Enum.filter(&String.contains?(doc, &1))
+  end
+
+  defp contradiction_entry(own_keywords, foreign_entries, domain) do
+    [
+      {"retention-90d", "delete-72h"},
+      {"upsell-q3", "access-support-only"},
+      {"no-training-promise", "finetune-plan"}
+    ]
+    |> Enum.find_value(fn {left, right} ->
+      cond do
+        left in own_keywords ->
+          contradiction_for_counterpart(foreign_entries, left, right, domain)
+
+        right in own_keywords ->
+          contradiction_for_counterpart(foreign_entries, right, left, domain)
+
+        true ->
+          nil
+      end
+    end)
+  end
+
+  defp contradiction_for_counterpart(foreign_entries, own_keyword, counterpart, domain) do
+    Enum.find_value(foreign_entries, fn foreign ->
+      if String.contains?(foreign.text, counterpart) do
+        %{
+          type: "belief",
+          text:
+            "Private fact #{own_keyword} contradicts presented entry #{foreign.id} fact #{counterpart}(#{own_keyword} #{counterpart} #{domain} #{foreign.domain})",
+          citations: [foreign.id]
+        }
+      end
+    end)
   end
 
   defp agent_domain(prompt, agent) do

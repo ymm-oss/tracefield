@@ -17,6 +17,7 @@ defmodule Tracefield.Agent do
         domain: [type: :string, required: true],
         desc: [type: :string, required: true],
         anchor: [type: :string, default: ""],
+        private_doc: [type: :string, default: ""],
         k_s: [type: :integer, default: 2],
         adapter: [type: :any, default: Tracefield.LLM.Mock],
         model: [type: :string, default: "mock"],
@@ -73,7 +74,7 @@ defmodule Tracefield.Agent do
         %{
           role: "system",
           content:
-            "TRACEFIELD_AGENT_TURN\nReturn only JSON {\"entries\":[{\"type\":\"belief\",\"text\":\"...\",\"citations\":[\"e1\"]}]}. At most 2 entries. Citations must use presented ids only."
+            "TRACEFIELD_AGENT_TURN\nReturn only JSON {\"entries\":[{\"type\":\"belief\",\"text\":\"...\",\"citations\":[\"e1\"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
         },
         %{
           role: "user",
@@ -103,6 +104,9 @@ defmodule Tracefield.Agent do
       DOMAIN #{state.domain}
       DESC #{state.desc}
       ROUND #{round}
+
+      PRIVATE DOCUMENT (yours only):
+      #{state.private_doc}
 
       PRESENTED ENTRIES:
       #{format_retrieved(retrieved)}
@@ -194,6 +198,7 @@ defmodule Tracefield.Agent do
           domain: to_string(domain),
           desc: to_string(desc),
           anchor: Keyword.get(opts, :anchor, ""),
+          private_doc: Keyword.get(opts, :private_doc, ""),
           k_s: Keyword.get(opts, :k_s, 2),
           adapter: Keyword.get(opts, :adapter, Tracefield.LLM.Mock),
           model: Keyword.get(opts, :model, "mock"),

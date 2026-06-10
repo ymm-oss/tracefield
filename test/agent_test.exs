@@ -13,6 +13,25 @@ defmodule Tracefield.AgentTest do
     end
   end
 
+  defmodule PrivateDocPromptMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, _opts) do
+      prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
+
+      text =
+        if String.contains?(prompt, "PRIVATE DOCUMENT (yours only):") and
+             String.contains?(prompt, "retention-90d-private-test") do
+          "private document was available in prompt(security)"
+        else
+          ""
+        end
+
+      {:ok, Jason.encode!(%{entries: [%{type: "belief", text: text, citations: []}]})}
+    end
+  end
+
   test "run_turn perceives, deliberates, absorbs, and restricts citations to presented ids" do
     {:ok, ref} = Reference.start_link()
 
@@ -60,5 +79,30 @@ defmodule Tracefield.AgentTest do
 
     assert length(absorbed) == 2
     assert Enum.any?(absorbed, fn entry -> entry.citations == [foreign.id] end)
+  end
+
+  test "private_doc is included in prompt but not absorbed into the reference store" do
+    {:ok, ref} = Reference.start_link()
+
+    private_doc = """
+    SEC private note: retention-90d-private-test must stay prompt-only.
+    This full sentence must never be absorbed as a reference entry.
+    """
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        private_doc: private_doc,
+        adapter: PrivateDocPromptMock,
+        model: "mock"
+      )
+
+    {_agent, absorbed} = Agent.run_turn(agent, ref, 1)
+
+    assert [%{text: "private document was available in prompt(security)"}] = absorbed
+
+    stored_texts = Reference.all(ref) |> Enum.map(& &1.text)
+
+    refute Enum.any?(stored_texts, &String.contains?(&1, "retention-90d-private-test"))
+    refute Enum.any?(stored_texts, &String.contains?(&1, "This full sentence must never"))
   end
 end
