@@ -25,6 +25,7 @@
 | [`roadmap.md`](./roadmap.md) | **ロードマップ**。検証完了後の計画: 実用ツール化(モード/実データ/verify/撤回E2E)→統治ループ完成→残研究→プロダクト化、判定ゲート付き | これからの計画を知りたい |
 | [`design-reference.md`](./design-reference.md) | **Reference 設計**。ドキュメント接地＋検証可能な引用で C5 の過剰隔離(precision)を解決する再設計。Field Actor の sensitivity profile 具体化、段階的スコープ（静的→生きた） | C5 を実用化する次設計を知りたい |
 | [`design-agent.md`](./design-agent.md) | **Agent 境界の再定義**。Agent=状態+手続きの主体、LLM=無状態の器官。溶解の2次元化（状態×手続き）と統治の手続き拡張、OTP写像 | エージェントの主体モデルを知りたい |
+| [`design-cluster.md`](./design-cluster.md) | **クラスタ設計**。エージェント集合の単位と接続（projection/absorption・撤回の越境・メタ場）。半溶解性の再帰=スケールフリー化 | 複数チーム/案件横断の構想を知りたい |
 | `mvp-impl-brief*.md` / `../RUNNING.md` | codex への実装ブリーフ群と実行手順（Elixir ハーネス） | 実装の詳細・動かし方を知りたい |
 | [`pre-registration.md`](./pre-registration.md) | 事前登録書（記入式）。`[未定]` パラメータと採点基準・分析計画、設計レビュー由来の追加項目（DR-*）を凍結する | 実験を始める前に確定事項を埋める |
 

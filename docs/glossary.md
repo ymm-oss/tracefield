@@ -37,6 +37,12 @@
 
 ## B. 半溶解性の構成要素
 
+### クラスタ（cluster）— エージェント集合の単位
+エージェントの集合＋共有場（Reference store・共有手続き・蓄積来歴）＝半溶解チームの単位（ユーザー定義 2026-06-10）。
+tracefield にはクラスタが複数現れ、**クラスタ同士が繋がる**（場から場への projection/absorption）。
+クラスタは上位レベルのエージェントとして再帰する（半溶解性はスケールフリー）。詳細は [`design-cluster.md`](./design-cluster.md)。
+※測定の「クラスタリング」（C節）とは別概念。
+
 ### Field Actor（フィールドアクター）
 探索の場（field）で活動するエージェント。固定Roleとは異なり役割が硬直していない。各 Actor は **sensitivity profile** を持つ。
 
