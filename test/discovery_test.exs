@@ -33,4 +33,22 @@ defmodule Tracefield.DiscoveryTest do
     refute one_side.per_interaction["I1"]
     assert one_side.count == 0
   end
+
+  test "strict_score requires both keywords in a single entry" do
+    both =
+      Discovery.strict_score([
+        %{id: "e1", text: "retention-90d contradicts delete-72h in the same belief."}
+      ])
+
+    split =
+      Discovery.strict_score([
+        %{id: "e2", text: "retention-90d appears here."},
+        %{id: "e3", text: "delete-72h appears separately."}
+      ])
+
+    assert both.count == 1
+    assert both.per_interaction["I1"]
+    assert split.count == 0
+    refute split.per_interaction["I1"]
+  end
 end

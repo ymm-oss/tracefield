@@ -177,7 +177,7 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
   defp run_round(agents, reference, round) do
     agents
     |> Enum.reduce({[], []}, fn agent, {updated_agents, absorbed} ->
-      {agent, entries} = Tracefield.Agent.run_turn(agent, reference, round)
+      {agent, entries, _perception} = Tracefield.Agent.run_turn(agent, reference, round)
       {updated_agents ++ [agent], absorbed ++ entries}
     end)
   end

@@ -220,11 +220,12 @@ defmodule Tracefield.LLM.Mock do
     agent = dissolution_agent(prompt)
     domain = agent_domain(prompt, agent)
     foreign_entries = presented_foreign_entries(prompt, agent)
+    adopted_procedure? = String.contains?(prompt, "ADOPTED PROCEDURE:")
 
     entries =
       case private_doc(prompt) do
         "" -> shared_state_entries(agent, domain, foreign_entries)
-        doc -> private_doc_entries(domain, doc, foreign_entries)
+        doc -> private_doc_entries(domain, doc, foreign_entries, adopted_procedure?)
       end
 
     %{entries: entries}
@@ -247,7 +248,7 @@ defmodule Tracefield.LLM.Mock do
     end
   end
 
-  defp private_doc_entries(domain, doc, foreign_entries) do
+  defp private_doc_entries(domain, doc, foreign_entries, adopted_procedure?) do
     own_keywords = private_keywords(doc)
 
     own_entry = %{
@@ -257,10 +258,27 @@ defmodule Tracefield.LLM.Mock do
       citations: []
     }
 
-    case contradiction_entry(own_keywords, foreign_entries, domain) do
-      nil -> [own_entry]
-      entry -> [own_entry, entry]
+    if adopted_procedure? do
+      case contradiction_entry(own_keywords, foreign_entries, domain) do
+        nil -> [own_entry]
+        entry -> [own_entry, entry]
+      end
+    else
+      [own_entry | echo_entries(foreign_entries, domain)]
     end
+  end
+
+  defp echo_entries([], _domain), do: []
+
+  defp echo_entries([foreign | _], domain) do
+    [
+      %{
+        type: "belief",
+        text:
+          "Presented entry #{foreign.id} from #{foreign.author} is relevant context for #{domain}: #{foreign.text}",
+        citations: [foreign.id]
+      }
+    ]
   end
 
   defp private_doc(prompt) do

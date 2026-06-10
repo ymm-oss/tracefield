@@ -32,6 +32,30 @@ defmodule Tracefield.AgentTest do
     end
   end
 
+  defmodule ProcedurePromptMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, _opts) do
+      prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
+
+      entries =
+        if String.contains?(prompt, "ADOPTED PROCEDURE:\ncontrast procedure") do
+          [
+            %{
+              type: "belief",
+              text: "procedure was injected(security business-speed)",
+              citations: ["e1"]
+            }
+          ]
+        else
+          []
+        end
+
+      {:ok, Jason.encode!(%{entries: entries})}
+    end
+  end
+
   test "run_turn perceives, deliberates, absorbs, and restricts citations to presented ids" do
     {:ok, ref} = Reference.start_link()
 
@@ -50,10 +74,16 @@ defmodule Tracefield.AgentTest do
         model: "mock"
       )
 
-    {_agent, absorbed} = Agent.run_turn(agent, ref, 1)
+    {_agent, absorbed, perception} = Agent.run_turn(agent, ref, 1)
 
     assert [%{citations: citations}] = absorbed
     assert citations == [foreign.id]
+
+    assert perception == %{
+             query: "enterprise assistant\nsecurity",
+             served: [%{id: foreign.id, author: "BIZ"}]
+           }
+
     assert Reference.get(ref, hd(absorbed).id).text =~ "filtered citation"
   end
 
@@ -75,7 +105,7 @@ defmodule Tracefield.AgentTest do
         model: "mock"
       )
 
-    {_agent, absorbed} = Agent.run_turn(agent, ref, 1)
+    {_agent, absorbed, _perception} = Agent.run_turn(agent, ref, 1)
 
     assert length(absorbed) == 2
     assert Enum.any?(absorbed, fn entry -> entry.citations == [foreign.id] end)
@@ -96,7 +126,7 @@ defmodule Tracefield.AgentTest do
         model: "mock"
       )
 
-    {_agent, absorbed} = Agent.run_turn(agent, ref, 1)
+    {_agent, absorbed, _perception} = Agent.run_turn(agent, ref, 1)
 
     assert [%{text: "private document was available in prompt(security)"}] = absorbed
 
@@ -104,5 +134,38 @@ defmodule Tracefield.AgentTest do
 
     refute Enum.any?(stored_texts, &String.contains?(&1, "retention-90d-private-test"))
     refute Enum.any?(stored_texts, &String.contains?(&1, "This full sentence must never"))
+  end
+
+  test "procedure entries are injected and cited as adoption provenance" do
+    {:ok, ref} = Reference.start_link()
+
+    [foreign] =
+      Reference.absorb(
+        ref,
+        [%{text: "foreign business state", meta: %{domain: "business-speed"}}],
+        "BIZ"
+      )
+
+    [procedure] =
+      Reference.absorb(
+        ref,
+        [%{type: :procedure, text: "contrast procedure", meta: %{domain: "procedure"}}],
+        "FACILITATOR"
+      )
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        anchor: "enterprise assistant",
+        k_s: 2,
+        adapter: ProcedurePromptMock,
+        model: "mock",
+        procedure_id: procedure.id
+      )
+
+    {_agent, absorbed, perception} = Agent.run_turn(agent, ref, 1)
+
+    assert [%{citations: citations}] = absorbed
+    assert citations == [foreign.id, procedure.id]
+    assert perception.served == [%{id: foreign.id, author: "BIZ"}]
   end
 end

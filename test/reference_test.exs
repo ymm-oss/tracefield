@@ -17,6 +17,16 @@ defmodule Tracefield.ReferenceTest do
     assert Reference.get(ref, "e1") == entry
   end
 
+  test "absorb accepts procedure entries" do
+    {:ok, ref} = Reference.start_link()
+
+    [entry] =
+      Reference.absorb(ref, [%{type: :procedure, text: "contrast procedure"}], "FACILITATOR")
+
+    assert entry.type == :procedure
+    assert entry.author == "FACILITATOR"
+  end
+
   test "serve applies k, active status, exclude_author, only_author, and cosine order" do
     {:ok, ref} = Reference.start_link()
 
