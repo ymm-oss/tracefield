@@ -27,6 +27,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   end
 
   def run_ideation(opts) do
+    run_started_at = DateTime.utc_now() |> DateTime.to_iso8601()
     mode = normalize_mode(Keyword.get(opts, :mode, :converge))
     preset = mode_preset(mode)
 
@@ -57,6 +58,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       )
 
     embed_model = Keyword.get(opts, :embed_model, "nomic-embed-text")
+    memory? = opts |> Keyword.get(:memory, true) |> normalize_bool()
+    memory_window = opts |> Keyword.get(:memory_window, 10) |> max(0)
+    memory_dir = Keyword.get(opts, :memory_dir, Path.join(scenario_path, "memory"))
 
     {:ok, reference} =
       Reference.start_link(
@@ -72,21 +76,33 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         ]
       )
 
-    procedure_id = absorb_procedure(reference, scenario.procedure)
+    shared_procedure_id = absorb_procedure(reference, scenario.procedure)
+
+    agent_configs =
+      build_agent_configs(
+        scenario.agents,
+        reference,
+        model,
+        shared_procedure_id,
+        memory?,
+        memory_window,
+        memory_dir
+      )
 
     agents =
-      scenario.agents
+      agent_configs
       |> Enum.with_index()
-      |> Enum.map(fn {agent, index} ->
-        Tracefield.Agent.new(agent.id, agent.domain, agent.desc,
+      |> Enum.map(fn {config, index} ->
+        Tracefield.Agent.new(config.id, config.domain, config.desc,
           anchor: scenario.task,
-          private_doc: agent.private_doc,
+          private_doc: config.private_doc,
+          private_memory: config.private_memory,
           k_s: k_s,
           adapter: adapter,
-          model: model,
+          model: config.model,
           temperature: temperature,
           seed: 1_000 + index,
-          procedure_id: procedure_id,
+          procedure_id: config.procedure_id,
           serve_policy: serve,
           aware: aware?(aware)
         )
@@ -104,6 +120,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
     all_entries = Reference.all(reference)
     ideas = entries_for_ids(all_entries, Enum.map(main_ideas ++ repair_ideas, & &1.id))
+    procedure_ids = agent_configs |> Enum.map(& &1.procedure_id) |> Enum.reject(&is_nil/1)
+
+    append_memory!(ideas, agent_configs, mode, run_started_at, memory_dir, memory?)
 
     verification =
       Reference.verify(reference, ideas,
@@ -129,9 +148,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     metrics =
       raw_metrics
       |> Map.take([:coverage, :diversity, :collapse_rate])
-      |> Map.put(:verification_rate, verification_rate(ideas, verification, procedure_id))
+      |> Map.put(:verification_rate, verification_rate(ideas, verification, procedure_ids))
 
-    synthesis = cross_author_synthesis(ideas, all_entries, procedure_id, verification)
+    synthesis = cross_author_synthesis(ideas, all_entries, procedure_ids, verification)
 
     result = %{
       task: scenario.task,
@@ -146,16 +165,21 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         model: model,
         embed_model: embed_model,
         temperature: temperature,
-        procedure_id: procedure_id
+        procedure_id: shared_procedure_id,
+        procedure_ids: procedure_ids,
+        memory: memory?,
+        memory_window: memory_window,
+        memory_dir: memory_dir,
+        agents: plain_agent_configs(agent_configs)
       },
       agents: scenario.agents,
       entries: plain_entries(all_entries),
-      ideas: plain_entries(ideas, verification, procedure_id),
+      ideas: plain_entries(ideas, verification, procedure_ids),
       citation_verification: plain_verification(verification),
       metrics: metrics,
       cross_author_synthesis: synthesis,
       perception: perception ++ repair_perception,
-      correction: plain_correction(correction, verification, procedure_id),
+      correction: plain_correction(correction, verification, procedure_ids),
       report_path: Keyword.get(opts, :report)
     }
 
@@ -195,14 +219,15 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     }
   end
 
-  def cross_author_synthesis(ideas, all_entries, procedure_id, verification \\ %{}) do
+  def cross_author_synthesis(ideas, all_entries, procedure_ids, verification \\ %{}) do
     by_id = Map.new(all_entries, &{&1.id, &1})
+    procedure_ids = procedure_id_set(procedure_ids)
 
     items =
       ideas
       |> Enum.filter(fn idea ->
         idea.citations
-        |> Enum.reject(&(&1 == procedure_id))
+        |> Enum.reject(&MapSet.member?(procedure_ids, &1))
         |> Enum.any?(fn citation ->
           case Map.get(by_id, citation) do
             nil -> false
@@ -211,7 +236,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           end
         end)
       end)
-      |> plain_entries(verification, procedure_id)
+      |> plain_entries(verification, procedure_ids)
 
     %{count: length(items), ideas: items}
   end
@@ -231,7 +256,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           temperature: :float,
           mode: :string,
           correct: :string,
-          report: :string
+          report: :string,
+          memory: :string,
+          memory_window: :integer
         ],
         aliases: [a: :adapter, m: :model, t: :temperature]
       )
@@ -253,18 +280,25 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
       temperature: Keyword.get(opts, :temperature, preset.temperature),
       correct: Keyword.get(opts, :correct),
-      report: Keyword.get(opts, :report)
+      report: Keyword.get(opts, :report),
+      memory: opts |> Keyword.get(:memory, "true") |> parse_bool(),
+      memory_window: Keyword.get(opts, :memory_window, 10)
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp load_agent!(scenario_path, %{
-         "id" => id,
-         "domain" => domain,
-         "desc" => desc,
-         "private_doc" => private_doc_file
-       }) do
+  defp load_agent!(
+         scenario_path,
+         %{
+           "id" => id,
+           "domain" => domain,
+           "desc" => desc,
+           "private_doc" => private_doc_file
+         } = agent
+       ) do
     private_doc_path = Path.join([scenario_path, "private", private_doc_file])
+    procedure_file = Map.get(agent, "procedure")
+    procedure_path = if procedure_file, do: Path.join(scenario_path, procedure_file)
 
     %{
       id: to_string(id),
@@ -272,7 +306,11 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       desc: to_string(desc),
       private_doc_file: private_doc_file,
       private_doc_path: private_doc_path,
-      private_doc: File.read!(private_doc_path)
+      private_doc: File.read!(private_doc_path),
+      model: optional_string(Map.get(agent, "model")),
+      procedure_file: procedure_file,
+      procedure_path: procedure_path,
+      procedure: if(procedure_path, do: File.read!(procedure_path), else: nil)
     }
   end
 
@@ -280,9 +318,13 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Mix.raise("invalid agent entry #{inspect(agent)}")
   end
 
-  defp absorb_procedure(_reference, nil), do: nil
-
   defp absorb_procedure(reference, procedure_text) do
+    absorb_procedure(reference, procedure_text, %{domain: "procedure"})
+  end
+
+  defp absorb_procedure(_reference, nil, _meta), do: nil
+
+  defp absorb_procedure(reference, procedure_text, meta) do
     [procedure] =
       Reference.absorb(
         reference,
@@ -290,7 +332,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           %{
             type: :procedure,
             text: procedure_text,
-            meta: %{domain: "procedure"}
+            meta: meta
           }
         ],
         "FACILITATOR"
@@ -298,6 +340,107 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
     procedure.id
   end
+
+  defp build_agent_configs(
+         agents,
+         reference,
+         fallback_model,
+         shared_procedure_id,
+         memory?,
+         memory_window,
+         memory_dir
+       ) do
+    Enum.map(agents, fn agent ->
+      {procedure_id, procedure_source} =
+        if agent.procedure do
+          id = absorb_procedure(reference, agent.procedure, %{owner: agent.id})
+          {id, agent.procedure_file}
+        else
+          {shared_procedure_id, "shared"}
+        end
+
+      memory_entries =
+        if memory? do
+          load_memory_entries(memory_dir, agent.id, memory_window)
+        else
+          []
+        end
+
+      agent
+      |> Map.put(:model, agent.model || fallback_model)
+      |> Map.put(:procedure_id, procedure_id)
+      |> Map.put(:procedure_source, procedure_source)
+      |> Map.put(:memory_loaded, length(memory_entries))
+      |> Map.put(:private_memory, format_private_memory_entries(memory_entries))
+    end)
+  end
+
+  defp load_memory_entries(_memory_dir, _agent_id, window) when window <= 0, do: []
+
+  defp load_memory_entries(memory_dir, agent_id, window) do
+    path = memory_path(memory_dir, agent_id)
+
+    if File.exists?(path) do
+      path
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.flat_map(&decode_memory_line/1)
+      |> Enum.take(-window)
+    else
+      []
+    end
+  end
+
+  defp decode_memory_line(line) do
+    case Jason.decode(line) do
+      {:ok, %{} = entry} ->
+        [
+          %{
+            ts: Map.get(entry, "ts"),
+            mode: Map.get(entry, "mode"),
+            text: Map.get(entry, "text", "") |> to_string(),
+            citations: Map.get(entry, "citations", [])
+          }
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp format_private_memory_entries([]), do: ""
+
+  defp format_private_memory_entries(entries) do
+    entries
+    |> Enum.map_join("\n", fn entry -> "- #{entry.text}" end)
+  end
+
+  defp append_memory!(_entries, _agent_configs, _mode, _ts, _memory_dir, false), do: :ok
+
+  defp append_memory!(entries, agent_configs, mode, ts, memory_dir, true) do
+    File.mkdir_p!(memory_dir)
+    by_author = Enum.group_by(entries, & &1.author)
+
+    Enum.each(agent_configs, fn agent ->
+      content =
+        by_author
+        |> Map.get(agent.id, [])
+        |> Enum.map_join("", fn entry ->
+          Jason.encode!(%{
+            ts: ts,
+            mode: Atom.to_string(mode),
+            text: entry.text,
+            citations: entry.citations
+          }) <> "\n"
+        end)
+
+      if content != "" do
+        File.write!(memory_path(memory_dir, agent.id), content, [:append])
+      end
+    end)
+  end
+
+  defp memory_path(memory_dir, agent_id), do: Path.join(memory_dir, "#{agent_id}.jsonl")
 
   defp run_round(agents, reference, round, opts \\ []) do
     agents
@@ -333,6 +476,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Mix.shell().info("scenario: #{result.scenario_path}")
     Mix.shell().info("mode: #{result.config.mode}")
     Mix.shell().info("adapter: #{result.config.adapter}")
+    Mix.shell().info("agents: #{format_agent_configs(result.config.agents)}")
     Mix.shell().info("")
     Mix.shell().info("Ideas")
 
@@ -476,11 +620,13 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Enum.flat_map(ids, fn id -> if entry = Map.get(by_id, id), do: [entry], else: [] end)
   end
 
-  defp verification_rate(ideas, verification, procedure_id) do
+  defp verification_rate(ideas, verification, procedure_ids) do
+    procedure_ids = procedure_id_set(procedure_ids)
+
     pairs =
       for idea <- ideas,
           cited_id <- idea.citations,
-          cited_id != procedure_id do
+          not MapSet.member?(procedure_ids, cited_id) do
         {idea.id, cited_id}
       end
 
@@ -515,10 +661,45 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     "#{cited_id}#{mark}"
   end
 
-  defp citation_verified?(_citing_id, cited_id, _verification, cited_id), do: true
+  defp citation_verified?(citing_id, cited_id, verification, procedure_ids) do
+    if MapSet.member?(procedure_id_set(procedure_ids), cited_id) do
+      true
+    else
+      Map.get(verification, {citing_id, cited_id}, false)
+    end
+  end
 
-  defp citation_verified?(citing_id, cited_id, verification, _procedure_id) do
-    Map.get(verification, {citing_id, cited_id}, false)
+  defp procedure_id_set(nil), do: MapSet.new()
+  defp procedure_id_set(%MapSet{} = ids), do: ids
+
+  defp procedure_id_set(ids) when is_list(ids) do
+    ids |> Enum.reject(&is_nil/1) |> MapSet.new()
+  end
+
+  defp procedure_id_set(id), do: MapSet.new([id])
+
+  defp optional_string(nil), do: nil
+  defp optional_string(value), do: to_string(value)
+
+  defp parse_bool(value), do: normalize_bool(value)
+
+  defp normalize_bool(true), do: true
+  defp normalize_bool(false), do: false
+  defp normalize_bool("true"), do: true
+  defp normalize_bool("false"), do: false
+  defp normalize_bool(other), do: Mix.raise("invalid boolean #{inspect(other)}")
+
+  defp plain_agent_configs(agent_configs) do
+    Enum.map(agent_configs, fn agent ->
+      %{
+        id: agent.id,
+        domain: agent.domain,
+        model: agent.model,
+        procedure_id: agent.procedure_id,
+        procedure_source: agent.procedure_source,
+        memory_loaded: agent.memory_loaded
+      }
+    end)
   end
 
   defp print_correction(nil), do: :ok
@@ -570,6 +751,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       "- serve: #{result.config.serve}",
       "- aware: #{result.config.aware}",
       "",
+      "## エージェント設定",
+      report_agent_configs(result.config.agents),
+      "",
       "## タスク",
       String.trim(result.task),
       "",
@@ -604,6 +788,12 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         end)
 
       "### Round #{round}\n#{lines}"
+    end)
+  end
+
+  defp report_agent_configs(agent_configs) do
+    Enum.map_join(agent_configs, "\n", fn agent ->
+      "- #{agent.id}: model=#{agent.model}, procedure=#{agent.procedure_source}, memory=#{agent.memory_loaded}件"
     end)
   end
 
@@ -659,6 +849,12 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp format_citations(%{annotated_citations: []}), do: "-"
   defp format_citations(%{annotated_citations: citations}), do: Enum.join(citations, ",")
+
+  defp format_agent_configs(agent_configs) do
+    Enum.map_join(agent_configs, " ", fn agent ->
+      "#{agent.id}(model=#{agent.model}, proc=#{agent.procedure_source}, memory=#{agent.memory_loaded}件)"
+    end)
+  end
 
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)
 

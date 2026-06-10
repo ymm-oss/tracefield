@@ -386,7 +386,8 @@ defmodule Tracefield.LLM.Mock do
   end
 
   defp private_doc(prompt) do
-    regex = ~r/PRIVATE DOCUMENT \(yours only\):\n(?<doc>[\s\S]*?)\n\nPRESENTED ENTRIES:/
+    regex =
+      ~r/PRIVATE DOCUMENT \(yours only\):\n(?<doc>[\s\S]*?)(?:\n\nPRIVATE MEMORY \(あなた自身の過去の判断。経験として活かせ\):|\n\nPRESENTED ENTRIES:)/
 
     case Regex.named_captures(regex, prompt) do
       %{"doc" => doc} -> String.trim(doc)

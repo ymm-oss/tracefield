@@ -5,6 +5,44 @@ defmodule Tracefield.IdeateTest do
 
   @scenario_path "scenarios/housing-service"
 
+  defmodule PromptCaptureMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, opts) do
+      prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
+
+      if pid = Process.whereis(__MODULE__) do
+        send(pid, {:ideate_prompt, agent_id(prompt), Keyword.get(opts, :model), prompt})
+      end
+
+      {:ok,
+       Jason.encode!(%{
+         entries: [
+           %{
+             type: "belief",
+             text: "#{agent_id(prompt)} generated round #{prompt_round(prompt)}",
+             citations: []
+           }
+         ]
+       })}
+    end
+
+    defp agent_id(prompt) do
+      case Regex.named_captures(~r/AGENT\s+(?<agent>[A-Z0-9_-]+)/, prompt) do
+        %{"agent" => agent} -> agent
+        _ -> "UNKNOWN"
+      end
+    end
+
+    defp prompt_round(prompt) do
+      case Regex.named_captures(~r/ROUND\s+(?<round>\d+)/, prompt) do
+        %{"round" => round} -> round
+        _ -> "0"
+      end
+    end
+  end
+
   test "loads agents.json and resolves private_doc files" do
     scenario = Ideate.load_scenario!(@scenario_path)
 
@@ -33,6 +71,7 @@ defmodule Tracefield.IdeateTest do
         model: "mock",
         embed_model: "nomic-embed-text",
         temperature: 0.6,
+        memory: false,
         persist?: false
       )
 
@@ -55,6 +94,7 @@ defmodule Tracefield.IdeateTest do
         adapter_name: "mock",
         adapter_module: Tracefield.LLM.Mock,
         model: "mock",
+        memory: false,
         persist?: false
       )
 
@@ -69,6 +109,7 @@ defmodule Tracefield.IdeateTest do
         adapter_name: "mock",
         adapter_module: Tracefield.LLM.Mock,
         model: "mock",
+        memory: false,
         persist?: false
       )
 
@@ -89,6 +130,7 @@ defmodule Tracefield.IdeateTest do
         serve_policy: :similar,
         aware: 0,
         model: "mock",
+        memory: false,
         persist?: false
       )
 
@@ -118,6 +160,7 @@ defmodule Tracefield.IdeateTest do
         k_s: 3,
         correct: "auto",
         model: "mock",
+        memory: false,
         persist?: false
       )
 
@@ -147,6 +190,7 @@ defmodule Tracefield.IdeateTest do
         correct: "auto",
         report: path,
         model: "mock",
+        memory: false,
         persist?: false
       )
 
@@ -161,5 +205,205 @@ defmodule Tracefield.IdeateTest do
     assert report =~ "## 訂正（--correct 時のみ）"
     assert report =~ "✓"
     assert report =~ "✗"
+  end
+
+  test "agents.json resolves per-agent model and procedure entries" do
+    Process.register(self(), PromptCaptureMock)
+    scenario_path = tmp_scenario()
+
+    result =
+      Ideate.run_ideation(
+        scenario: scenario_path,
+        adapter_name: "mock",
+        adapter_module: PromptCaptureMock,
+        rounds: 1,
+        model: "fallback-model",
+        memory: false,
+        persist?: false
+      )
+
+    assert_receive {:ideate_prompt, "A", "model-a", _prompt}
+    assert_receive {:ideate_prompt, "B", "fallback-model", _prompt}
+
+    a_config = Enum.find(result.config.agents, &(&1.id == "A"))
+    b_config = Enum.find(result.config.agents, &(&1.id == "B"))
+
+    assert a_config.model == "model-a"
+    assert a_config.procedure_source == "procedure-a.md"
+    assert b_config.model == "fallback-model"
+    assert b_config.procedure_source == "shared"
+
+    procedure_entries = Enum.filter(result.entries, &(&1.type == :procedure))
+    assert length(procedure_entries) == 2
+
+    own_procedure = Enum.find(procedure_entries, &(get_in(&1.meta, [:owner]) == "A"))
+    shared_procedure = Enum.find(procedure_entries, &(get_in(&1.meta, [:domain]) == "procedure"))
+    assert own_procedure.id == a_config.procedure_id
+    assert shared_procedure.id == b_config.procedure_id
+
+    a_idea = Enum.find(result.ideas, &(&1.author == "A"))
+    b_idea = Enum.find(result.ideas, &(&1.author == "B"))
+    assert own_procedure.id in a_idea.citations
+    assert shared_procedure.id in b_idea.citations
+    refute shared_procedure.id in a_idea.citations
+  end
+
+  test "memory round-trips own entries only through private prompt state" do
+    Process.register(self(), PromptCaptureMock)
+    scenario_path = tmp_scenario()
+
+    memory_dir =
+      Path.join(System.tmp_dir!(), "tracefield-memory-#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf(memory_dir) end)
+
+    Ideate.run_ideation(
+      scenario: scenario_path,
+      adapter_name: "mock",
+      adapter_module: PromptCaptureMock,
+      rounds: 1,
+      model: "mock",
+      memory: true,
+      memory_dir: memory_dir,
+      persist?: false
+    )
+
+    drain_ideate_prompts()
+
+    a_memory = File.read!(Path.join(memory_dir, "A.jsonl"))
+    b_memory = File.read!(Path.join(memory_dir, "B.jsonl"))
+    assert a_memory =~ "A generated round 1"
+    refute a_memory =~ "B generated round 1"
+    assert b_memory =~ "B generated round 1"
+    refute b_memory =~ "A generated round 1"
+
+    Ideate.run_ideation(
+      scenario: scenario_path,
+      adapter_name: "mock",
+      adapter_module: PromptCaptureMock,
+      rounds: 1,
+      model: "mock",
+      memory: true,
+      memory_dir: memory_dir,
+      persist?: false
+    )
+
+    assert_receive {:ideate_prompt, "A", "model-a", a_prompt}, 1_000
+    assert_receive {:ideate_prompt, "B", "mock", b_prompt}, 1_000
+
+    assert a_prompt =~ "PRIVATE DOCUMENT (yours only):"
+    assert a_prompt =~ "PRIVATE MEMORY (あなた自身の過去の判断。経験として活かせ):"
+    assert a_prompt =~ "- A generated round 1"
+    refute a_prompt =~ "- B generated round 1"
+    assert b_prompt =~ "- B generated round 1"
+    refute b_prompt =~ "- A generated round 1"
+  end
+
+  test "memory false neither reads nor writes memory files" do
+    Process.register(self(), PromptCaptureMock)
+    scenario_path = tmp_scenario()
+
+    memory_dir =
+      Path.join(System.tmp_dir!(), "tracefield-memory-off-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(memory_dir)
+    a_path = Path.join(memory_dir, "A.jsonl")
+    File.write!(a_path, memory_line("old injected memory"))
+    on_exit(fn -> File.rm_rf(memory_dir) end)
+
+    Ideate.run_ideation(
+      scenario: scenario_path,
+      adapter_name: "mock",
+      adapter_module: PromptCaptureMock,
+      rounds: 1,
+      model: "mock",
+      memory: false,
+      memory_dir: memory_dir,
+      persist?: false
+    )
+
+    assert_receive {:ideate_prompt, "A", "model-a", a_prompt}
+    refute a_prompt =~ "old injected memory"
+    assert File.read!(a_path) == memory_line("old injected memory")
+    refute File.exists?(Path.join(memory_dir, "B.jsonl"))
+  end
+
+  test "memory window injects only the most recent entries" do
+    Process.register(self(), PromptCaptureMock)
+    scenario_path = tmp_scenario()
+
+    memory_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "tracefield-memory-window-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(memory_dir)
+
+    File.write!(
+      Path.join(memory_dir, "A.jsonl"),
+      memory_line("older memory") <> memory_line("newer memory")
+    )
+
+    on_exit(fn -> File.rm_rf(memory_dir) end)
+
+    Ideate.run_ideation(
+      scenario: scenario_path,
+      adapter_name: "mock",
+      adapter_module: PromptCaptureMock,
+      rounds: 1,
+      model: "mock",
+      memory: true,
+      memory_window: 1,
+      memory_dir: memory_dir,
+      persist?: false
+    )
+
+    assert_receive {:ideate_prompt, "A", "model-a", a_prompt}
+    assert a_prompt =~ "- newer memory"
+    refute a_prompt =~ "older memory"
+  end
+
+  defp tmp_scenario do
+    root =
+      Path.join(System.tmp_dir!(), "tracefield-scenario-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(Path.join(root, "private"))
+    File.write!(Path.join(root, "task.md"), "temporary task")
+    File.write!(Path.join(root, "procedure.md"), "shared procedure")
+    File.write!(Path.join(root, "procedure-a.md"), "procedure for A")
+
+    File.write!(
+      Path.join(root, "agents.json"),
+      Jason.encode!([
+        %{
+          id: "A",
+          domain: "alpha",
+          desc: "alpha agent",
+          private_doc: "a.md",
+          model: "model-a",
+          procedure: "procedure-a.md"
+        },
+        %{id: "B", domain: "beta", desc: "beta agent", private_doc: "b.md"}
+      ])
+    )
+
+    File.write!(Path.join([root, "private", "a.md"]), "A private document")
+    File.write!(Path.join([root, "private", "b.md"]), "B private document")
+    on_exit(fn -> File.rm_rf(root) end)
+    root
+  end
+
+  defp memory_line(text) do
+    Jason.encode!(%{ts: "2026-06-10T00:00:00Z", mode: "converge", text: text, citations: []}) <>
+      "\n"
+  end
+
+  defp drain_ideate_prompts do
+    receive do
+      {:ideate_prompt, _agent, _model, _prompt} -> drain_ideate_prompts()
+    after
+      0 -> :ok
+    end
   end
 end
