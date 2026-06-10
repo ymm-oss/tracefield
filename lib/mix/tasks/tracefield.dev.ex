@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   @moduledoc "Run the Tracefield development pipeline over an issue directory."
   use Mix.Task
 
-  alias Tracefield.{Agent, Reference}
+  alias Tracefield.{Agent, Reference, Workspace}
 
   @shortdoc "Run Tracefield dev pipeline"
   @refine_procedure """
@@ -53,12 +53,24 @@ defmodule Mix.Tasks.Tracefield.Dev do
         resume_refine(reference, actors, issue_dir, procedure_id, state, opts)
 
       state["stage"] == "design" and state["status"] == "done" ->
-        Mix.shell().info("design 完了。次: implement（未実装）")
-        print_design_done(reference, actors, issue_dir)
-        %{state: state, entries: Reference.all(reference)}
+        if Workspace.configured?(issue_dir) do
+          start_implement(reference, actors, issue_dir, state, opts)
+        else
+          Mix.shell().info("design 完了。implement を開始するには workspace.json を置いてください")
+          print_design_done(reference, actors, issue_dir)
+          %{state: state, entries: Reference.all(reference)}
+        end
 
       state["stage"] == "design" ->
         resume_design(reference, actors, issue_dir, state, opts)
+
+      state["stage"] == "implement" and state["status"] == "done" ->
+        Mix.shell().info("implement 完了。次: qa（未実装）")
+        print_implement_done(reference, actors, issue_dir, state)
+        %{state: state, entries: Reference.all(reference)}
+
+      state["stage"] == "implement" ->
+        resume_implement(reference, actors, issue_dir, state, opts)
 
       true ->
         start_refine(reference, actors, issue_dir, procedure_id, opts)
@@ -325,6 +337,377 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
         state = await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1)
         %{state: state, entries: Reference.all(reference)}
+    end
+  end
+
+  defp start_implement(reference, actors, issue_dir, state, opts) do
+    ws = Workspace.load!(issue_dir)
+
+    unless Workspace.clean?(ws) do
+      Mix.raise("workspace が clean ではありません")
+    end
+
+    approved = approved_design_decisions(reference, actors)
+
+    if approved == [] do
+      Mix.raise("承認済み設計判断がありません")
+    end
+
+    round = Map.get(state, "round", 0) + 1
+    run_organ_round(reference, actors, issue_dir, ws, round, approved, opts, nil, nil)
+    state = await_implement(reference, actors, issue_dir, ws, round, 0)
+    %{state: state, entries: Reference.all(reference)}
+  end
+
+  defp resume_implement(reference, actors, issue_dir, state, opts) do
+    ws = Workspace.load!(issue_dir)
+    round = Map.get(state, "round", 1)
+    iteration = Map.get(state, "iteration", 0)
+    human = blocking_human!(actors)
+    before_ids = entry_ids(reference)
+
+    {_agent, _absorbed, _perception} =
+      run_human_turn(reference, human, issue_dir, nil, round, implement_human_opts(reference, ws))
+
+    new_human_entries = new_entries(reference, before_ids, human.id)
+
+    cond do
+      implement_complete?(reference, actors) ->
+        change_ids = organ_change_ids(reference, ws.organ_author)
+        issue_line = issue_first_line(issue_dir)
+
+        commit_message =
+          "tracefield implement: #{issue_line} [#{Enum.join(change_ids, " ")}]"
+
+        case Workspace.apply!(ws, commit_message) do
+          {:ok, _sha} ->
+            :ok
+
+          {:error, :empty} ->
+            Mix.shell().error("warning: workspace にコミットする変更がありませんでした")
+        end
+
+        done = %{
+          "stage" => "implement",
+          "status" => "done",
+          "round" => round,
+          "iteration" => iteration
+        }
+
+        write_state!(issue_dir, done)
+        print_implement_done(reference, actors, issue_dir, done)
+        %{state: done, entries: Reference.all(reference)}
+
+      new_human_entries == [] ->
+        state = awaiting_state(issue_dir, human, round, iteration, "implement")
+        print_awaiting(issue_dir, human, "implement")
+        %{state: state, entries: Reference.all(reference)}
+
+      true ->
+        next_round = round + 1
+        comments = Enum.map_join(new_human_entries, "\n", & &1.text)
+        last_stat = latest_change_stat(reference, ws.organ_author)
+        approved_decisions = approved_design_decisions(reference, actors)
+
+        run_organ_round(
+          reference,
+          actors,
+          issue_dir,
+          ws,
+          next_round,
+          approved_decisions,
+          opts,
+          comments,
+          last_stat
+        )
+
+        state = await_implement(reference, actors, issue_dir, ws, next_round, iteration + 1)
+        %{state: state, entries: Reference.all(reference)}
+    end
+  end
+
+  defp run_organ_round(reference, _actors, issue_dir, ws, round, approved, opts, comments, last_stat) do
+    prompt = build_implement_prompt(issue_dir, reference, approved, comments, last_stat)
+    adapter = adapter_module(Keyword.get(opts, :adapter, "mock"))
+
+    {:ok, organ_output} = Workspace.implement!(ws, prompt, adapter)
+    diff = Workspace.capture_diff!(ws)
+    test_result = Workspace.run_tests!(ws)
+
+    patch_path = issue_dir |> Path.join("pending") |> Path.join("implement-r#{round}.patch")
+    File.mkdir_p!(Path.dirname(patch_path))
+    File.write!(patch_path, diff.diff)
+
+    test_label = if test_result.exit == 0, do: "green", else: "red"
+
+    [change] =
+      Reference.absorb(
+        reference,
+        %{
+          type: :change,
+          text:
+            "実装変更 r#{round}: #{diff.stat} / テスト: #{test_label} (exit #{test_result.exit}) / diff: pending/implement-r#{round}.patch",
+          citations: Enum.map(approved, & &1.id),
+          meta: %{
+            files: diff.files,
+            diff_sha: diff.sha,
+            test_exit: test_result.exit,
+            round: round,
+            organ_summary: String.slice(organ_output, 0, 400)
+          }
+        },
+        ws.organ_author
+      )
+
+    change
+  end
+
+  defp await_implement(reference, actors, issue_dir, ws, round, iteration) do
+    human = blocking_human!(actors)
+
+    {_agent, _absorbed, _perception} =
+      run_human_turn(reference, human, issue_dir, nil, round, implement_human_opts(reference, ws))
+
+    cond do
+      implement_complete?(reference, actors) ->
+        change_ids = organ_change_ids(reference, ws.organ_author)
+        issue_line = issue_first_line(issue_dir)
+
+        commit_message =
+          "tracefield implement: #{issue_line} [#{Enum.join(change_ids, " ")}]"
+
+        case Workspace.apply!(ws, commit_message) do
+          {:ok, _sha} -> :ok
+          {:error, :empty} -> Mix.shell().error("warning: workspace にコミットする変更がありませんでした")
+        end
+
+        state = %{
+          "stage" => "implement",
+          "status" => "done",
+          "round" => round,
+          "iteration" => iteration
+        }
+
+        write_state!(issue_dir, state)
+        print_implement_done(reference, actors, issue_dir, state)
+        state
+
+      true ->
+        state = awaiting_state(issue_dir, human, round, iteration, "implement")
+        print_awaiting(issue_dir, human, "implement")
+        state
+    end
+  end
+
+  defp build_implement_prompt(issue_dir, reference, approved, comments, last_stat) do
+    issue = File.read!(Path.join(issue_dir, "issue.md"))
+
+    requirements =
+      reference
+      |> Reference.all()
+      |> Enum.filter(&(&1.type == :requirement and &1.status == :active))
+      |> Enum.map_join("\n", &"#{&1.id}: #{&1.text}")
+
+    decisions =
+      approved
+      |> Enum.map_join("\n", &"#{&1.id}: #{&1.text}")
+
+    resume_section =
+      cond do
+        comments && comments != "" && last_stat && last_stat != "" ->
+          "\n\n前回のレビューコメント:\n#{comments}\n\n直前の diff stat:\n#{last_stat}\n"
+
+        comments && comments != "" ->
+          "\n\n前回のレビューコメント:\n#{comments}\n"
+
+        last_stat && last_stat != "" ->
+          "\n\n直前の diff stat:\n#{last_stat}\n"
+
+        true ->
+          ""
+      end
+
+    """
+    TRACEFIELD_IMPLEMENT
+
+    ISSUE:
+    #{issue}
+
+    承認済み要件:
+    #{requirements}
+
+    承認済み設計判断:
+    #{decisions}
+    #{resume_section}
+    あなたは実装器官。カレントディレクトリの対象リポジトリを設計判断どおりに変更せよ。git commit は行うな。変更の概要のみ出力せよ。
+    """
+    |> String.trim()
+  end
+
+  defp implement_human_opts(reference, ws) do
+    %{
+      stage: "implement",
+      approve_targets: organ_change_ids(reference, ws.organ_author),
+      ref_docs: design_reference_docs(reference)
+    }
+  end
+
+  defp approved_design_decisions(reference, actors) do
+    machine_authors =
+      actors
+      |> Enum.filter(&(&1.kind in [:llm, :cli]))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    human_ids =
+      actors
+      |> Enum.filter(&(&1.kind == :human))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    human_cited_ids =
+      reference
+      |> Reference.all()
+      |> Enum.filter(
+        &(&1.type == :decision and &1.status == :active and MapSet.member?(human_ids, &1.author))
+      )
+      |> Enum.flat_map(& &1.citations)
+      |> MapSet.new()
+
+    reference
+    |> Reference.all()
+    |> Enum.filter(
+      &(&1.type == :decision and &1.status == :active and
+          MapSet.member?(machine_authors, &1.author) and
+          MapSet.member?(human_cited_ids, &1.id))
+    )
+  end
+
+  defp organ_change_ids(reference, organ_author) do
+    reference
+    |> Reference.all()
+    |> Enum.filter(
+      &(&1.type == :change and &1.status == :active and &1.author == organ_author)
+    )
+    |> Enum.map(& &1.id)
+  end
+
+  defp implement_complete?(reference, actors) do
+    human_ids =
+      actors
+      |> Enum.filter(&(&1.kind == :human))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    change_ids =
+      reference
+      |> Reference.all()
+      |> Enum.filter(&(&1.type == :change and &1.status == :active))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    reference
+    |> Reference.all()
+    |> Enum.any?(fn entry ->
+      entry.type == :decision and entry.status == :active and
+        MapSet.member?(human_ids, entry.author) and
+        Enum.any?(entry.citations, &MapSet.member?(change_ids, &1))
+    end)
+  end
+
+  defp latest_change_stat(reference, organ_author) do
+    reference
+    |> Reference.all()
+    |> Enum.filter(
+      &(&1.type == :change and &1.status == :active and &1.author == organ_author)
+    )
+    |> Enum.sort_by(&entry_number(&1.id), :desc)
+    |> case do
+      [%{text: text} | _] ->
+        case Regex.run(~r/^実装変更 r\d+: (.+?) \/ テスト:/u, text, capture: :all_but_first) do
+          [stat] -> stat
+          _ -> ""
+        end
+
+      [] ->
+        ""
+    end
+  end
+
+  defp entry_number(id) do
+    case Integer.parse(String.trim_leading(id, "e")) do
+      {number, _rest} -> number
+      :error -> 0
+    end
+  end
+
+  defp issue_first_line(issue_dir) do
+    issue_dir
+    |> Path.join("issue.md")
+    |> File.read!()
+    |> String.split("\n", trim: true)
+    |> List.first()
+    |> Kernel.||("")
+    |> String.slice(0, 60)
+  end
+
+  defp print_implement_done(reference, _actors, issue_dir, _state) do
+    entries = Reference.all(reference)
+    ws = Workspace.load!(issue_dir)
+    changes = Enum.filter(entries, &(&1.type == :change and &1.status == :active))
+
+    {head_sha, _} =
+      System.cmd("git", ["rev-parse", "--short", "HEAD"], cd: ws.path, stderr_to_stdout: true)
+
+    Mix.shell().info("Tracefield Dev implement done")
+    Mix.shell().info("changes: #{length(changes)}")
+    Mix.shell().info("workspace HEAD: #{String.trim(head_sha)}")
+    Mix.shell().info("provenance: #{implement_provenance_chain(entries, ws.organ_author)}")
+  end
+
+  defp implement_provenance_chain(entries, organ_author) do
+    by_id = Map.new(entries, &{&1.id, &1})
+
+    change_hop =
+      entries
+      |> Enum.filter(
+        &(&1.type == :change and &1.status == :active and &1.author == organ_author)
+      )
+      |> Enum.find_value(fn change ->
+        change.citations
+        |> Enum.find(fn id ->
+          case Map.get(by_id, id) do
+            %{type: :decision} -> true
+            _other -> false
+          end
+        end)
+        |> case do
+          nil -> nil
+          decision_id -> {change, Map.fetch!(by_id, decision_id)}
+        end
+      end)
+
+    with {change, decision} <- change_hop,
+         requirement_id when not is_nil(requirement_id) <-
+           Enum.find(decision.citations, fn id ->
+             case Map.get(by_id, id) do
+               %{type: :requirement} -> true
+               _other -> false
+             end
+           end),
+         requirement <- Map.fetch!(by_id, requirement_id),
+         issue_id when not is_nil(issue_id) <-
+           Enum.find(requirement.citations, fn id ->
+             case Map.get(by_id, id) do
+               %{type: :chunk, author: "ISSUE"} -> true
+               _other -> false
+             end
+           end) do
+      issue = Map.fetch!(by_id, issue_id)
+
+      "#{change.id} change -> #{decision.id} decision -> #{requirement.id} requirement -> #{issue.id} issue chunk (#{Map.get(issue.meta, :file, "issue.md")})"
+    else
+      _missing -> "change -> decision -> requirement -> issue chunk: unavailable"
     end
   end
 

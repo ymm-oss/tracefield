@@ -91,6 +91,134 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert Jason.decode!(File.read!(Path.join(dir, "state.json")))["status"] == "done"
   end
 
+  test "implement stage runs after design with workspace, gates on human approval, and commits workspace changes" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    repo = init_workspace_repo!(dir)
+
+    drive_to_design_done!(dir)
+
+    implement1 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert implement1.state["stage"] == "implement"
+    assert implement1.state["status"] == "awaiting_human"
+
+    implement_pending = Path.join([dir, "pending", "HUMAN-implement.md"])
+    assert File.exists?(implement_pending)
+    assert File.exists?(dir |> Path.join("pending") |> Path.join("implement-r5.patch"))
+
+    approved_decision_ids =
+      implement1.entries
+      |> Enum.filter(fn entry ->
+        entry.type == :decision and entry.author == "ARCH" and entry.status == :active and
+          Enum.any?(implement1.entries, fn human ->
+            human.type == :decision and human.author == "HUMAN" and entry.id in human.citations
+          end)
+      end)
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    change =
+      Enum.find(implement1.entries, fn entry ->
+        entry.type == :change and entry.author == "ORGAN" and entry.status == :active
+      end)
+
+    assert change
+    assert Enum.all?(change.citations, &MapSet.member?(approved_decision_ids, &1))
+    assert change.text =~ "テスト: green"
+    assert File.exists?(Path.join(repo, "IMPLEMENTED.md"))
+
+    append_response!(implement_pending, "- テストの追加も検討してください\n")
+    implement2 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert implement2.state["status"] == "awaiting_human"
+    assert implement2.state["iteration"] == 1
+    assert Enum.count(implement2.entries, &(&1.type == :change and &1.author == "ORGAN")) == 2
+    assert File.exists?(dir |> Path.join("pending") |> Path.join("implement-r6.patch"))
+
+    {commits_before, 0} = System.cmd("git", ["rev-list", "--count", "HEAD"], cd: repo)
+
+    append_response!(implement_pending, "APPROVE\n")
+    implement3 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert implement3.state["stage"] == "implement"
+    assert implement3.state["status"] == "done"
+
+    change_ids =
+      implement3.entries
+      |> Enum.filter(&(&1.type == :change and &1.author == "ORGAN"))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    assert Enum.any?(implement3.entries, fn entry ->
+             entry.type == :decision and entry.author == "HUMAN" and
+               Enum.any?(entry.citations, &MapSet.member?(change_ids, &1))
+           end)
+
+    {commits_after, 0} = System.cmd("git", ["rev-list", "--count", "HEAD"], cd: repo)
+    assert String.to_integer(String.trim(commits_before)) + 1 == String.to_integer(String.trim(commits_after))
+
+    by_id = Map.new(implement3.entries, &{&1.id, &1})
+
+    human_decision =
+      Enum.find(implement3.entries, fn entry ->
+        entry.type == :decision and entry.author == "HUMAN" and
+          Enum.any?(entry.citations, &MapSet.member?(change_ids, &1))
+      end)
+
+    cited_change = Map.fetch!(by_id, hd(human_decision.citations))
+
+    cited_decision =
+      cited_change.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :decision))
+
+    requirement =
+      cited_decision.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :requirement))
+
+    issue_chunk =
+      requirement.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :chunk and &1.author == "ISSUE"))
+
+    assert cited_change.type == :change
+    assert cited_decision
+    assert requirement
+    assert issue_chunk
+
+    again = Dev.run_dev(issue: dir, adapter: "mock")
+    assert again.state["stage"] == "implement"
+    assert again.state["status"] == "done"
+  end
+
+  test "implement raises when workspace is dirty" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    repo = init_workspace_repo!(dir)
+    drive_to_design_done!(dir)
+
+    File.write!(Path.join(repo, "dirty.txt"), "uncommitted\n")
+
+    assert_raise Mix.Error, ~r/clean/, fn ->
+      Dev.run_dev(issue: dir, adapter: "mock")
+    end
+  end
+
+  test "implement change text reports red when test_cmd fails" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    _repo = init_workspace_repo!(dir, test_cmd: "false")
+    drive_to_design_done!(dir)
+
+    result = Dev.run_dev(issue: dir, adapter: "mock")
+
+    change = Enum.find(result.entries, &(&1.type == :change and &1.author == "ORGAN"))
+    assert change.text =~ "テスト: red"
+    assert change.text =~ "exit 1"
+  end
+
   test "design stage starts after refine, iterates on comments, completes with design.md and 2-hop provenance" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
@@ -185,6 +313,36 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     dir
   end
 
+  defp drive_to_design_done!(dir) do
+    Dev.run_dev(issue: dir, adapter: "mock")
+    append_response!(Path.join([dir, "pending", "HUMAN-refine.md"]), "APPROVE\n")
+    Dev.run_dev(issue: dir, adapter: "mock")
+    Dev.run_dev(issue: dir, adapter: "mock")
+    append_response!(Path.join([dir, "pending", "HUMAN-design.md"]), "APPROVE\n")
+    Dev.run_dev(issue: dir, adapter: "mock")
+  end
+
+  defp init_workspace_repo!(issue_dir, opts \\ []) do
+    test_cmd = Keyword.get(opts, :test_cmd, "true")
+    repo = Path.join(issue_dir, "workspace-repo")
+    File.mkdir_p!(repo)
+    git!(repo, ["init"])
+    File.write!(Path.join(repo, "README.md"), "initial\n")
+    git!(repo, ["add", "README.md"])
+    git!(repo, ["-c", "user.email=t@tracefield", "-c", "user.name=tracefield", "commit", "-m", "init"])
+
+    File.write!(
+      Path.join(issue_dir, "workspace.json"),
+      Jason.encode!(%{
+        "path" => "workspace-repo",
+        "test_cmd" => test_cmd,
+        "organ" => %{"cmd" => "true", "args" => [], "author" => "ORGAN"}
+      })
+    )
+
+    repo
+  end
+
   defp write_issue_files!(dir) do
     File.mkdir_p!(Path.join(dir, "docs"))
     File.write!(Path.join(dir, "issue.md"), "CLI駆動の詳細化パイプラインを実装する")
@@ -203,5 +361,10 @@ defmodule Mix.Tasks.Tracefield.DevTest do
   defp append_response!(pending, response) do
     content = File.read!(pending)
     File.write!(pending, content <> "\n" <> response)
+  end
+
+  defp git!(path, args) do
+    {output, 0} = System.cmd("git", args, cd: path, stderr_to_stdout: true)
+    output
   end
 end
