@@ -95,6 +95,19 @@ Impact Recall / Precision の分母を定める「真に影響を受けた集合
 ### 相互作用影響（interaction effect）
 反実仮想再実行が完全には捉えられない限界領域。複数入力の組み合わせで初めて生じる影響、遅延して現れる影響、除去で探索経路全体が変わる影響など。
 
+### クラスタリング / dedup（claim・懸念の同一性の単位）
+run 内/横断で「意味的に等価な主張」を束ね、coverage・diversity・接地真実の**分母の単位**を与える層。
+**現在は2方式の併用**（ラインによって異なる）:
+
+| ライン | 方式 | 理由 |
+| --- | --- | --- |
+| **汚染測定**（GroundTruth / remeasure / phase1） | **LLM クラスタリング**（`Normalize.cluster/2`、意味的・固定タクソノミーなし） | 創発を潰さないため（brief-2）。ただし粒度が本質的に不安定（過分割↔過マージ、DR-2）で、主役は**命題アンカー型スタンス測定**に移行済み |
+| **協働・ideate**（Dissolution / hetero / ideate） | **embedding dedup**（cos ≥ 0.85 を同一視、`nomic-embed-text`、決定的） | LLM クラスタのパース失敗・粒度ドリフトによる計器故障（§9b）を根絶するため（experiment-core v2 §8 で移行） |
+
+**経緯の要点**: 意味的クラスタ採用（brief-2）→ 積極マージ・探索/測定分離（brief-3）→ topic-cap で recall 1.0→0 に劣化し revert（findings-mvp）→
+実験計器としては embedding ベース（coverage=dedup 数、diversity=1−sym-mean-max-cos、collapse_rate=cos>0.9 率）へ全面移行（brief-8）。
+**教訓**: クラスタ粒度の LLM 判定は本質的に不安定 ── 決定的指標を一次に、LLM 判定は二次に（conclusions §4）。
+
 ---
 
 ## D. アウトカム指標
