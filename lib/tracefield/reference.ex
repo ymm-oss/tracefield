@@ -43,6 +43,20 @@ defmodule Tracefield.Reference do
     GenServer.call(ref, {:quarantine, List.wrap(ids)})
   end
 
+  def export(ref, ids) do
+    GenServer.call(ref, {:export, List.wrap(ids)})
+  end
+
+  def import(ref, entries, source_cluster) when is_list(entries) do
+    GenServer.call(ref, {:import, entries, source_cluster})
+  end
+
+  def import(ref, entry, source_cluster), do: import(ref, [entry], source_cluster)
+
+  def propagate_retractions(ref, source_cluster, source_entries) do
+    GenServer.call(ref, {:propagate_retractions, source_cluster, List.wrap(source_entries)})
+  end
+
   def most_cited(ref, opts \\ []) do
     GenServer.call(ref, {:most_cited, opts})
   end
@@ -209,6 +223,75 @@ defmodule Tracefield.Reference do
     {:reply, quarantined, %{state | entries: entries}}
   end
 
+  def handle_call({:export, ids}, _from, state) do
+    ids = ids |> Enum.map(&to_string/1) |> MapSet.new()
+
+    exported =
+      state.entries
+      |> Enum.filter(&MapSet.member?(ids, &1.id))
+      |> Enum.map(&plain_entry/1)
+
+    {:reply, exported, state}
+  end
+
+  def handle_call({:import, entries, source_cluster}, _from, state) do
+    source_cluster = to_string(source_cluster)
+    normalized = Enum.map(entries, &normalize_exported_entry/1)
+    {remap, next_id} = import_remap(normalized, source_cluster, state.entries, state.next_id)
+
+    {copies, new_entries} =
+      Enum.map_reduce(normalized, [], fn exported, new_entries ->
+        source_id = exported.id
+
+        case find_source_copy(state.entries, source_cluster, source_id) do
+          nil ->
+            copy = imported_copy(exported, source_cluster, Map.fetch!(remap, source_id), remap)
+            {copy, new_entries ++ [copy]}
+
+          existing ->
+            {existing, new_entries}
+        end
+      end)
+
+    persist_absorbs!(state, new_entries)
+
+    {:reply, copies, %{state | entries: state.entries ++ new_entries, next_id: next_id}}
+  end
+
+  def handle_call({:propagate_retractions, source_cluster, source_entries}, _from, state) do
+    source_cluster = to_string(source_cluster)
+
+    {results, entries} =
+      source_entries
+      |> Enum.map(&normalize_exported_entry/1)
+      |> Enum.filter(&(&1.status in [:retracted, :superseded]))
+      |> Enum.reduce({[], state.entries}, fn source_entry, {results, entries} ->
+        case find_source_copy(entries, source_cluster, source_entry.id) do
+          %Entry{status: :active} = copy ->
+            closure = closure(entries, copy.id)
+            entries = put_entry_status(entries, copy.id, :retracted)
+            persist_status!(state, copy.id, :retracted)
+
+            closure_ids = Enum.map(closure, & &1.id)
+            entries = quarantine_entries(entries, closure_ids)
+
+            closure_ids
+            |> Enum.each(&persist_status!(state, &1, :superseded))
+
+            copy = %{copy | status: :retracted}
+            quarantined = entries_for_ids(entries, closure_ids)
+            result = %{copy: copy, source_id: source_entry.id, closure: quarantined}
+
+            {results ++ [result], entries}
+
+          _other ->
+            {results, entries}
+        end
+      end)
+
+    {:reply, results, %{state | entries: entries}}
+  end
+
   def handle_call({:most_cited, opts}, _from, state) do
     min_count = Keyword.get(opts, :min_count, 1)
 
@@ -295,6 +378,88 @@ defmodule Tracefield.Reference do
       meta: normalize_meta(entry_value(entry, :meta, %{}))
     }
   end
+
+  defp normalize_exported_entry(entry) do
+    %{
+      id: entry_value(entry, :id, nil) |> to_string(),
+      type: normalize_type(entry_value(entry, :type, :belief)),
+      author: entry_value(entry, :author, "seed") |> to_string(),
+      version: normalize_version(entry_value(entry, :version, 1)),
+      status: normalize_status(entry_value(entry, :status, :active)),
+      text: entry_value(entry, :text, "") |> to_string(),
+      citations: normalize_citations(entry_value(entry, :citations, [])),
+      embedding: normalize_embedding(entry_value(entry, :embedding, [])),
+      meta: normalize_meta(entry_value(entry, :meta, %{}))
+    }
+  end
+
+  defp import_remap(entries, source_cluster, existing_entries, next_id) do
+    Enum.reduce(entries, {%{}, next_id}, fn entry, {remap, next_id} ->
+      cond do
+        Map.has_key?(remap, entry.id) ->
+          {remap, next_id}
+
+        existing = find_source_copy(existing_entries, source_cluster, entry.id) ->
+          {Map.put(remap, entry.id, existing.id), next_id}
+
+        true ->
+          {Map.put(remap, entry.id, "e#{next_id}"), next_id + 1}
+      end
+    end)
+  end
+
+  defp imported_copy(exported, source_cluster, id, remap) do
+    {citations, unresolved} =
+      Enum.reduce(exported.citations, {[], []}, fn citation, {citations, unresolved} ->
+        case Map.fetch(remap, citation) do
+          {:ok, copy_id} -> {[copy_id | citations], unresolved}
+          :error -> {citations, [citation | unresolved]}
+        end
+      end)
+
+    unresolved = Enum.reverse(unresolved)
+
+    meta =
+      exported.meta
+      |> Map.merge(%{source_cluster: source_cluster, source_id: exported.id})
+      |> merge_unresolved_citations(unresolved)
+
+    %Entry{
+      id: id,
+      type: exported.type,
+      author: "#{source_cluster}/#{exported.author}",
+      version: exported.version,
+      status: exported.status,
+      text: exported.text,
+      citations: citations |> Enum.reverse() |> Enum.uniq(),
+      embedding: exported.embedding,
+      meta: meta
+    }
+  end
+
+  defp merge_unresolved_citations(meta, []), do: meta
+
+  defp merge_unresolved_citations(meta, unresolved) do
+    existing = meta |> entry_value(:unresolved_citations, []) |> normalize_citations()
+    Map.put(meta, :unresolved_citations, Enum.uniq(existing ++ unresolved))
+  end
+
+  defp find_source_copy(entries, source_cluster, source_id) do
+    source_cluster = to_string(source_cluster)
+    source_id = to_string(source_id)
+
+    Enum.find(entries, fn entry ->
+      meta_value(entry.meta, :source_cluster) == source_cluster and
+        meta_value(entry.meta, :source_id) == source_id
+    end)
+  end
+
+  defp meta_value(meta, key) when is_map(meta) do
+    value = Map.get(meta, key, Map.get(meta, to_string(key)))
+    if is_nil(value), do: nil, else: to_string(value)
+  end
+
+  defp meta_value(_meta, _key), do: nil
 
   defp find_existing_seed(entries, normalized) do
     Enum.find(entries, fn entry ->
@@ -429,6 +594,23 @@ defmodule Tracefield.Reference do
       %Entry{id: ^id} = entry -> %{entry | status: status}
       entry -> entry
     end)
+  end
+
+  defp quarantine_entries(entries, ids) do
+    ids = ids |> Enum.map(&to_string/1) |> MapSet.new()
+
+    Enum.map(entries, fn
+      %Entry{id: id, status: :active} = entry ->
+        if MapSet.member?(ids, id), do: %{entry | status: :superseded}, else: entry
+
+      entry ->
+        entry
+    end)
+  end
+
+  defp entries_for_ids(entries, ids) do
+    ids = ids |> Enum.map(&to_string/1) |> MapSet.new()
+    Enum.filter(entries, &MapSet.member?(ids, &1.id))
   end
 
   defp next_restored_id(entries) do

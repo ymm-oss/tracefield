@@ -65,11 +65,11 @@
 - **行き先②（コンサル）**: 案件ごとにクラスタ＋全社ナレッジのメタ場。
   案件の学び（匿名化済み）をメタ場へ projection → 他案件が吸収（出所つき）。クライアント情報の訂正は写し先まで波及。
 
-## 6. 実装への距離
+## 6. 実装への距離 → **最小実装済み（brief-18）**
 
 store は既に per-scenario のファイル（`store.jsonl`）なので、最小実装は近い:
-- `Reference.export(ref, ids) → [plain entries]` / `Reference.import(ref, entries, source_cluster)`（meta 付与・引用再マップ・冪等）
-- 撤回の越境: 輸入側が `source_cluster/source_id` で原本の status を照会（または撤回イベントのログ交換）→ 写しを retract → 通常の閉包隔離。
+- ✅ `Reference.export/import`（author="src/orig" 合成・source_cluster/source_id meta・バッチ内引用再マップ・バッチ外は meta.unresolved_citations・冪等・embedding 再利用・persist 対応）
+- ✅ `Reference.propagate_retractions`（source の retracted/superseded を写しへ反映 → 閉包隔離。persist で再起動後も保持）＋ `mix tracefield.bridge`（--export/--sync/--demo）。
 - メタ場 = もう1つの Reference に各クラスタの代表 entries を import するだけ（同一機構の再利用）。
 
 ## 7. 未解決の設計問題（正直に）
