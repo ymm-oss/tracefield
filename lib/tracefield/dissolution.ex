@@ -168,6 +168,7 @@ defmodule Tracefield.Dissolution do
     embed_model = Keyword.get(opts, :embed_model, "nomic-embed-text")
     judge_adapter = Keyword.get(opts, :judge_adapter, adapter)
     judge_model = Keyword.get(opts, :judge_model, model)
+    measure_icc? = Keyword.get(opts, :measure_icc, true)
 
     refs = concern_refs(concerns_by_agent)
 
@@ -182,12 +183,16 @@ defmodule Tracefield.Dissolution do
     {representatives, assignments} = dedup(embedded_refs)
 
     judgments =
-      judge_interstitial(representatives,
-        adapter: judge_adapter,
-        model: judge_model,
-        temperature: temperature,
-        seed: seed + 60_000
-      )
+      if measure_icc? do
+        judge_interstitial(representatives,
+          adapter: judge_adapter,
+          model: judge_model,
+          temperature: temperature,
+          seed: seed + 60_000
+        )
+      else
+        %{}
+      end
 
     %{
       coverage: length(representatives),
