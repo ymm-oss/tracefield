@@ -21,6 +21,7 @@ defmodule Tracefield.Reference do
     :question,
     :requirement,
     :answer,
+    :change,
     :chunk,
     :procedure,
     :genesis,
