@@ -8,8 +8,10 @@
 
 1. **端から端までの provenance**: QA 判定 → 実装変更 → 設計判断 → 要件 → Issue が全て citation で繋がる。
    **途中で要件が変わったら、依存する設計判断・実装タスクが閉包隔離され、修復が走る**（§2-2 で実証済みの機構をパイプライン全長に）。
-2. **HITL は系の外の承認ボタンではなく、第一級の著者**: 人間の回答・承認・差し戻しは `author: "HUMAN"` の
-   **citable entry** として store に入る（誰の判断に基づくかが機械の判断と同格に追える）。
+2. **HITL = 人間 Actor のターン（ANT 的対称性、2026-06-11 改訂）**: 人間は系の外の承認者ではなく、
+   **器官が人間であるだけの Actor**（[`design-agent.md`](./design-agent.md) §10）。gate は特別な機構ではなく
+   「その stage の名簿に人間 Actor がいて、手続きが『レビューし承認/修正せよ』である」こと。
+   人間の回答・承認も citable entry ── **誤った前提での承認の撤回 → 閉包隔離**も同じ機構で扱える（統治の対称性）。
 3. **多レンズの接地**: 詳細化も設計も QA も、偏りを持つエージェント群が文書チャンクに引用付きで行う（既実証）。
 4. **健全性の常時計測**: 各 stage の diversity/verification/文脈予算が測られる。
 
@@ -30,9 +32,13 @@ issue.md（入力）
                              → pass: 完了 / fail: 失敗を note にして implement へ差し戻し
 ```
 
-- **gate の実装（v1）**: stage ごとの CLI 実行 ＋ 承認ファイル。各 stage は `pending/` に
-  レビュー用 Markdown を書き、人間が編集・承認（`--approve` または承認マーカー）すると次 stage が解禁。
-  人間の編集・回答は **HUMAN entries として absorb**（差分も記録）。
+- **gate の実装（v1）= 人間 Actor の非同期ターン**: 人間 Actor の番が来たら、エージェントと同じプロンプト一式
+  （TASK・REFERENCE DOCUMENTS・PRESENTED ENTRIES…）を `pending/<actor>-<stage>.md` に**人間向けに整形して出力**し、
+  run は `{:awaiting_human}` で**中断**（永続 store により安全）。人間がファイルに回答・承認を書き
+  `mix tracefield.dev --resume` すると、その内容が **当該 Actor の entries として absorb** され再開。
+  器官アダプタ `Tracefield.LLM.Human`（同 behaviour・同期=対話/非同期=pending ファイル）。
+  actors.json（旧 agents.json）に `kind: llm | cli | human`（省略時 llm・後方互換）。
+  権威の非対称（「gate 通過には人間 Actor の承認 entry が必須」）は対称な機構の上の**ポリシー**として設定。
 - **要件変更**: いつでも `--correct chunk:<要件>` 相当で撤回 → 閉包隔離 → 影響 stage の再実行（既存機構）。
 
 ## 2. 既存資産とのギャップ（正直な分析）

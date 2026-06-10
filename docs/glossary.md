@@ -43,6 +43,13 @@ tracefield にはクラスタが複数現れ、**クラスタ同士が繋がる*
 クラスタは上位レベルのエージェントとして再帰する（半溶解性はスケールフリー）。詳細は [`design-cluster.md`](./design-cluster.md)。
 ※測定の「クラスタリング」（C節）とは別概念。
 
+### Actor（アクター）— 人間と非人間の対称な主体（2026-06-11）
+ANT（アクターネットワーク理論）の意味での actor/actant: **エージェントも人間も同じ語彙で扱う**。
+`Actor = identity（偏り）+ private state + procedures + 器官`、器官 ∈ {ローカルLLM, CLI, 人間}。
+人間 Actor の deliberate は「人間への出力 → 入力待ち」。HITL gate ＝ 人間 Actor のターン。
+人間の判断も citable/retractable（統治の対称性）。※ Erlang/OTP の Actor Model（GenServer）とは**別概念**
+（実装基盤としては OTP を使うが、本用語は ANT 由来）。Field Actor はこの意味の原語。
+
 ### Field Actor（フィールドアクター）
 探索の場（field）で活動するエージェント。固定Roleとは異なり役割が硬直していない。各 Actor は **sensitivity profile** を持つ。
 
