@@ -298,9 +298,19 @@ defmodule Tracefield.LLM.Mock do
   defp agent_turn(prompt) do
     agent = agent_turn_agent(prompt)
 
-    if String.contains?(prompt, "REFINE手続き") do
-      %{entries: refine_entries(agent, prompt)}
-    else
+    cond do
+      String.contains?(prompt, "DESIGN手続き") ->
+        %{entries: design_entries(agent, prompt)}
+
+      String.contains?(prompt, "REFINE手続き") ->
+        %{entries: refine_entries(agent, prompt)}
+
+      true ->
+        agent_turn_default(agent, prompt)
+    end
+  end
+
+  defp agent_turn_default(agent, prompt) do
       domain = agent_domain(prompt, agent)
       adopted_procedure? = String.contains?(prompt, "ADOPTED PROCEDURE:")
 
@@ -317,6 +327,30 @@ defmodule Tracefield.LLM.Mock do
         end
 
       %{entries: entries}
+  end
+
+  defp design_entries(agent, prompt) do
+    requirement_id = doc_id_for_file(prompt, "requirement")
+    chunk_id = first_doc_id(prompt)
+
+    [
+      %{
+        type: "decision",
+        text:
+          "設計判断(#{agent}): #{requirement_head(prompt)}… を実現するため X を変更する（代替案 Y は却下: Z）",
+        citations: [requirement_id, chunk_id] |> Enum.reject(&is_nil/1) |> Enum.uniq()
+      }
+    ]
+  end
+
+  defp requirement_head(prompt) do
+    case Regex.run(
+           ~r/^DOC\s+e\d+\s+file=requirement\n(?<text>[\s\S]*?)(?:\n\nDOC\s+e\d+\s+file=|\n\nAGENT\s)/m,
+           prompt,
+           capture: :all_names
+         ) do
+      [text] -> text |> String.trim() |> String.slice(0, 30)
+      _ -> "要件"
     end
   end
 
