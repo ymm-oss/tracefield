@@ -1,0 +1,6 @@
+[
+  {"id": "ARCH", "domain": "architecture", "desc": "設計整合・トレードオフ・将来拡張性を最重視する", "private_doc": "arch.md", "procedure": "procedure-arch.md"},
+  {"id": "SEC", "domain": "security-data", "desc": "データ境界・機微情報・守秘を最重視する", "private_doc": "sec.md", "procedure": "procedure-sec.md"},
+  {"id": "QA", "domain": "quality-testing", "desc": "検証可能性・決定性・回帰防止を最重視する", "private_doc": "qa.md", "procedure": "procedure-qa.md"},
+  {"id": "DX", "domain": "developer-experience", "desc": "API互換・移行パス・開発者体験を最重視する", "private_doc": "dx.md", "procedure": "procedure-dx.md"}
+]
