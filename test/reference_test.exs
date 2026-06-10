@@ -143,4 +143,85 @@ defmodule Tracefield.ReferenceTest do
     assert Reference.get(ref, b.id).status == :superseded
     assert Reference.most_cited(ref).id == a.id
   end
+
+  test "persistent store round-trips entries, statuses, closure, and id continuation" do
+    path = tmp_store_path()
+
+    {:ok, ref} = Reference.start_link(persist_path: path)
+    [root] = Reference.absorb(ref, [%{text: "root", meta: %{source: "seed"}}], "A")
+    [middle] = Reference.absorb(ref, [%{text: "depends on root", citations: [root.id]}], "B")
+    [leaf] = Reference.absorb(ref, [%{text: "depends on middle", citations: [middle.id]}], "C")
+    [_other] = Reference.absorb(ref, [%{text: "independent"}], "D")
+
+    Reference.retract(ref, root.id)
+    Reference.quarantine(ref, [leaf.id])
+
+    expected_entries = Reference.all(ref)
+    expected_closure = Reference.closure(expected_entries, root.id)
+    GenServer.stop(ref)
+
+    {:ok, restored} = Reference.start_link(persist_path: path)
+
+    assert Reference.all(restored) == expected_entries
+    assert Reference.closure(Reference.all(restored), root.id) == expected_closure
+    assert Reference.stats(restored) == %{entries: 4, restored: 4, skipped_lines: 0}
+
+    [next] = Reference.absorb(restored, [%{text: "new after restore"}], "E")
+    assert next.id == "e5"
+  end
+
+  test "persistent store skips a truncated jsonl line during replay" do
+    path = tmp_store_path()
+
+    {:ok, ref} = Reference.start_link(persist_path: path)
+    [entry] = Reference.absorb(ref, [%{text: "valid line"}], "A")
+    GenServer.stop(ref)
+
+    File.write!(path, ~s({"op":"absorb"), [:append])
+
+    {:ok, restored} = Reference.start_link(persist_path: path)
+
+    assert Reference.all(restored) |> Enum.map(& &1.id) == [entry.id]
+    assert Reference.stats(restored) == %{entries: 1, restored: 1, skipped_lines: 1}
+  end
+
+  test "persistent store is created with 0600 mode" do
+    path = tmp_store_path()
+
+    {:ok, ref} = Reference.start_link(persist_path: path)
+    Reference.absorb(ref, [%{text: "secret local store"}], "SEC")
+
+    assert Integer.mod(File.stat!(path).mode, 0o1000) == 0o600
+  end
+
+  test "absorb_idempotent reuses restored seeds regardless of status" do
+    path = tmp_store_path()
+    seed = %{type: :chunk, author: "DOCS", text: "same seed"}
+
+    {:ok, ref} = Reference.start_link(persist_path: path)
+    [first] = Reference.absorb_idempotent(ref, [seed], "DOCS")
+    Reference.retract(ref, first.id)
+    GenServer.stop(ref)
+
+    {:ok, restored} = Reference.start_link(persist_path: path)
+    [again] = Reference.absorb_idempotent(restored, [seed], "DOCS")
+
+    assert again.id == first.id
+    assert again.status == :retracted
+    assert length(Reference.all(restored)) == 1
+
+    [_new] = Reference.absorb_idempotent(restored, [%{seed | text: "different seed"}], "DOCS")
+    assert length(Reference.all(restored)) == 2
+  end
+
+  defp tmp_store_path do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "tracefield-reference-#{System.unique_integer([:positive])}.jsonl"
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
 end

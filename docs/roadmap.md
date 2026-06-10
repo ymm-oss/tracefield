@@ -54,9 +54,9 @@
 
 ## フェーズ3 — 統治ループとインフラの完成（両行き先の共通基盤）
 
+- **永続 store ✅（dogfooding 完結）**: tracefield 自身が導出した設計判断（JSONL append-only＋リプレイ/opts追加のみ/0600/破損耐性/冪等seed）を brief-17 として実装。`--store true` で run を跨いで知識・撤回状態が蓄積（R1/R2/R3 充足、65 tests）
 - PCE gate（retracted/未verify 依存の案を durable 化前にブロック）/ 計器補修（permissive 判定・judge ドリフト対策の規約化）
-- Jido 本格活用（AgentServer・supervision・**永続 store**=セッションを跨ぐ Reference）
-- クロスモデル IRR・品質比較
+- Jido AgentServer/supervision の本格活用 / クロスモデル IRR・品質比較
 
 ## フェーズ4 — 研究の残課題と対外発信（並走・任意）
 

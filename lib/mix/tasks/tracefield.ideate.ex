@@ -62,21 +62,27 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     memory? = opts |> Keyword.get(:memory, true) |> normalize_bool()
     memory_window = opts |> Keyword.get(:memory_window, 10) |> max(0)
     memory_dir = Keyword.get(opts, :memory_dir, Path.join(scenario_path, "memory"))
+    store? = opts |> Keyword.get(:store, false) |> normalize_bool()
+    store_path = if store?, do: Path.join(scenario_path, "store.jsonl")
 
     {:ok, reference} =
       Reference.start_link(
         embed_adapter: embed_adapter,
         embed_model: embed_model,
-        entries:
-          [
-            %{
-              type: :chunk,
-              author: "TASK",
-              text: scenario.task,
-              meta: %{domain: "task"}
-            }
-          ] ++ doc_seed_entries(scenario.docs)
+        persist_path: store_path
       )
+
+    seed_entries =
+      [
+        %{
+          type: :chunk,
+          author: "TASK",
+          text: scenario.task,
+          meta: %{domain: "task"}
+        }
+      ] ++ doc_seed_entries(scenario.docs)
+
+    Reference.absorb_idempotent(reference, seed_entries, "TASK")
 
     reference_docs = reference_docs(reference)
     shared_procedure_id = absorb_procedure(reference, scenario.procedure)
@@ -126,6 +132,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     repair_perception = if correction, do: Map.get(correction, :perception, []), else: []
 
     all_entries = Reference.all(reference)
+    reference_stats = Reference.stats(reference)
     ideas = entries_for_ids(all_entries, Enum.map(main_ideas ++ repair_ideas, & &1.id))
     procedure_ids = agent_configs |> Enum.map(& &1.procedure_id) |> Enum.reject(&is_nil/1)
 
@@ -178,6 +185,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
         memory: memory?,
         memory_window: memory_window,
         memory_dir: memory_dir,
+        store: store_config(store?, store_path, reference_stats),
         agents: plain_agent_configs(agent_configs)
       },
       agents: scenario.agents,
@@ -258,7 +266,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
   defp reference_docs(reference) do
     reference
     |> Reference.all()
-    |> Enum.filter(&(&1.type == :chunk and &1.author == "DOCS"))
+    |> Enum.filter(&(&1.type == :chunk and &1.author == "DOCS" and &1.status == :active))
     |> Enum.map(fn entry ->
       %{
         id: entry.id,
@@ -308,7 +316,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
           report: :string,
           memory: :string,
           memory_window: :integer,
-          cli_cmd: :string
+          cli_cmd: :string,
+          store: :string
         ],
         aliases: [a: :adapter, m: :model, t: :temperature]
       )
@@ -333,7 +342,8 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       report: Keyword.get(opts, :report),
       memory: opts |> Keyword.get(:memory, "true") |> parse_bool(),
       memory_window: Keyword.get(opts, :memory_window, 10),
-      cli_cmd: Keyword.get(opts, :cli_cmd)
+      cli_cmd: Keyword.get(opts, :cli_cmd),
+      store: opts |> Keyword.get(:store, "false") |> parse_bool()
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -377,7 +387,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp absorb_procedure(reference, procedure_text, meta) do
     [procedure] =
-      Reference.absorb(
+      Reference.absorb_idempotent(
         reference,
         [
           %{
@@ -527,6 +537,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     Mix.shell().info("scenario: #{result.scenario_path}")
     Mix.shell().info("mode: #{result.config.mode}")
     Mix.shell().info("adapter: #{result.config.adapter}")
+    print_store(result.config.store)
     Mix.shell().info("agents: #{format_agent_configs(result.config.agents)}")
     Mix.shell().info("")
     print_reference_documents(result.entries)
@@ -778,6 +789,18 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp parse_bool(value), do: normalize_bool(value)
 
+  defp store_config(false, _path, _stats),
+    do: %{enabled: false, path: nil, restored: 0, skipped_lines: 0}
+
+  defp store_config(true, path, stats) do
+    %{
+      enabled: true,
+      path: path,
+      restored: stats.restored,
+      skipped_lines: stats.skipped_lines
+    }
+  end
+
   defp cli_config(opts) do
     {Keyword.get(opts, :cli_cmd, "claude"), ["-p"]}
   end
@@ -800,6 +823,12 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       }
     end)
   end
+
+  defp print_store(%{enabled: true, path: path, restored: restored}) do
+    Mix.shell().info("store: #{path}（復元 #{restored} entries／新規）")
+  end
+
+  defp print_store(_store), do: :ok
 
   defp print_correction(nil), do: :ok
 
