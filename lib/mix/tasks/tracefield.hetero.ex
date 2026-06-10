@@ -1,10 +1,10 @@
-defmodule Mix.Tasks.Tracefield.Doseresponse do
-  @moduledoc "Run the Tracefield shared-state dose-response experiment."
+defmodule Mix.Tasks.Tracefield.Hetero do
+  @moduledoc "Run the Tracefield heterogeneous private-document dose-response experiment."
   use Mix.Task
 
-  alias Tracefield.{Dissolution, GroundTruth, Metrics, Scenario}
+  alias Tracefield.{Discovery, Dissolution, GroundTruth, Metrics, Scenario}
 
-  @shortdoc "Run Tracefield state-axis dose-response experiment"
+  @shortdoc "Run Tracefield private-document heterogeneity experiment"
 
   @impl true
   def run(args) do
@@ -41,11 +41,17 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
     scenario =
       Keyword.get_lazy(opts, :scenario, fn -> Scenario.load!("scenarios/enterprise-assistant") end)
 
+    private_docs =
+      Keyword.get_lazy(opts, :private_docs, fn ->
+        load_private_docs("scenarios/enterprise-assistant/private")
+      end)
+
     runs =
       for k <- ks, index <- 0..(seeds - 1) do
         seed = 2_000 + index
 
         run_one(scenario,
+          private_docs: private_docs,
           k_s: k,
           seed: seed,
           rounds: rounds,
@@ -58,14 +64,13 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
       end
 
     summary = summary_by_k(runs)
-    retract_smoke = retract_smoke(runs)
-    path = persist(%{runs: runs, summary: summary, retract_smoke: retract_smoke}, adapter_name)
+    path = persist(%{runs: runs, summary: summary}, adapter_name)
 
     %{
       runs: runs,
       summary: summary,
-      trend: monotonic_trend(summary, ks),
-      retract_smoke: retract_smoke,
+      discovery_trend: monotonic_trend(summary, ks, :discovery_count),
+      diversity_trend: monotonic_trend(summary, ks, :diversity),
       path: path
     }
   end
@@ -109,6 +114,7 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
     adapter = Keyword.fetch!(opts, :adapter)
     model = Keyword.fetch!(opts, :model)
     temperature = Keyword.fetch!(opts, :temperature)
+    private_docs = Keyword.fetch!(opts, :private_docs)
 
     {:ok, reference} =
       Tracefield.Reference.start_link(
@@ -134,6 +140,7 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
       |> Enum.map(fn {agent, index} ->
         Tracefield.Agent.new(agent.id, agent.domain, agent.desc,
           anchor: scenario.task,
+          private_doc: Map.fetch!(private_docs, agent.id),
           k_s: k_s,
           adapter: adapter,
           model: model,
@@ -142,7 +149,7 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
         )
       end)
 
-    {agents, absorbed} =
+    {_agents, absorbed} =
       Enum.reduce(1..rounds, {agents, []}, fn round, {agents, absorbed} ->
         {agents, round_absorbed} = run_round(agents, reference, round)
         {agents, absorbed ++ round_absorbed}
@@ -160,17 +167,26 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
         seed: seed
       )
 
+    discovery =
+      Discovery.score(absorbed,
+        judge_adapter: adapter,
+        judge_model: Keyword.fetch!(opts, :judge_model),
+        temperature: temperature,
+        seed: seed
+      )
+
     %{
       k: k_s,
       seed: seed,
+      discovery_count: discovery.count,
+      discovery: discovery.per_interaction,
       icc: measure.icc,
       coverage: measure.coverage,
       diversity: measure.diversity,
       collapse_rate: measure.collapse_rate,
       concerns_by_agent: concerns_by_agent,
       absorbed_entries: plain_entries(absorbed),
-      reference: reference,
-      agents: agents
+      reference: reference
     }
   end
 
@@ -188,31 +204,13 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
     |> Enum.group_by(& &1.author, & &1.text)
   end
 
-  defp retract_smoke(runs) do
-    run = Enum.find(runs, &(&1.k == 2))
-    first = run && List.first(run.absorbed_entries)
-
-    if run && first do
-      closure = Tracefield.Reference.retract(run.reference, first.id)
-
-      %{
-        k: 2,
-        seed: run.seed,
-        retracted: first.id,
-        closure_ids: Enum.map(closure, & &1.id),
-        ok: closure != []
-      }
-    else
-      %{k: 2, seed: nil, retracted: nil, closure_ids: [], ok: false}
-    end
-  end
-
   defp summary_by_k(runs) do
     runs
     |> Enum.group_by(& &1.k)
     |> Map.new(fn {k, rows} ->
       {k,
        %{
+         discovery_count: Metrics.summary(Enum.map(rows, &(&1.discovery_count * 1.0))),
          icc: Metrics.summary(Enum.map(rows, &(&1.icc * 1.0))),
          coverage: Metrics.summary(Enum.map(rows, &(&1.coverage * 1.0))),
          diversity: Metrics.summary(Enum.map(rows, & &1.diversity)),
@@ -221,14 +219,22 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
     end)
   end
 
-  defp monotonic_trend(summary, ks) do
-    values = Enum.map(ks, &(get_in(summary, [&1, :icc, :mean]) || 0.0))
+  defp monotonic_trend(summary, ks, metric) do
+    values = Enum.map(ks, &(get_in(summary, [&1, metric, :mean]) || 0.0))
 
     cond do
       values == Enum.sort(values) -> :nondecreasing
       values == Enum.sort(values, :desc) -> :nonincreasing
       true -> :mixed
     end
+  end
+
+  defp load_private_docs(dir) do
+    %{
+      "SEC" => File.read!(Path.join(dir, "sec.md")),
+      "BIZ" => File.read!(Path.join(dir, "biz.md")),
+      "UX" => File.read!(Path.join(dir, "ux.md"))
+    }
   end
 
   defp persist(result, adapter_name) do
@@ -239,11 +245,11 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
       |> DateTime.to_iso8601(:basic)
       |> String.replace("Z", "")
 
-    path = "runs/#{timestamp}-doseresponse-#{adapter_name}.json"
+    path = "runs/#{timestamp}-hetero-#{adapter_name}.json"
 
     serializable =
       result
-      |> Map.update!(:runs, fn runs -> Enum.map(runs, &Map.drop(&1, [:reference, :agents])) end)
+      |> Map.update!(:runs, fn runs -> Enum.map(runs, &Map.drop(&1, [:reference])) end)
       |> GroundTruth.to_plain()
 
     File.write!(path, Jason.encode!(serializable, pretty: true))
@@ -251,35 +257,31 @@ defmodule Mix.Tasks.Tracefield.Doseresponse do
   end
 
   defp print_result(result) do
-    Mix.shell().info("Tracefield DoseResponse")
+    Mix.shell().info("Tracefield Hetero")
     Mix.shell().info("runs:")
-    Mix.shell().info("k seed icc coverage diversity collapse_rate")
+    Mix.shell().info("k seed disc icc coverage diversity collapse")
 
     Enum.each(result.runs, fn row ->
       Mix.shell().info(
-        "#{row.k} #{row.seed} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
+        "#{row.k} #{row.seed} #{row.discovery_count} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
       )
     end)
 
     Mix.shell().info("")
     Mix.shell().info("aggregate mean±sd:")
-    Mix.shell().info("k icc coverage diversity collapse_rate")
+    Mix.shell().info("k disc icc coverage diversity collapse")
 
     result.summary
     |> Enum.sort_by(fn {k, _row} -> k end)
     |> Enum.each(fn {k, row} ->
       Mix.shell().info(
-        "#{k} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
+        "#{k} #{mean_sd(row.discovery_count)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
       )
     end)
 
     Mix.shell().info("")
-    Mix.shell().info("trend: ICC vs k is #{result.trend}")
-
-    Mix.shell().info(
-      "retract smoke: retract #{result.retract_smoke.retracted} closure=#{inspect(result.retract_smoke.closure_ids)} ok=#{result.retract_smoke.ok}"
-    )
-
+    Mix.shell().info("trend: discovery vs k is #{result.discovery_trend}")
+    Mix.shell().info("trend: diversity vs k is #{result.diversity_trend}")
     Mix.shell().info("saved: #{result.path}")
   end
 
