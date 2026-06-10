@@ -12,7 +12,7 @@ defmodule Tracefield.Reference do
     defstruct [:id, :type, :author, :version, :status, :text, :citations, :embedding, :meta]
   end
 
-  @types [:belief, :hypothesis, :observation, :stance, :decision, :question, :chunk]
+  @types [:belief, :hypothesis, :observation, :stance, :decision, :question, :chunk, :procedure]
   @statuses [:active, :retracted, :superseded]
 
   def start_link(opts \\ []) do
@@ -78,6 +78,7 @@ defmodule Tracefield.Reference do
     k = opts |> Keyword.get(:k, 5) |> max(0)
     exclude_author = Keyword.get(opts, :exclude_author)
     only_author = Keyword.get(opts, :only_author)
+    exclude_types = Keyword.get(opts, :exclude_types, [])
     query_embedding = embed_one(query_text, state)
 
     entries =
@@ -85,6 +86,7 @@ defmodule Tracefield.Reference do
       |> Enum.filter(&(&1.status == :active))
       |> filter_author(:exclude_author, exclude_author)
       |> filter_author(:only_author, only_author)
+      |> filter_types(:exclude_types, exclude_types)
       |> Enum.with_index()
       |> Enum.map(fn {entry, index} ->
         {entry, Tracefield.Embed.cosine(query_embedding, entry.embedding), index}
@@ -220,6 +222,14 @@ defmodule Tracefield.Reference do
   defp filter_author(entries, :only_author, author) do
     author = to_string(author)
     Enum.filter(entries, &(&1.author == author))
+  end
+
+  defp filter_types(entries, _mode, []), do: entries
+  defp filter_types(entries, _mode, nil), do: entries
+
+  defp filter_types(entries, :exclude_types, types) do
+    types = MapSet.new(Enum.map(List.wrap(types), &normalize_type/1))
+    Enum.reject(entries, &MapSet.member?(types, &1.type))
   end
 
   defp reverse_citation_index(entries) do

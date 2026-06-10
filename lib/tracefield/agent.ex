@@ -23,9 +23,12 @@ defmodule Tracefield.Agent do
         model: [type: :string, default: "mock"],
         temperature: [type: :float, default: 0.4],
         seed: [type: :integer, default: 0],
+        procedure_id: [type: :string, default: nil],
         last_round: [type: :integer, default: 0],
         absorbed_count: [type: :integer, default: 0],
-        last_absorbed: [type: :any, default: []]
+        last_absorbed: [type: :any, default: []],
+        last_perception: [type: :any, default: nil],
+        perception_log: [type: :any, default: []]
       ]
   end
 
@@ -45,16 +48,19 @@ defmodule Tracefield.Agent do
       retrieved =
         Tracefield.Reference.serve(reference, query(state),
           k: max(state.k_s, 0),
-          exclude_author: state.id
+          exclude_author: state.id,
+          exclude_types: [:procedure]
         )
 
+      procedure = procedure_entry(reference, state.procedure_id)
       presented_ids = MapSet.new(Enum.map(retrieved, & &1.id))
+      perception = perception_log(query(state), retrieved)
 
       entries =
         state
-        |> deliberate(round, retrieved)
+        |> deliberate(round, retrieved, procedure)
         |> Enum.take(2)
-        |> Enum.map(&sanitize_entry(&1, presented_ids, state, round))
+        |> Enum.map(&sanitize_entry(&1, presented_ids, state, round, procedure))
         |> Enum.reject(&(&1.text == ""))
 
       absorbed = Tracefield.Reference.absorb(reference, entries, state.id)
@@ -63,13 +69,28 @@ defmodule Tracefield.Agent do
        %{
          last_round: round,
          absorbed_count: state.absorbed_count + length(absorbed),
-         last_absorbed: absorbed
+         last_absorbed: absorbed,
+         last_perception: perception,
+         perception_log: state.perception_log ++ [perception]
        }}
     end
 
     defp query(state), do: Enum.join([state.anchor, state.domain], "\n")
 
-    defp deliberate(state, round, retrieved) do
+    defp procedure_entry(_reference, nil), do: nil
+
+    defp procedure_entry(reference, procedure_id) do
+      Tracefield.Reference.get(reference, procedure_id)
+    end
+
+    defp perception_log(query, retrieved) do
+      %{
+        query: query,
+        served: Enum.map(retrieved, &%{id: &1.id, author: &1.author})
+      }
+    end
+
+    defp deliberate(state, round, retrieved, procedure) do
       messages = [
         %{
           role: "system",
@@ -78,7 +99,7 @@ defmodule Tracefield.Agent do
         },
         %{
           role: "user",
-          content: prompt(state, round, retrieved)
+          content: prompt(state, round, retrieved, procedure)
         }
       ]
 
@@ -95,7 +116,7 @@ defmodule Tracefield.Agent do
       end
     end
 
-    defp prompt(state, round, retrieved) do
+    defp prompt(state, round, retrieved, procedure) do
       """
       TASK:
       #{state.anchor}
@@ -110,8 +131,15 @@ defmodule Tracefield.Agent do
 
       PRESENTED ENTRIES:
       #{format_retrieved(retrieved)}
+      #{format_procedure(procedure)}
       """
       |> String.trim()
+    end
+
+    defp format_procedure(nil), do: ""
+
+    defp format_procedure(procedure) do
+      "\n\nADOPTED PROCEDURE:\n#{procedure.text}"
     end
 
     defp format_retrieved([]), do: "(none)"
@@ -147,7 +175,7 @@ defmodule Tracefield.Agent do
 
     defp parse_entries(_content), do: []
 
-    defp sanitize_entry(entry, presented_ids, state, round) do
+    defp sanitize_entry(entry, presented_ids, state, round, procedure) do
       %{
         type: Map.get(entry, "type", Map.get(entry, :type, "belief")),
         text: Map.get(entry, "text", Map.get(entry, :text, "")) |> to_string() |> String.trim(),
@@ -156,11 +184,21 @@ defmodule Tracefield.Agent do
           |> Map.get("citations", Map.get(entry, :citations, []))
           |> List.wrap()
           |> Enum.map(&to_string/1)
-          |> Enum.filter(&MapSet.member?(presented_ids, &1))
+          |> Enum.filter(&allowed_citation?(&1, presented_ids, procedure))
+          |> append_procedure_id(procedure)
           |> Enum.uniq(),
         meta: %{domain: state.domain, round: round}
       }
     end
+
+    defp allowed_citation?(id, presented_ids, nil), do: MapSet.member?(presented_ids, id)
+
+    defp allowed_citation?(id, presented_ids, procedure) do
+      MapSet.member?(presented_ids, id) or id == procedure.id
+    end
+
+    defp append_procedure_id(citations, nil), do: citations
+    defp append_procedure_id(citations, procedure), do: citations ++ [procedure.id]
 
     defp decode_json_object(content) do
       with {:error, _reason} <- Jason.decode(content),
@@ -203,7 +241,8 @@ defmodule Tracefield.Agent do
           adapter: Keyword.get(opts, :adapter, Tracefield.LLM.Mock),
           model: Keyword.get(opts, :model, "mock"),
           temperature: Keyword.get(opts, :temperature, 0.4) * 1.0,
-          seed: Keyword.get(opts, :seed, 0)
+          seed: Keyword.get(opts, :seed, 0),
+          procedure_id: Keyword.get(opts, :procedure_id)
         }
       )
 
@@ -217,9 +256,16 @@ defmodule Tracefield.Agent do
         telemetry: :silent
       )
 
-    absorbed = Map.get(updated_core.state, :last_absorbed, [])
-    absorbed = if directives == [], do: absorbed, else: []
+    {absorbed, perception} =
+      if directives == [] do
+        {
+          Map.get(updated_core.state, :last_absorbed, []),
+          Map.get(updated_core.state, :last_perception)
+        }
+      else
+        {[], nil}
+      end
 
-    {%{agent | core: updated_core}, absorbed}
+    {%{agent | core: updated_core}, absorbed, perception}
   end
 end

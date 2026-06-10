@@ -26,6 +26,28 @@ defmodule Tracefield.Discovery do
 
   def interactions, do: @interactions
 
+  def strict_score(entries) do
+    entries = List.wrap(entries)
+
+    per_interaction =
+      @interactions
+      |> Map.new(fn interaction ->
+        {interaction.id, strict_discovered?(entries, interaction.keywords)}
+      end)
+
+    discovered =
+      per_interaction
+      |> Enum.filter(fn {_id, value} -> value end)
+      |> Enum.map(fn {id, _value} -> id end)
+      |> MapSet.new()
+
+    %{
+      discovered: discovered,
+      count: MapSet.size(discovered),
+      per_interaction: per_interaction
+    }
+  end
+
   def score(entries, opts \\ []) do
     entries = List.wrap(entries)
 
@@ -54,6 +76,13 @@ defmodule Tracefield.Discovery do
       count: MapSet.size(discovered),
       per_interaction: per_interaction
     }
+  end
+
+  defp strict_discovered?(entries, keywords) do
+    Enum.any?(entries, fn entry ->
+      text = entry_value(entry, :text, "")
+      Enum.all?(keywords, &String.contains?(text, &1))
+    end)
   end
 
   defp judge(entries, opts) do
