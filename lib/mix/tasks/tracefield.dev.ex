@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   @moduledoc "Run the Tracefield development pipeline over an issue directory."
   use Mix.Task
 
-  alias Tracefield.{Agent, Reference, Workspace}
+  alias Tracefield.{Agent, QA, Reference, Workspace}
 
   @shortdoc "Run Tracefield dev pipeline"
   @refine_procedure """
@@ -65,8 +65,11 @@ defmodule Mix.Tasks.Tracefield.Dev do
         resume_design(reference, actors, issue_dir, state, opts)
 
       state["stage"] == "implement" and state["status"] == "done" ->
-        Mix.shell().info("implement 完了。次: qa（未実装）")
-        print_implement_done(reference, actors, issue_dir, state)
+        start_qa(reference, actors, issue_dir, state, opts)
+
+      state["stage"] == "qa" and state["status"] == "done" ->
+        Mix.shell().info("qa 完了。Issue 完遂（refine→design→implement→qa）")
+        print_qa_done(reference, issue_dir)
         %{state: state, entries: Reference.all(reference)}
 
       state["stage"] == "implement" ->
@@ -599,20 +602,130 @@ defmodule Mix.Tasks.Tracefield.Dev do
       |> Enum.map(& &1.id)
       |> MapSet.new()
 
-    change_ids =
+    latest_change_id = latest_active_change_id(reference)
+
+    latest_change_id &&
       reference
       |> Reference.all()
-      |> Enum.filter(&(&1.type == :change and &1.status == :active))
-      |> Enum.map(& &1.id)
-      |> MapSet.new()
+      |> Enum.any?(fn entry ->
+        entry.type == :decision and entry.status == :active and
+          MapSet.member?(human_ids, entry.author) and
+          latest_change_id in entry.citations
+      end)
+  end
 
+  defp latest_active_change_id(reference) do
     reference
     |> Reference.all()
-    |> Enum.any?(fn entry ->
-      entry.type == :decision and entry.status == :active and
-        MapSet.member?(human_ids, entry.author) and
-        Enum.any?(entry.citations, &MapSet.member?(change_ids, &1))
-    end)
+    |> Enum.filter(&(&1.type == :change and &1.status == :active))
+    |> Enum.max_by(&entry_number(&1.id), fn -> nil end)
+    |> case do
+      nil -> nil
+      change -> change.id
+    end
+  end
+
+  defp latest_organ_change!(reference, organ_author) do
+    reference
+    |> Reference.all()
+    |> Enum.filter(
+      &(&1.type == :change and &1.status == :active and &1.author == organ_author)
+    )
+    |> Enum.max_by(&entry_number(&1.id), fn -> nil end)
+    |> case do
+      nil -> Mix.raise("active organ change がありません")
+      change -> change
+    end
+  end
+
+  defp start_qa(reference, actors, issue_dir, state, opts) do
+    ws = Workspace.load!(issue_dir)
+    round = Map.get(state, "round", 0) + 1
+    adapter = adapter_module(Keyword.get(opts, :adapter, "mock"))
+
+    llm_opts = [
+      model: Keyword.get(opts, :model, "mock"),
+      temperature: Keyword.get(opts, :temperature, 0.4)
+    ]
+
+    test_result = Workspace.run_tests!(ws)
+    latest_change = latest_organ_change!(reference, ws.organ_author)
+
+    requirements =
+      reference
+      |> Reference.all()
+      |> Enum.filter(&(&1.type == :requirement and &1.status == :active))
+
+    verdicts =
+      Enum.map(requirements, fn requirement ->
+        judgment = QA.judge(adapter, llm_opts, requirement, latest_change, test_result)
+        pass = test_result.exit == 0 and judgment.matched
+        matched_label = if judgment.matched, do: "matched", else: "unmatched"
+        pass_label = if pass, do: "pass", else: "fail"
+
+        text =
+          "QA判定 r#{round}: #{pass_label} — テスト exit #{test_result.exit} / 突合: #{matched_label} #{judgment.note}"
+
+        [verdict] =
+          Reference.absorb(
+            reference,
+            %{
+              type: :verdict,
+              text: text,
+              citations: [requirement.id, latest_change.id],
+              meta: %{
+                test_exit: test_result.exit,
+                matched: judgment.matched,
+                pass: pass,
+                round: round
+              }
+            },
+            "QA"
+          )
+
+        verdict
+      end)
+
+    if Enum.all?(verdicts, &verdict_pass?/1) do
+      done = %{
+        "stage" => "qa",
+        "status" => "done",
+        "round" => round,
+        "iteration" => Map.get(state, "iteration", 0)
+      }
+
+      write_state!(issue_dir, done)
+      print_qa_done(reference, issue_dir)
+      %{state: done, entries: Reference.all(reference)}
+    else
+      fail_feedback =
+        verdicts
+        |> Enum.reject(&verdict_pass?/1)
+        |> Enum.map_join("\n", & &1.text)
+
+      feedback = "QA差し戻し:\n#{fail_feedback}"
+      approved = approved_design_decisions(reference, actors)
+      next_round = round + 1
+
+      run_organ_round(
+        reference,
+        actors,
+        issue_dir,
+        ws,
+        next_round,
+        approved,
+        opts,
+        feedback,
+        latest_change_stat(reference, ws.organ_author)
+      )
+
+      state = await_implement(reference, actors, issue_dir, ws, next_round, 0)
+      %{state: state, entries: Reference.all(reference)}
+    end
+  end
+
+  defp verdict_pass?(verdict) do
+    Map.get(verdict.meta, :pass, Map.get(verdict.meta, "pass", false))
   end
 
   defp latest_change_stat(reference, organ_author) do
@@ -649,6 +762,71 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> List.first()
     |> Kernel.||("")
     |> String.slice(0, 60)
+  end
+
+  defp print_qa_done(reference, issue_dir) do
+    entries = Reference.all(reference)
+    ws = Workspace.load!(issue_dir)
+    verdicts = Enum.filter(entries, &(&1.type == :verdict and &1.status == :active))
+
+    {head_sha, _} =
+      System.cmd("git", ["rev-parse", "--short", "HEAD"], cd: ws.path, stderr_to_stdout: true)
+
+    Mix.shell().info("Tracefield Dev qa done")
+    Mix.shell().info("verdicts: #{length(verdicts)}")
+    Mix.shell().info("workspace HEAD: #{String.trim(head_sha)}")
+    Mix.shell().info("provenance: #{qa_provenance_chain(entries, ws.organ_author)}")
+  end
+
+  defp qa_provenance_chain(entries, organ_author) do
+    by_id = Map.new(entries, &{&1.id, &1})
+
+    verdict_hop =
+      entries
+      |> Enum.filter(&(&1.type == :verdict and &1.status == :active and &1.author == "QA"))
+      |> Enum.find_value(fn verdict ->
+        requirement_id =
+          Enum.find(verdict.citations, fn id ->
+            case Map.get(by_id, id) do
+              %{type: :requirement} -> true
+              _other -> false
+            end
+          end)
+
+        change_id =
+          Enum.find(verdict.citations, fn id ->
+            case Map.get(by_id, id) do
+              %{type: :change, author: ^organ_author} -> true
+              _other -> false
+            end
+          end)
+
+        if requirement_id && change_id do
+          {verdict, Map.fetch!(by_id, change_id), Map.fetch!(by_id, requirement_id)}
+        end
+      end)
+
+    with {verdict, change, requirement} <- verdict_hop,
+         decision_id when not is_nil(decision_id) <-
+           Enum.find(change.citations, fn id ->
+             case Map.get(by_id, id) do
+               %{type: :decision} -> true
+               _other -> false
+             end
+           end),
+         decision <- Map.fetch!(by_id, decision_id),
+         issue_id when not is_nil(issue_id) <-
+           Enum.find(requirement.citations, fn id ->
+             case Map.get(by_id, id) do
+               %{type: :chunk, author: "ISSUE"} -> true
+               _other -> false
+             end
+           end),
+         issue <- Map.fetch!(by_id, issue_id) do
+      "#{verdict.id} verdict -> #{change.id} change -> #{decision.id} decision -> #{requirement.id} requirement -> #{issue.id} issue chunk (#{Map.get(issue.meta, :file, "issue.md")})"
+    else
+      _missing -> "verdict -> change -> decision -> requirement -> issue chunk: unavailable"
+    end
   end
 
   defp print_implement_done(reference, _actors, issue_dir, _state) do
