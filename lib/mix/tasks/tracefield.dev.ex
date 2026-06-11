@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   @moduledoc "Run the Tracefield development pipeline over an issue directory."
   use Mix.Task
 
-  alias Tracefield.{Agent, QA, Reference, Workspace}
+  alias Tracefield.{Agent, Coverage, QA, Reference, Workspace}
 
   @shortdoc "Run Tracefield dev pipeline"
   @refine_procedure """
@@ -98,13 +98,17 @@ defmodule Mix.Tasks.Tracefield.Dev do
           adapter: :string,
           model: :string,
           temperature: :float,
-          cli_cmd: :string
+          cli_cmd: :string,
+          coverage_threshold: :float
         ]
       )
 
     if invalid != [] do
       Mix.raise("invalid options: #{inspect(invalid)}")
     end
+
+    # 0.2 flags chunks with no meaningful actor overlap while tolerating paraphrase.
+    coverage_threshold = Keyword.get(opts, :coverage_threshold, 0.2)
 
     [
       issue: Keyword.get(opts, :issue) || Mix.raise("--issue is required"),
@@ -113,7 +117,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
       adapter: Keyword.get(opts, :adapter, "mock"),
       model: Keyword.get(opts, :model),
       temperature: Keyword.get(opts, :temperature, 0.4),
-      cli_cmd: Keyword.get(opts, :cli_cmd)
+      cli_cmd: Keyword.get(opts, :cli_cmd),
+      coverage_threshold: coverage_threshold
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -228,6 +233,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp start_refine(reference, actors, issue_dir, procedure_id, opts) do
+    warn_uncovered_chunks!(reference, actors, opts)
     rounds = Keyword.get(opts, :rounds, 2)
     run_llm_rounds(reference, actors, issue_dir, procedure_id, 1..rounds, opts, nil)
     state = await_human(reference, actors, issue_dir, procedure_id, rounds, 0, opts)
@@ -1089,6 +1095,34 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp format_citations([]), do: "-"
   defp format_citations(citations), do: Enum.map_join(citations, " ", &"[#{&1}]")
+
+  defp warn_uncovered_chunks!(reference, actors, opts) do
+    threshold = Keyword.get(opts, :coverage_threshold, 0.2)
+
+    uncovered =
+      reference
+      |> reference_docs()
+      |> Coverage.uncovered(actors,
+        embed_adapter: Tracefield.Embed.Mock,
+        threshold: threshold
+      )
+
+    if uncovered != [] do
+      Mix.shell().info("⚠ coverage-threshold: #{threshold}")
+
+      Enum.each(uncovered, fn item ->
+        Mix.shell().info(
+          "⚠ uncovered chunk #{item.id} (#{item.file}) — nearest: #{item.nearest_actor} (#{format_sim(item.sim)})"
+        )
+      end)
+    end
+  end
+
+  defp format_sim(sim) do
+    sim
+    |> Float.round(3)
+    |> :erlang.float_to_binary(decimals: 3)
+  end
 
   defp reference_docs(reference) do
     reference
