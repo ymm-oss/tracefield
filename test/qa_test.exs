@@ -5,11 +5,11 @@ defmodule Tracefield.QATest do
 
   test "mock TRACEFIELD_QA returns matched true when prompt contains IMPLEMENTED" do
     messages = [
-    %{
-      role: "user",
-      content: "TRACEFIELD_QA\nfiles: IMPLEMENTED.md\n実装変更: done"
-    }
-  ]
+      %{
+        role: "user",
+        content: "TRACEFIELD_QA\nfiles: IMPLEMENTED.md\n実装変更: done"
+      }
+    ]
 
     assert {:ok, content} = Mock.complete(messages, [])
     assert %{"matched" => true, "note" => "mock突合"} = Jason.decode!(content)
@@ -17,11 +17,11 @@ defmodule Tracefield.QATest do
 
   test "mock TRACEFIELD_QA returns matched false when prompt lacks IMPLEMENTED" do
     messages = [
-    %{
-      role: "user",
-      content: "TRACEFIELD_QA\nfiles: README.md\n実装変更: pending"
-    }
-  ]
+      %{
+        role: "user",
+        content: "TRACEFIELD_QA\nfiles: README.md\n実装変更: pending"
+      }
+    ]
 
     assert {:ok, content} = Mock.complete(messages, [])
     assert %{"matched" => false, "note" => "mock突合"} = Jason.decode!(content)
@@ -29,7 +29,7 @@ defmodule Tracefield.QATest do
 
   test "QA.judge falls back to test exit when adapter returns broken JSON" do
     defmodule BrokenAdapter do
-    @behaviour Tracefield.LLM
+      @behaviour Tracefield.LLM
 
       @impl true
       def complete(_messages, _opts), do: {:ok, "not json at all"}

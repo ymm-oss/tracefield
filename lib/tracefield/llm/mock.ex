@@ -315,22 +315,22 @@ defmodule Tracefield.LLM.Mock do
   end
 
   defp agent_turn_default(agent, prompt) do
-      domain = agent_domain(prompt, agent)
-      adopted_procedure? = String.contains?(prompt, "ADOPTED PROCEDURE:")
+    domain = agent_domain(prompt, agent)
+    adopted_procedure? = String.contains?(prompt, "ADOPTED PROCEDURE:")
 
-      entries =
-        if agent in ~w(SEC BIZ UX) do
-          foreign_entries = presented_taxonomy_foreign_entries(prompt, agent)
+    entries =
+      if agent in ~w(SEC BIZ UX) do
+        foreign_entries = presented_taxonomy_foreign_entries(prompt, agent)
 
-          case private_doc(prompt) do
-            "" -> shared_state_entries(agent, domain, foreign_entries)
-            doc -> private_doc_entries(domain, doc, foreign_entries, adopted_procedure?)
-          end
-        else
-          generic_private_doc_entries(agent, prompt)
+        case private_doc(prompt) do
+          "" -> shared_state_entries(agent, domain, foreign_entries)
+          doc -> private_doc_entries(domain, doc, foreign_entries, adopted_procedure?)
         end
+      else
+        generic_private_doc_entries(agent, prompt)
+      end
 
-      %{entries: entries}
+    %{entries: entries}
   end
 
   defp design_entries(agent, prompt) do
@@ -340,8 +340,7 @@ defmodule Tracefield.LLM.Mock do
     [
       %{
         type: "decision",
-        text:
-          "設計判断(#{agent}): #{requirement_head(prompt)}… を実現するため X を変更する（代替案 Y は却下: Z）",
+        text: "設計判断(#{agent}): #{requirement_head(prompt)}… を実現するため X を変更する（代替案 Y は却下: Z）",
         citations: [requirement_id, chunk_id] |> Enum.reject(&is_nil/1) |> Enum.uniq()
       }
     ]
@@ -380,7 +379,9 @@ defmodule Tracefield.LLM.Mock do
   defp issue_head(prompt) do
     case Regex.run(
            ~r/^DOC\s+e\d+\s+file=issue\.md\n(?<text>[\s\S]*?)(?:\n\nDOC\s+e\d+\s+file=|\n\nAGENT\s)/m,
-           prompt, capture: :all_names) do
+           prompt,
+           capture: :all_names
+         ) do
       [text] -> text |> String.trim() |> String.slice(0, 40)
       _ -> "issue"
     end

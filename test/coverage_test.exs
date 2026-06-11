@@ -106,13 +106,17 @@ defmodule Tracefield.CoverageTest do
     assert Jason.decode!(File.read!(Path.join(dir, "state.json"))) == state_before
   end
 
-  test "dev refine start warns on uncovered chunks with chunk id and nearest actor" do
+  test "dev refine start defaults embed adapter to mock for reference and coverage" do
     dir = tmp_issue_dir()
     write_uncovered_issue_files!(dir)
 
     output =
       capture_io(fn ->
-        Dev.run_dev(issue: dir, adapter: "mock")
+        result = Dev.run_dev(issue: dir, adapter: "mock")
+
+        assert Enum.any?(result.entries, fn entry ->
+                 entry.type == :chunk and entry.author == "ISSUE" and entry.embedding != []
+               end)
       end)
 
     assert output =~ ~r/⚠ uncovered chunk e\d+ \(unrelated\.md\)/

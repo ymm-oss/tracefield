@@ -29,13 +29,15 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   def run_dev(opts) do
     issue_dir = Keyword.fetch!(opts, :issue)
+    embed_mod = embed_module!(Keyword.get(opts, :embed, "mock"))
+    opts = Keyword.put(opts, :embed_adapter, embed_mod)
     status? = Keyword.get(opts, :status, false)
     state = load_state(issue_dir)
 
     {:ok, reference} =
       Reference.start_link(
         persist_path: Path.join(issue_dir, "store.jsonl"),
-        embed_adapter: Tracefield.Embed.Mock
+        embed_adapter: embed_mod
       )
 
     actors = load_actors!(issue_dir)
@@ -96,6 +98,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
           status: :boolean,
           rounds: :integer,
           adapter: :string,
+          embed: :string,
           model: :string,
           temperature: :float,
           cli_cmd: :string,
@@ -115,6 +118,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       status: Keyword.get(opts, :status, false),
       rounds: Keyword.get(opts, :rounds, 2),
       adapter: Keyword.get(opts, :adapter, "mock"),
+      embed: Keyword.get(opts, :embed, "mock"),
       model: Keyword.get(opts, :model),
       temperature: Keyword.get(opts, :temperature, 0.4),
       cli_cmd: Keyword.get(opts, :cli_cmd),
@@ -169,6 +173,11 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp optional_string(nil), do: nil
   defp optional_string(""), do: nil
   defp optional_string(value), do: to_string(value)
+
+  @doc false
+  def embed_module!("mock"), do: Tracefield.Embed.Mock
+  def embed_module!("ollama"), do: Tracefield.Embed.Ollama
+  def embed_module!(other), do: Mix.raise("invalid embed #{inspect(other)}")
 
   defp load_state(issue_dir) do
     path = state_path(issue_dir)
@@ -1131,7 +1140,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       reference
       |> reference_docs()
       |> Coverage.uncovered(actors,
-        embed_adapter: Tracefield.Embed.Mock,
+        embed_adapter: Keyword.fetch!(opts, :embed_adapter),
         threshold: threshold
       )
 

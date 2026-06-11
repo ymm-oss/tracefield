@@ -93,7 +93,9 @@ defmodule Mix.Tasks.Tracefield.Transfer do
             model: "model-x",
             procedure: "procedure-x.md"
           }
-        ], pretty: true) <> "\n"
+        ],
+        pretty: true
+      ) <> "\n"
     )
 
     File.write!(Path.join(b, "agents.json"), Jason.encode!([], pretty: true) <> "\n")

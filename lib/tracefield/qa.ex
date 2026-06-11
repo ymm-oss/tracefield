@@ -21,23 +21,23 @@ defmodule Tracefield.QA do
       |> Map.get(:files, Map.get(change.meta, "files", []))
       |> List.wrap()
 
-  """
-  TRACEFIELD_QA
+    """
+    TRACEFIELD_QA
 
-  要件:
-  #{requirement.id}: #{requirement.text}
+    要件:
+    #{requirement.id}: #{requirement.text}
 
-  実装変更:
-  #{change.text}
-  files: #{Enum.join(files, ", ")}
+    実装変更:
+    #{change.text}
+    files: #{Enum.join(files, ", ")}
 
-  テスト結果:
-  exit: #{test_result.exit}
-  #{test_result.tail}
+    テスト結果:
+    exit: #{test_result.exit}
+    #{test_result.tail}
 
-  この変更は要件の受入基準を満たすか。JSON `{"matched": true|false, "note": "…"}` のみ返せ。
-  """
-  |> String.trim()
+    この変更は要件の受入基準を満たすか。JSON `{"matched": true|false, "note": "…"}` のみ返せ。
+    """
+    |> String.trim()
   end
 
   defp parse_judgment(content, test_result) do
