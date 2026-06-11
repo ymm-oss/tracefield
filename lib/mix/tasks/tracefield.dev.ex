@@ -344,6 +344,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     human = blocking_human!(actors)
     before_ids = entry_ids(reference)
 
+    warn_uncited_decisions(reference, actors)
+
     {_agent, _absorbed, _perception} =
       run_human_turn(reference, human, issue_dir, procedure_id, round, design_human_opts(reference, actors))
 
@@ -976,6 +978,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp await_design(reference, actors, issue_dir, procedure_id, round, iteration) do
     human = blocking_human!(actors)
 
+    warn_uncited_decisions(reference, actors)
+
     {_agent, _absorbed, _perception} =
       run_human_turn(reference, human, issue_dir, procedure_id, round, design_human_opts(reference, actors))
 
@@ -1011,7 +1015,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp design_human_opts(reference, actors) do
     %{
       stage: "design",
-      approve_targets: machine_decision_ids(reference, actors),
+      approve_targets: gate_d_decision_ids(reference, actors),
       ref_docs: design_reference_docs(reference)
     }
   end
@@ -1105,8 +1109,40 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Enum.map(& &1.id)
   end
 
+  @doc false
+  def gate_d_decision_ids(reference, actors) do
+    requirement_ids = active_ids(reference, :requirement) |> MapSet.new()
+    by_id = reference |> Reference.all() |> Map.new(&{&1.id, &1})
+
+    reference
+    |> machine_decision_ids(actors)
+    |> Enum.filter(fn id ->
+      case Map.get(by_id, id) do
+        %{citations: citations} ->
+          Enum.any?(citations, &MapSet.member?(requirement_ids, &1))
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  @doc false
+  def warn_uncited_decisions(reference, actors) do
+    gate_ids = MapSet.new(gate_d_decision_ids(reference, actors))
+    by_id = reference |> Reference.all() |> Map.new(&{&1.id, &1})
+
+    reference
+    |> machine_decision_ids(actors)
+    |> Enum.reject(&MapSet.member?(gate_ids, &1))
+    |> Enum.each(fn id ->
+      %{id: entry_id, author: author} = Map.fetch!(by_id, id)
+      Mix.shell().info("⚠ requirement未引用のdecision: #{entry_id} (#{author})")
+    end)
+  end
+
   defp design_complete?(reference, actors) do
-    machine_ids = MapSet.new(machine_decision_ids(reference, actors))
+    machine_ids = MapSet.new(gate_d_decision_ids(reference, actors))
 
     human_ids =
       actors
@@ -1124,7 +1160,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp write_design_md!(issue_dir, reference, actors) do
-    machine_ids = MapSet.new(machine_decision_ids(reference, actors))
+    machine_ids = MapSet.new(gate_d_decision_ids(reference, actors))
 
     decisions =
       reference

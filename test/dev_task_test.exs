@@ -411,6 +411,137 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert change.text =~ "exit 1"
   end
 
+  test "gate_d_decision_ids excludes machine decisions without active requirement citation" do
+    {:ok, reference} = Reference.start_link()
+    actors = sample_actors()
+
+    [req] = Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+    [chunk] = Reference.absorb(reference, [%{type: :chunk, text: "reference chunk"}], "DOCS")
+
+    [cited] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "cited design", citations: [req.id, chunk.id]}],
+        "ARCH"
+      )
+
+    [uncited] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "uncited design", citations: [chunk.id]}],
+        "ARCH"
+      )
+
+    assert Dev.gate_d_decision_ids(reference, actors) == [cited.id]
+    refute uncited.id in Dev.gate_d_decision_ids(reference, actors)
+  end
+
+  test "gate_d_decision_ids matches all machine decisions when each cites an active requirement" do
+    {:ok, reference} = Reference.start_link()
+    actors = sample_actors()
+
+    [req] = Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+    [chunk] = Reference.absorb(reference, [%{type: :chunk, text: "reference chunk"}], "DOCS")
+
+    [d1] =
+      Reference.absorb(reference, [%{type: :decision, text: "design 1", citations: [req.id]}], "ARCH")
+
+    [d2] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "design 2", citations: [req.id, chunk.id]}],
+        "ARCH"
+      )
+
+    assert MapSet.new(Dev.gate_d_decision_ids(reference, actors)) ==
+             MapSet.new([d1.id, d2.id])
+  end
+
+  test "warn_uncited_decisions prints warning for requirement-less machine decisions" do
+    {:ok, reference} = Reference.start_link()
+    actors = sample_actors()
+
+    [req] = Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+    [chunk] = Reference.absorb(reference, [%{type: :chunk, text: "reference chunk"}], "DOCS")
+
+    Reference.absorb(
+      reference,
+      [%{type: :decision, text: "cited design", citations: [req.id]}],
+      "ARCH"
+    )
+
+    [uncited] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "uncited design", citations: [chunk.id]}],
+        "ARCH"
+      )
+
+    output = ExUnit.CaptureIO.capture_io(fn -> Dev.warn_uncited_decisions(reference, actors) end)
+
+    assert output =~ "⚠ requirement未引用のdecision: #{uncited.id} (ARCH)"
+  end
+
+  test "design stage excludes uncited machine decisions from approve_targets and design.md" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    drive_to_design_awaiting!(dir)
+
+    {:ok, reference} =
+      Reference.start_link(
+        persist_path: Path.join(dir, "store.jsonl"),
+        embed_adapter: Tracefield.Embed.Mock
+      )
+
+    chunk = Enum.find(Reference.all(reference), &(&1.type == :chunk))
+
+    [uncited] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "uncited design judgment", citations: [chunk.id]}],
+        "ARCH"
+      )
+
+    design_pending = Path.join([dir, "pending", "HUMAN-design.md"])
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.run_dev(issue: dir, adapter: "mock")
+      end)
+
+    assert output =~ "⚠ requirement未引用のdecision: #{uncited.id} (ARCH)"
+
+    append_response!(design_pending, "APPROVE\n")
+    design_done = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert design_done.state["stage"] == "design"
+    assert design_done.state["status"] == "done"
+
+    {:ok, restored} =
+      Reference.start_link(
+        persist_path: Path.join(dir, "store.jsonl"),
+        embed_adapter: Tracefield.Embed.Mock
+      )
+
+    gate_d_ids = Dev.gate_d_decision_ids(restored, sample_actors()) |> MapSet.new()
+
+    human_decision =
+      design_done.entries
+      |> Enum.filter(&(&1.type == :decision and &1.author == "HUMAN"))
+      |> Enum.find(fn entry ->
+        Enum.any?(entry.citations, &MapSet.member?(gate_d_ids, &1))
+      end)
+
+    assert human_decision
+    refute uncited.id in human_decision.citations
+    assert MapSet.subset?(MapSet.new(human_decision.citations), gate_d_ids)
+
+    design_md = File.read!(Path.join(dir, "design.md"))
+    refute design_md =~ "uncited design judgment"
+    assert design_md =~ "設計判断(ARCH)"
+  end
+
   test "design stage starts after refine, iterates on comments, completes with design.md and 2-hop provenance" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
@@ -512,13 +643,46 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     Dev.run_dev(issue: dir, adapter: "mock")
   end
 
-  defp drive_to_design_done!(dir) do
+  defp drive_to_design_awaiting!(dir) do
     Dev.run_dev(issue: dir, adapter: "mock")
     append_response!(Path.join([dir, "pending", "HUMAN-refine.md"]), "APPROVE\n")
     Dev.run_dev(issue: dir, adapter: "mock")
     Dev.run_dev(issue: dir, adapter: "mock")
+  end
+
+  defp drive_to_design_done!(dir) do
+    drive_to_design_awaiting!(dir)
     append_response!(Path.join([dir, "pending", "HUMAN-design.md"]), "APPROVE\n")
     Dev.run_dev(issue: dir, adapter: "mock")
+  end
+
+  defp sample_actors do
+    [
+      %{
+        id: "ARCH",
+        domain: "architecture",
+        desc: "architectural reviewer",
+        kind: :llm,
+        turn: :blocking,
+        private_doc_file: nil,
+        private_doc_path: nil,
+        private_doc: "",
+        model: nil,
+        recruit_entry: nil
+      },
+      %{
+        id: "HUMAN",
+        domain: "review",
+        desc: "human reviewer",
+        kind: :human,
+        turn: :blocking,
+        private_doc_file: nil,
+        private_doc_path: nil,
+        private_doc: "",
+        model: nil,
+        recruit_entry: nil
+      }
+    ]
   end
 
   defp init_workspace_repo!(issue_dir, opts \\ []) do
