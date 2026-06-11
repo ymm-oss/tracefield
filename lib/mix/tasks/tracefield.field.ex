@@ -59,7 +59,9 @@ defmodule Mix.Tasks.Tracefield.Field do
     [meta_copy] = Meta.publish(meta, "A", a, ids: [a1.id])
     Mix.shell().info("2. A absorbed a1=#{a1.id}; published to META copy=#{meta_copy.id}")
 
-    [found | _rest] = Meta.discover(meta, "green loan insulation rebate evidence", exclude_cluster: "B")
+    [found | _rest] =
+      Meta.discover(meta, "green loan insulation rebate evidence", exclude_cluster: "B")
+
     [b_copy] = Meta.pull(b, meta, [found.entry.id])
 
     Mix.shell().info(
@@ -123,7 +125,11 @@ defmodule Mix.Tasks.Tracefield.Field do
 
   defp format_source_chain(meta) do
     chain = Map.get(meta, :source_chain, [])
-    final = %{source_cluster: Map.get(meta, :source_cluster), source_id: Map.get(meta, :source_id)}
+
+    final = %{
+      source_cluster: Map.get(meta, :source_cluster),
+      source_id: Map.get(meta, :source_id)
+    }
 
     (chain ++ [final])
     |> Enum.map_join(" -> ", fn hop -> "#{hop.source_cluster}/#{hop.source_id}" end)

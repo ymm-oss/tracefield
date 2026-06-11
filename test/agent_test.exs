@@ -280,10 +280,10 @@ defmodule Tracefield.AgentTest do
   end
 
   @baseline_system_prompt_without_aware """
-  TRACEFIELD_AGENT_TURN
-  Return only JSON {"entries":[{"type":"belief","text":"...","citations":["e1"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly.
-  """
-  |> String.trim()
+                                        TRACEFIELD_AGENT_TURN
+                                        Return only JSON {"entries":[{"type":"belief","text":"...","citations":["e1"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly.
+                                        """
+                                        |> String.trim()
 
   test "expected_types nil keeps the baseline system prompt unchanged" do
     Process.register(self(), PromptCaptureMock)

@@ -77,6 +77,21 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert [%{id: "HUMAN", kind: :human}] = Dev.load_actors!(dir)
   end
 
+  test "embed_module! maps mock and ollama adapters without fallback" do
+    assert Dev.embed_module!("mock") == Tracefield.Embed.Mock
+    assert Dev.embed_module!("ollama") == Tracefield.Embed.Ollama
+
+    assert_raise Mix.Error, ~r/invalid embed "foo"/, fn ->
+      Dev.embed_module!("foo")
+    end
+  end
+
+  test "run_dev raises for invalid embed option" do
+    assert_raise Mix.Error, ~r/invalid embed "foo"/, fn ->
+      Dev.run_dev(issue: tmp_issue_dir(), embed: "foo")
+    end
+  end
+
   test "refine pipeline resumes through answer loop, approval, provenance, and persisted store" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)

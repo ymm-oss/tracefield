@@ -351,7 +351,12 @@ defmodule Tracefield.ReferenceTest do
     Reference.quarantine(ref, [child.id])
 
     assert_receive {:tracefield_status,
-                    %{store: ^ref, id: child_id, status: :superseded, entry: %{status: "superseded"}}}
+                    %{
+                      store: ^ref,
+                      id: child_id,
+                      status: :superseded,
+                      entry: %{status: "superseded"}
+                    }}
 
     assert child_id == child.id
   end

@@ -46,7 +46,14 @@ defmodule Tracefield.WorkspaceTest do
   test "capture_diff! returns files, stat, diff, and sha" do
     repo = init_git_repo!()
     File.write!(Path.join(repo, "new.txt"), "hello\n")
-    ws = %Workspace{path: repo, test_cmd: "true", organ_cmd: "true", organ_args: [], organ_author: "ORGAN"}
+
+    ws = %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN"
+    }
 
     diff = Workspace.capture_diff!(ws)
 
@@ -60,10 +67,24 @@ defmodule Tracefield.WorkspaceTest do
   test "run_tests! reports exit code and output tail" do
     repo = init_git_repo!()
 
-    ws_ok = %Workspace{path: repo, test_cmd: "true", organ_cmd: "true", organ_args: [], organ_author: "ORGAN"}
+    ws_ok = %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN"
+    }
+
     assert %{exit: 0} = Workspace.run_tests!(ws_ok)
 
-    ws_fail = %Workspace{path: repo, test_cmd: "false", organ_cmd: "true", organ_args: [], organ_author: "ORGAN"}
+    ws_fail = %Workspace{
+      path: repo,
+      test_cmd: "false",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN"
+    }
+
     assert %{exit: 1} = Workspace.run_tests!(ws_fail)
   end
 
@@ -72,7 +93,14 @@ defmodule Tracefield.WorkspaceTest do
     {before_sha, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo)
     File.write!(Path.join(repo, "applied.txt"), "applied\n")
 
-    ws = %Workspace{path: repo, test_cmd: "true", organ_cmd: "true", organ_args: [], organ_author: "ORGAN"}
+    ws = %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN"
+    }
+
     assert {:ok, short_sha} = Workspace.apply!(ws, "tracefield test commit")
     {after_sha, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo)
 
@@ -83,14 +111,28 @@ defmodule Tracefield.WorkspaceTest do
 
   test "apply! returns empty when nothing is staged" do
     repo = init_git_repo!()
-    ws = %Workspace{path: repo, test_cmd: "true", organ_cmd: "true", organ_args: [], organ_author: "ORGAN"}
+
+    ws = %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN"
+    }
 
     assert {:error, :empty} = Workspace.apply!(ws, "nothing to commit")
   end
 
   test "clean? is true for clean repo and false when dirty" do
     repo = init_git_repo!()
-    ws = %Workspace{path: repo, test_cmd: "true", organ_cmd: "true", organ_args: [], organ_author: "ORGAN"}
+
+    ws = %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN"
+    }
 
     assert Workspace.clean?(ws)
 
@@ -110,7 +152,17 @@ defmodule Tracefield.WorkspaceTest do
     git!(dir, ["init"])
     File.write!(Path.join(dir, "README.md"), "initial\n")
     git!(dir, ["add", "README.md"])
-    git!(dir, ["-c", "user.email=t@tracefield", "-c", "user.name=tracefield", "commit", "-m", "init"])
+
+    git!(dir, [
+      "-c",
+      "user.email=t@tracefield",
+      "-c",
+      "user.name=tracefield",
+      "commit",
+      "-m",
+      "init"
+    ])
+
     dir
   end
 

@@ -8,7 +8,11 @@ defmodule Tracefield.Coverage do
   # 0.2 flags chunks with no meaningful actor overlap while tolerating paraphrase.
   @default_threshold 0.2
 
-  @type chunk :: %{required(:id) => String.t(), required(:file) => String.t(), required(:text) => String.t()}
+  @type chunk :: %{
+          required(:id) => String.t(),
+          required(:file) => String.t(),
+          required(:text) => String.t()
+        }
   @type actor :: %{
           required(:id) => String.t(),
           required(:domain) => String.t(),
@@ -45,7 +49,10 @@ defmodule Tracefield.Coverage do
     chunk_texts = Enum.map(chunks, & &1.text)
 
     {:ok, embeddings} =
-      Embed.embed(chunk_texts ++ actor_profiles, adapter: embed_adapter, model: "nomic-embed-text")
+      Embed.embed(chunk_texts ++ actor_profiles,
+        adapter: embed_adapter,
+        model: "nomic-embed-text"
+      )
 
     {chunk_embeddings, actor_embeddings} = Enum.split(embeddings, length(chunks))
     actor_ids = Enum.map(measurable_actors, fn {id, _profile} -> id end)

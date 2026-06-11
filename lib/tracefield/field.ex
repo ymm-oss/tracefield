@@ -62,7 +62,8 @@ defmodule Tracefield.Field do
   defp meta_ref_spec(meta_path, field_id) do
     %{
       id: {:tracefield_ref, "META"},
-      start: {Reference, :start_link, [[persist_path: meta_path, name: ref_name(field_id, "META")]]}
+      start:
+        {Reference, :start_link, [[persist_path: meta_path, name: ref_name(field_id, "META")]]}
     }
   end
 
