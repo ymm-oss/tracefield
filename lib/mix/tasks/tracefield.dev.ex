@@ -77,7 +77,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
       state["stage"] == "qa" and state["status"] == "done" ->
         Mix.shell().info("qa 完了。Issue 完遂（refine→design→implement→qa）")
-        print_qa_done(reference, issue_dir)
+        print_qa_done(reference, issue_dir, state)
         %{state: state, entries: Reference.all(reference)}
 
       state["stage"] == "implement" ->
@@ -483,27 +483,36 @@ defmodule Mix.Tasks.Tracefield.Dev do
         commit_message =
           "tracefield implement: #{issue_line} [#{Enum.join(change_ids, " ")}]"
 
-        case Workspace.apply!(ws, commit_message) do
-          {:ok, _sha} ->
-            :ok
+        pr_state =
+          case Workspace.apply!(ws, commit_message) do
+            {:ok, _sha} ->
+              push_pr_after_apply!(reference, actors, issue_dir, state, ws)
 
-          {:error, :empty} ->
-            Mix.shell().error("warning: workspace にコミットする変更がありませんでした")
-        end
+            {:error, :empty} ->
+              Mix.shell().error("warning: workspace にコミットする変更がありませんでした")
+              state
+          end
 
-        done = %{
-          "stage" => "implement",
-          "status" => "done",
-          "round" => round,
-          "iteration" => iteration
-        }
+        done =
+          %{
+            "stage" => "implement",
+            "status" => "done",
+            "round" => round,
+            "iteration" => iteration
+          }
+          |> preserve_pr_url(pr_state)
 
         write_state!(issue_dir, done)
         print_implement_done(reference, actors, issue_dir, done, ws)
         %{state: done, entries: Reference.all(reference)}
 
       new_human_entries == [] ->
-        state = awaiting_state(issue_dir, human, round, iteration, "implement")
+        state =
+          issue_dir
+          |> awaiting_state(human, round, iteration, "implement")
+          |> preserve_pr_url(state)
+
+        write_state!(issue_dir, state)
         print_awaiting(issue_dir, human, "implement")
         %{state: state, entries: Reference.all(reference)}
 
@@ -525,7 +534,9 @@ defmodule Mix.Tasks.Tracefield.Dev do
           last_stat
         )
 
-        state = await_implement(reference, actors, issue_dir, ws, next_round, iteration + 1)
+        state =
+          await_implement(reference, actors, issue_dir, ws, next_round, iteration + 1, state)
+
         %{state: state, entries: Reference.all(reference)}
     end
   end
@@ -579,7 +590,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     change
   end
 
-  defp await_implement(reference, actors, issue_dir, ws, round, iteration) do
+  defp await_implement(reference, actors, issue_dir, ws, round, iteration, prior_state \\ %{}) do
     human = blocking_human!(actors)
 
     {_agent, _absorbed, _perception} =
@@ -593,24 +604,36 @@ defmodule Mix.Tasks.Tracefield.Dev do
         commit_message =
           "tracefield implement: #{issue_line} [#{Enum.join(change_ids, " ")}]"
 
-        case Workspace.apply!(ws, commit_message) do
-          {:ok, _sha} -> :ok
-          {:error, :empty} -> Mix.shell().error("warning: workspace にコミットする変更がありませんでした")
-        end
+        pr_state =
+          case Workspace.apply!(ws, commit_message) do
+            {:ok, _sha} ->
+              push_pr_after_apply!(reference, actors, issue_dir, prior_state, ws)
 
-        state = %{
-          "stage" => "implement",
-          "status" => "done",
-          "round" => round,
-          "iteration" => iteration
-        }
+            {:error, :empty} ->
+              Mix.shell().error("warning: workspace にコミットする変更がありませんでした")
+              prior_state
+          end
+
+        state =
+          %{
+            "stage" => "implement",
+            "status" => "done",
+            "round" => round,
+            "iteration" => iteration
+          }
+          |> preserve_pr_url(pr_state)
 
         write_state!(issue_dir, state)
         print_implement_done(reference, actors, issue_dir, state, ws)
         state
 
       true ->
-        state = awaiting_state(issue_dir, human, round, iteration, "implement")
+        state =
+          issue_dir
+          |> awaiting_state(human, round, iteration, "implement")
+          |> preserve_pr_url(prior_state)
+
+        write_state!(issue_dir, state)
         print_awaiting(issue_dir, human, "implement")
         state
     end
@@ -798,15 +821,17 @@ defmodule Mix.Tasks.Tracefield.Dev do
       end)
 
     if Enum.all?(verdicts, &verdict_pass?/1) do
-      done = %{
-        "stage" => "qa",
-        "status" => "done",
-        "round" => round,
-        "iteration" => Map.get(state, "iteration", 0)
-      }
+      done =
+        %{
+          "stage" => "qa",
+          "status" => "done",
+          "round" => round,
+          "iteration" => Map.get(state, "iteration", 0)
+        }
+        |> preserve_pr_url(state)
 
       write_state!(issue_dir, done)
-      print_qa_done(reference, issue_dir, ws)
+      print_qa_done(reference, issue_dir, ws, done)
       %{state: done, entries: Reference.all(reference)}
     else
       fail_feedback =
@@ -830,7 +855,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         latest_change_stat(reference, ws.organ_author)
       )
 
-      state = await_implement(reference, actors, issue_dir, ws, next_round, 0)
+      state = await_implement(reference, actors, issue_dir, ws, next_round, 0, state)
       %{state: state, entries: Reference.all(reference)}
     end
   end
@@ -878,21 +903,82 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp maybe_append_policy(citations, nil), do: citations
   defp maybe_append_policy(citations, policy_id), do: citations ++ [policy_id]
 
+  defp push_pr_after_apply!(reference, actors, issue_dir, state, %Workspace{git_mode: :pr} = ws) do
+    branch = Workspace.branch_name(ws, issue_slug(issue_dir))
+    create_pr? = not Map.has_key?(state, "pr_url")
+    title = "tracefield: #{issue_first_line(issue_dir)}"
+    body = pr_body(reference, actors, issue_dir, ws)
+
+    {:ok, url} = Workspace.push_and_create_pr!(ws, branch, title, body, create_pr?)
+
+    cond do
+      is_binary(url) and url != "" ->
+        Mix.shell().info("PR: #{url}")
+        Map.put(state, "pr_url", url)
+
+      pr_url = Map.get(state, "pr_url") ->
+        Mix.shell().info("PR 更新: push 済み（#{pr_url}）")
+        state
+
+      true ->
+        state
+    end
+  end
+
+  defp push_pr_after_apply!(_reference, _actors, _issue_dir, state, _ws), do: state
+
+  defp pr_body(reference, actors, issue_dir, ws) do
+    change_ids = organ_change_ids(reference, ws.organ_author)
+
+    decision_ids =
+      reference
+      |> approved_design_decisions(actors)
+      |> Enum.map(& &1.id)
+
+    policy_text =
+      reference
+      |> Reference.all()
+      |> Enum.filter(&(&1.type == :policy and &1.author == "POLICY" and &1.status == :active))
+      |> Enum.find_value(fn entry ->
+        if Map.get(entry.meta, :kind, Map.get(entry.meta, "kind")) == "git_flow" do
+          entry.text
+        end
+      end)
+      |> Kernel.||("-")
+
+    [
+      "issue: #{Path.basename(issue_dir)}",
+      "changes: #{Enum.join(change_ids, " ")}",
+      "decisions: #{Enum.join(decision_ids, " ")}",
+      "policy: #{policy_text}",
+      "",
+      "Generated by tracefield pipeline"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp preserve_pr_url(target, source) do
+    case Map.get(source, "pr_url") do
+      url when is_binary(url) and url != "" -> Map.put(target, "pr_url", url)
+      _other -> target
+    end
+  end
+
   defp print_git_flow(ws, issue_dir) do
     policy = Workspace.git_policy(ws, issue_slug(issue_dir))
     Mix.shell().info("git flow: #{ws.git_mode} (branch=#{policy.branch})")
   end
 
-  defp print_qa_done(reference, issue_dir) do
+  defp print_qa_done(reference, issue_dir, state) do
     ws =
       issue_dir
       |> Workspace.load!()
       |> Workspace.resolve_flow_path!(issue_slug(issue_dir))
 
-    print_qa_done(reference, issue_dir, ws)
+    print_qa_done(reference, issue_dir, ws, state)
   end
 
-  defp print_qa_done(reference, _issue_dir, ws) do
+  defp print_qa_done(reference, _issue_dir, ws, state) do
     entries = Reference.all(reference)
     verdicts = Enum.filter(entries, &(&1.type == :verdict and &1.status == :active))
 
@@ -902,6 +988,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info("Tracefield Dev qa done")
     Mix.shell().info("verdicts: #{length(verdicts)}")
     Mix.shell().info("workspace HEAD: #{String.trim(head_sha)}")
+    print_pr_url(state)
     Mix.shell().info("provenance: #{qa_provenance_chain(entries, ws.organ_author)}")
   end
 
@@ -956,7 +1043,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp print_implement_done(reference, _actors, _issue_dir, _state, ws) do
+  defp print_implement_done(reference, _actors, _issue_dir, state, ws) do
     entries = Reference.all(reference)
     changes = Enum.filter(entries, &(&1.type == :change and &1.status == :active))
 
@@ -966,8 +1053,15 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info("Tracefield Dev implement done")
     Mix.shell().info("changes: #{length(changes)}")
     Mix.shell().info("workspace HEAD: #{String.trim(head_sha)}")
+    print_pr_url(state)
     Mix.shell().info("provenance: #{implement_provenance_chain(entries, ws.organ_author)}")
   end
+
+  defp print_pr_url(%{"pr_url" => url}) when is_binary(url) and url != "" do
+    Mix.shell().info("PR: #{url}")
+  end
+
+  defp print_pr_url(_state), do: :ok
 
   defp implement_provenance_chain(entries, organ_author) do
     by_id = Map.new(entries, &{&1.id, &1})
@@ -1501,6 +1595,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info("issue: #{issue_dir}")
     Mix.shell().info("stage: #{state["stage"]}")
     Mix.shell().info("status: #{state["status"]}")
+    print_pr_url(state)
 
     Mix.shell().info(
       "store: #{Path.join(issue_dir, "store.jsonl")} entries=#{stats.entries} restored=#{stats.restored}"

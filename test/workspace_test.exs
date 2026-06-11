@@ -69,6 +69,41 @@ defmodule Tracefield.WorkspaceTest do
     end
   end
 
+  test "load! accepts pr mode with executable gh_cmd and rejects a missing gh_cmd" do
+    issue_dir = tmp_dir()
+    repo = init_git_repo_in!(issue_dir, "repo")
+    gh = fake_gh!(issue_dir)
+
+    write_workspace!(issue_dir, %{
+      "path" => "repo",
+      "git" => %{
+        "mode" => "pr",
+        "base" => "main",
+        "branch_template" => "tf/{slug}",
+        "remote" => "upstream",
+        "gh_cmd" => gh
+      }
+    })
+
+    ws = Workspace.load!(issue_dir)
+
+    assert ws.path == repo
+    assert ws.git_mode == :pr
+    assert ws.git_branch_template == "tf/{slug}"
+    assert ws.git_base == "main"
+    assert ws.git_remote == "upstream"
+    assert ws.git_gh_cmd == gh
+
+    write_workspace!(issue_dir, %{
+      "path" => "repo",
+      "git" => %{"mode" => "pr", "gh_cmd" => Path.join(issue_dir, "missing-gh")}
+    })
+
+    assert_raise Mix.Error, ~r/executable gh_cmd/, fn ->
+      Workspace.load!(issue_dir)
+    end
+  end
+
   test "OrganMock appends mock implementation and design decision lines" do
     repo = init_git_repo!()
 
@@ -296,6 +331,108 @@ defmodule Tracefield.WorkspaceTest do
     end
   end
 
+  test "ensure_flow! pr mode creates and reuses issue branch like branch mode" do
+    repo = init_git_repo!()
+    git!(repo, ["branch", "-M", "main"])
+
+    ws = flow_workspace(repo, :pr)
+
+    assert Workspace.ensure_flow!(ws, "issue-42").path == repo
+    assert current_branch(repo) == "tracefield/issue-42"
+
+    head = git!(repo, ["rev-parse", "HEAD"]) |> String.trim()
+    assert Workspace.ensure_flow!(ws, "issue-42").path == repo
+    assert current_branch(repo) == "tracefield/issue-42"
+    assert git!(repo, ["rev-parse", "HEAD"]) |> String.trim() == head
+  end
+
+  test "push_and_create_pr! pushes branch and returns URL from fake gh" do
+    parent = tmp_dir()
+    repo = init_git_repo_in!(parent, "repo")
+    bare = init_bare_repo!(parent, "origin.git")
+    gh = fake_gh!(parent)
+
+    git!(repo, ["branch", "-M", "main"])
+    git!(repo, ["remote", "add", "origin", bare])
+    git!(repo, ["checkout", "-b", "tracefield/issue-42"])
+    File.write!(Path.join(repo, "change.txt"), "change\n")
+    git!(repo, ["add", "change.txt"])
+
+    git!(repo, [
+      "-c",
+      "user.email=t@tracefield",
+      "-c",
+      "user.name=tracefield",
+      "commit",
+      "-m",
+      "change"
+    ])
+
+    ws = %{flow_workspace(repo, :pr) | git_gh_cmd: gh, git_remote: "origin", git_base: "main"}
+
+    assert {:ok, "https://example.com/pr/1"} =
+             Workspace.push_and_create_pr!(
+               ws,
+               "tracefield/issue-42",
+               "tracefield: issue",
+               "body",
+               true
+             )
+
+    assert branch_ref?(bare, "tracefield/issue-42")
+
+    assert File.read!(Path.join(parent, "gh-args.log")) =~
+             "pr create --base main --head tracefield/issue-42 --title tracefield: issue --body body"
+  end
+
+  test "push_and_create_pr! skips gh when create_pr? is false" do
+    parent = tmp_dir()
+    repo = init_git_repo_in!(parent, "repo")
+    bare = init_bare_repo!(parent, "origin.git")
+    gh = fake_gh!(parent)
+
+    git!(repo, ["branch", "-M", "main"])
+    git!(repo, ["remote", "add", "origin", bare])
+    git!(repo, ["checkout", "-b", "tracefield/issue-42"])
+
+    ws = %{flow_workspace(repo, :pr) | git_gh_cmd: gh, git_remote: "origin", git_base: "main"}
+
+    assert {:ok, nil} =
+             Workspace.push_and_create_pr!(
+               ws,
+               "tracefield/issue-42",
+               "tracefield: issue",
+               "body",
+               false
+             )
+
+    assert branch_ref?(bare, "tracefield/issue-42")
+    refute File.exists?(Path.join(parent, "gh-args.log"))
+  end
+
+  test "push_and_create_pr! raises when fake gh exits nonzero" do
+    parent = tmp_dir()
+    repo = init_git_repo_in!(parent, "repo")
+    bare = init_bare_repo!(parent, "origin.git")
+    gh = fake_gh!(parent, exit_code: 1)
+
+    git!(repo, ["branch", "-M", "main"])
+    git!(repo, ["remote", "add", "origin", bare])
+    git!(repo, ["checkout", "-b", "tracefield/issue-42"])
+
+    ws = %{flow_workspace(repo, :pr) | git_gh_cmd: gh, git_remote: "origin", git_base: "main"}
+
+    assert_raise Mix.Error, ~r/gh pr create failed.*fake gh failure/s, fn ->
+      Workspace.push_and_create_pr!(
+        ws,
+        "tracefield/issue-42",
+        "tracefield: issue",
+        "body",
+        true
+      )
+    end
+  end
+
   test "ensure_flow! worktree mode creates a branch worktree and resolves it idempotently" do
     parent = tmp_dir()
     repo = init_git_repo_in!(parent, "repo")
@@ -350,6 +487,41 @@ defmodule Tracefield.WorkspaceTest do
     dir
   end
 
+  defp init_bare_repo!(parent_dir, name) do
+    dir = Path.join(parent_dir, name)
+    {_output, 0} = System.cmd("git", ["init", "--bare", dir], stderr_to_stdout: true)
+    dir
+  end
+
+  defp fake_gh!(dir, opts \\ []) do
+    exit_code = Keyword.get(opts, :exit_code, 0)
+    path = Path.join(dir, "fake-gh")
+
+    body =
+      if exit_code == 0 do
+        """
+        #!/bin/sh
+        DIR=$(dirname "$0")
+        printf '%s\\n' "$*" >> "$DIR/gh-args.log"
+        printf '%s\\n' "noise"
+        printf '%s\\n' "https://example.com/pr/1"
+        exit 0
+        """
+      else
+        """
+        #!/bin/sh
+        DIR=$(dirname "$0")
+        printf '%s\\n' "$*" >> "$DIR/gh-args.log"
+        printf '%s\\n' "fake gh failure"
+        exit #{exit_code}
+        """
+      end
+
+    File.write!(path, body)
+    File.chmod!(path, 0o755)
+    path
+  end
+
   defp git!(path, args) do
     {output, 0} = System.cmd("git", args, cd: path, stderr_to_stdout: true)
     output
@@ -357,6 +529,13 @@ defmodule Tracefield.WorkspaceTest do
 
   defp current_branch(path) do
     git!(path, ["branch", "--show-current"]) |> String.trim()
+  end
+
+  defp branch_ref?(bare, branch) do
+    case System.cmd("git", ["show-ref", "--verify", "--quiet", "refs/heads/#{branch}"], cd: bare) do
+      {_output, 0} -> true
+      _other -> false
+    end
   end
 
   defp flow_workspace(repo, mode) do
@@ -369,7 +548,9 @@ defmodule Tracefield.WorkspaceTest do
       git_mode: mode,
       git_branch_template: "tracefield/{slug}",
       git_base: "main",
-      git_worktree_root: Path.join(Path.dirname(repo), "#{Path.basename(repo)}-worktrees")
+      git_worktree_root: Path.join(Path.dirname(repo), "#{Path.basename(repo)}-worktrees"),
+      git_remote: "origin",
+      git_gh_cmd: "gh"
     }
   end
 
