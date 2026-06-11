@@ -34,6 +34,7 @@ defmodule Tracefield.Agent do
         aware: [type: :boolean, default: false],
         serve_policy: [type: :any, default: :similar],
         entry_limit: [type: :integer, default: 2],
+        expected_types: [type: :any, default: nil],
         last_round: [type: :integer, default: 0],
         absorbed_count: [type: :integer, default: 0],
         last_absorbed: [type: :any, default: []],
@@ -230,8 +231,26 @@ defmodule Tracefield.Agent do
       end
     end
 
+    @system_json_example ~S({"entries":[{"type":"belief","text":"...","citations":["e1"]}]})
+
     defp system_prompt(state) do
-      "TRACEFIELD_AGENT_TURN\n#{situation_preamble(state)}Return only JSON {\"entries\":[{\"type\":\"belief\",\"text\":\"...\",\"citations\":[\"e1\"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
+      json_example = json_example_for(state.expected_types)
+      types_hint = expected_types_hint(state.expected_types)
+
+      "TRACEFIELD_AGENT_TURN\n#{situation_preamble(state)}Return only JSON #{json_example}.#{types_hint} At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
+    end
+
+    defp json_example_for(nil), do: @system_json_example
+
+    defp json_example_for([first | _]) do
+      String.replace(@system_json_example, ~S("type":"belief"), "\"type\":\"#{first}\"")
+    end
+
+    defp expected_types_hint(nil), do: ""
+    defp expected_types_hint([_single]), do: ""
+
+    defp expected_types_hint(types) do
+      " Expected entry types this turn: #{Enum.join(types, ", ")}."
     end
 
     defp situation_preamble(%{aware: true}) do
@@ -489,7 +508,8 @@ defmodule Tracefield.Agent do
           procedure_id: Keyword.get(opts, :procedure_id),
           aware: Keyword.get(opts, :aware, false),
           serve_policy: Keyword.get(opts, :serve_policy, :similar),
-          entry_limit: Keyword.get(opts, :entry_limit, 2)
+          entry_limit: Keyword.get(opts, :entry_limit, 2),
+          expected_types: normalize_expected_types(Keyword.get(opts, :expected_types))
         }
       )
 
@@ -516,5 +536,11 @@ defmodule Tracefield.Agent do
       end
 
     {%{agent | core: updated_core}, absorbed, perception}
+  end
+
+  defp normalize_expected_types(nil), do: nil
+
+  defp normalize_expected_types(types) when is_list(types) do
+    Enum.map(types, &to_string/1)
   end
 end

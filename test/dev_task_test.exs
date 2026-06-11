@@ -4,6 +4,46 @@ defmodule Mix.Tasks.Tracefield.DevTest do
   alias Mix.Tasks.Tracefield.Dev
   alias Tracefield.Reference
 
+  test "refine build_agent opts include requirement and question expected types" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    {:ok, reference} = Reference.start_link()
+    actor = Enum.find(Dev.load_actors!(dir), &(&1.id == "ARCH"))
+
+    opts =
+      Dev.agent_build_opts(
+        actor,
+        reference,
+        dir,
+        "e1",
+        [adapter: "mock"],
+        nil,
+        ["requirement", "question"]
+      )
+
+    assert Keyword.get(opts, :expected_types) == ["requirement", "question"]
+  end
+
+  test "design build_agent opts include decision expected type" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    {:ok, reference} = Reference.start_link()
+    actor = Enum.find(Dev.load_actors!(dir), &(&1.id == "ARCH"))
+
+    opts =
+      Dev.agent_build_opts(
+        actor,
+        reference,
+        dir,
+        "e1",
+        [adapter: "mock"],
+        [%{id: "e2", file: "requirement", text: "approved requirement"}],
+        ["decision"]
+      )
+
+    assert Keyword.get(opts, :expected_types) == ["decision"]
+  end
+
   test "load_actors! reads actors.json with kind/turn defaults and human without private_doc" do
     dir = tmp_issue_dir()
 
