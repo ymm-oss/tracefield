@@ -136,6 +136,104 @@ defmodule Tracefield.CoverageTest do
     refute output =~ "⚠ coverage-threshold:"
   end
 
+  test "detect_uncovered relative mode flags only the lower outlier in measured fixture" do
+    scored = relative_fixture_chunks()
+
+    {uncovered, meta} = Coverage.detect_uncovered(scored, coverage_mode: :relative)
+
+    assert length(uncovered) == 1
+    assert hd(uncovered).sim == 0.645
+    assert_in_delta meta.cutoff, 0.648, 0.001
+    assert_in_delta meta.median, 0.702, 0.001
+    assert_in_delta meta.mad, 0.054, 0.001
+    assert meta.k == 1.0
+  end
+
+  test "detect_uncovered relative mode returns empty for uniform similarities" do
+    scored = [
+      %{id: "e1", file: "a.md", nearest_actor: "ARCH", sim: 0.70},
+      %{id: "e2", file: "b.md", nearest_actor: "ARCH", sim: 0.71},
+      %{id: "e3", file: "c.md", nearest_actor: "ARCH", sim: 0.72}
+    ]
+
+    {uncovered, meta} = Coverage.detect_uncovered(scored, coverage_mode: :relative)
+
+    assert uncovered == []
+    assert_in_delta meta.cutoff, 0.70, 0.001
+  end
+
+  test "detect_uncovered absolute mode matches legacy threshold behavior" do
+    scored = [
+      %{id: "e1", file: "low.md", nearest_actor: "ARCH", sim: 0.15},
+      %{id: "e2", file: "high.md", nearest_actor: "ARCH", sim: 0.85}
+    ]
+
+    {uncovered, meta} = Coverage.detect_uncovered(scored, threshold: 0.2)
+
+    assert uncovered == [hd(scored)]
+    assert meta == %{mode: :absolute, threshold: 0.2}
+  end
+
+  test "detect_uncovered relative mode warns with effective cutoff metadata" do
+    scored = relative_fixture_chunks()
+
+    {uncovered, meta} = Coverage.detect_uncovered(scored, coverage_mode: :relative)
+
+    output =
+      capture_io(fn ->
+        Mix.shell().info(Coverage.detection_warning(meta))
+
+        Enum.each(uncovered, fn item ->
+          Mix.shell().info(
+            "⚠ uncovered chunk #{item.id} (#{item.file}) — nearest: #{item.nearest_actor} (#{item.sim})"
+          )
+        end)
+      end)
+
+    assert output =~ "⚠ coverage-relative: cutoff=0.648 (median=0.702 MAD=0.054 k=1.000)"
+    assert output =~ "⚠ uncovered chunk e3 (mobile-a11y.md)"
+  end
+
+  test "detect_uncovered relative mode skips detection when sample count is insufficient" do
+    scored = [
+      %{id: "e1", file: "a.md", nearest_actor: "ARCH", sim: 0.645},
+      %{id: "e2", file: "b.md", nearest_actor: "ARCH", sim: 0.702}
+    ]
+
+    output =
+      capture_io(fn ->
+        assert Coverage.detect_uncovered(scored, coverage_mode: :relative) ==
+                 {[], %{mode: :relative, insufficient_samples: true, n: 2}}
+      end)
+
+    assert output == ""
+  end
+
+  test "warn_uncovered_chunks! displays insufficient-sample note for relative mode" do
+    dir = tmp_issue_dir()
+    write_two_chunk_issue_files!(dir)
+
+    output =
+      capture_io(fn ->
+        Dev.run_dev(issue: dir, adapter: "mock", coverage_mode: :relative)
+      end)
+
+    assert output =~ "⚠ coverage-relative: insufficient samples (N=2), skipping relative detection"
+    refute output =~ "⚠ uncovered chunk"
+  end
+
+  test "detect_uncovered has no IO side effects" do
+    scored = relative_fixture_chunks()
+
+    output =
+      capture_io(fn ->
+        Coverage.detect_uncovered(scored, coverage_mode: :relative)
+        Coverage.detect_uncovered(Enum.take(scored, 2), coverage_mode: :relative)
+      end)
+
+    assert output == ""
+  end
+
   test "displayed coverage threshold matches value passed to Coverage.uncovered" do
     dir = tmp_issue_dir()
     write_uncovered_issue_files!(dir)
@@ -215,6 +313,34 @@ defmodule Tracefield.CoverageTest do
     )
   end
 
+  defp write_two_chunk_issue_files!(dir) do
+    File.mkdir_p!(Path.join(dir, "docs"))
+    File.mkdir_p!(Path.join(dir, "private"))
+    File.write!(Path.join(dir, "issue.md"), "CLI駆動の詳細化パイプラインを実装する")
+
+    File.write!(
+      Path.join([dir, "docs", "extra.md"]),
+      "quantum entanglement superposition particle physics relativity cosmology"
+    )
+
+    File.write!(Path.join([dir, "private", "arch.md"]), "CSS flexbox grid layout")
+
+    File.write!(
+      Path.join(dir, "actors.json"),
+      Jason.encode!([
+        %{
+          id: "ARCH",
+          domain: "frontend",
+          desc: "React UI components styling",
+          private_doc: "arch.md"
+        },
+        human_actor()
+      ])
+    )
+
+    File.write!(Path.join(dir, "state.json"), Jason.encode!(%{"stage" => "refine", "status" => "new"}))
+  end
+
   defp write_covered_issue_files!(dir) do
     text = "CLI駆動の詳細化パイプラインを実装する"
     File.mkdir_p!(Path.join(dir, "docs"))
@@ -249,6 +375,14 @@ defmodule Tracefield.CoverageTest do
         file: "docs/unrelated.md",
         text: "quantum entanglement superposition particle physics relativity cosmology"
       }
+    ]
+  end
+
+  defp relative_fixture_chunks do
+    [
+      %{id: "e1", file: "issue.md", nearest_actor: "ARCH", sim: 0.702},
+      %{id: "e2", file: "architecture-notes.md", nearest_actor: "ARCH", sim: 0.756},
+      %{id: "e3", file: "mobile-a11y.md", nearest_actor: "ARCH", sim: 0.645}
     ]
   end
 
