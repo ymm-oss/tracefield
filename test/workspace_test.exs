@@ -109,6 +109,71 @@ defmodule Tracefield.WorkspaceTest do
     assert File.exists?(Path.join(repo, "applied.txt"))
   end
 
+  test "apply! appends default Co-Authored-By trailer from organ_author" do
+    repo = init_git_repo!()
+    File.write!(Path.join(repo, "applied.txt"), "applied\n")
+
+    ws = %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN/codex"
+    }
+
+    assert {:ok, _short_sha} = Workspace.apply!(ws, "tracefield implement: issue-1 [e37]")
+
+    {body, 0} = System.cmd("git", ["log", "-1", "--format=%B"], cd: repo)
+
+    assert body =~ "Co-Authored-By: ORGAN/codex via tracefield <noreply@tracefield.local>"
+  end
+
+  test "apply! appends Co-Authored-By trailer from workspace.json footer override" do
+    issue_dir = tmp_dir()
+    repo = init_git_repo_in!(issue_dir, "repo")
+    File.write!(Path.join(repo, "applied.txt"), "applied\n")
+
+    write_workspace!(issue_dir, %{
+      "path" => "repo",
+      "organ" => %{
+        "author" => "ORGAN",
+        "footer" => "Custom Organ <custom@example.com>"
+      }
+    })
+
+    ws = Workspace.load!(issue_dir)
+
+    assert {:ok, _short_sha} =
+             Workspace.apply!(ws, "tracefield implement: issue-2 [e42]")
+
+    {body, 0} = System.cmd("git", ["log", "-1", "--format=%B"], cd: repo)
+
+    assert body =~ "Co-Authored-By: Custom Organ <custom@example.com>"
+    refute body =~ "via tracefield <noreply@tracefield.local>"
+  end
+
+  test "apply! preserves the first line of the commit message" do
+    repo = init_git_repo!()
+    File.write!(Path.join(repo, "applied.txt"), "applied\n")
+
+    ws = %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN"
+    }
+
+    subject = "tracefield implement: issue-3 [e99]"
+
+    assert {:ok, _short_sha} = Workspace.apply!(ws, subject)
+
+    {body, 0} = System.cmd("git", ["log", "-1", "--format=%B"], cd: repo)
+    [first_line | _] = String.split(body, "\n", trim: false)
+
+    assert first_line == subject
+  end
+
   test "apply! returns empty when nothing is staged" do
     repo = init_git_repo!()
 
@@ -148,7 +213,12 @@ defmodule Tracefield.WorkspaceTest do
   end
 
   defp init_git_repo! do
-    dir = tmp_dir()
+    init_git_repo_in!(tmp_dir())
+  end
+
+  defp init_git_repo_in!(parent_dir, name \\ nil) do
+    dir = if name, do: Path.join(parent_dir, name), else: parent_dir
+    File.mkdir_p!(dir)
     git!(dir, ["init"])
     File.write!(Path.join(dir, "README.md"), "initial\n")
     git!(dir, ["add", "README.md"])
