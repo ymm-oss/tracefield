@@ -18,6 +18,11 @@ defmodule Mix.Tasks.Tracefield.Dev do
                     """
                     |> String.trim()
 
+  @combine_instruction """
+                         PRESENTED ENTRIES の中に自分の専門と接続する entry があれば、帰結を述べてその entry と根拠 DOC の両方を引用せよ
+                         """
+                         |> String.trim()
+
   @impl true
   def run(args) do
     Mix.Task.run("app.start")
@@ -44,7 +49,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       )
 
     actors = load_actors!(issue_dir)
-    procedure_id = seed_reference!(reference, issue_dir)
+    procedure_id = seed_reference!(reference, issue_dir, opts)
     policy_id = seed_policy!(reference, policy, policy_sources)
     opts = Keyword.put(opts, :policy_id, policy_id)
 
@@ -179,7 +184,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       id: to_string(id),
       domain: to_string(domain),
       desc: to_string(desc),
-      kind: normalize_kind(Map.get(actor, "kind", "llm")),
+      kind: normalize_kind!(Map.get(actor, "kind"), id),
       turn: normalize_turn(Map.get(actor, "turn", "blocking")),
       private_doc_file: private_doc_file,
       private_doc_path: private_doc_path(issue_dir, private_doc_file),
@@ -191,8 +196,9 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp load_actor!(_issue_dir, actor), do: Mix.raise("invalid actor entry #{inspect(actor)}")
 
-  defp normalize_kind(kind) when kind in ["llm", "cli", "human"], do: String.to_atom(kind)
-  defp normalize_kind(other), do: Mix.raise("invalid actor kind #{inspect(other)}")
+  defp normalize_kind!(kind, _id) when kind in ["llm", "cli", "human"], do: String.to_atom(kind)
+  defp normalize_kind!(nil, id), do: Mix.raise("missing actor kind for #{id}")
+  defp normalize_kind!(other, id), do: Mix.raise("invalid actor kind #{inspect(other)} for #{id}")
 
   defp normalize_turn(turn) when turn in ["blocking", "async"], do: String.to_atom(turn)
   defp normalize_turn(other), do: Mix.raise("invalid actor turn #{inspect(other)}")
@@ -276,7 +282,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp state_path(issue_dir), do: Path.join(issue_dir, "state.json")
 
-  defp seed_reference!(reference, issue_dir) do
+  defp seed_reference!(reference, issue_dir, opts) do
     issue_path = Path.join(issue_dir, "issue.md")
 
     seed_entries =
@@ -294,11 +300,37 @@ defmodule Mix.Tasks.Tracefield.Dev do
     [procedure] =
       Reference.absorb_idempotent(
         reference,
-        [%{type: :procedure, text: @refine_procedure, meta: %{stage: "refine"}}],
+        [
+          %{
+            type: :procedure,
+            text: refine_procedure_text(opts),
+            meta: %{stage: "refine"}
+          }
+        ],
         "FACILITATOR"
       )
 
     procedure.id
+  end
+
+  defp refine_procedure_text(opts) do
+    case sharing_mode(opts, "refine") do
+      "combine" -> @refine_procedure <> "\n" <> @combine_instruction
+      _other -> @refine_procedure
+    end
+  end
+
+  defp design_procedure_text(opts) do
+    case sharing_mode(opts, "design") do
+      "combine" -> @design_procedure <> "\n" <> @combine_instruction
+      _other -> @design_procedure
+    end
+  end
+
+  defp sharing_mode(opts, stage) do
+    opts
+    |> Keyword.fetch!(:policy)
+    |> Policy.sharing_mode(stage)
   end
 
   defp seed_policy!(reference, policy, sources) do
@@ -352,7 +384,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
       1..rounds,
       opts,
       nil,
-      ["requirement", "question"]
+      ["requirement", "question"],
+      "refine"
     )
 
     state = await_human(reference, actors, issue_dir, procedure_id, rounds, 0, opts)
@@ -406,7 +439,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
           [next_round],
           opts,
           nil,
-          ["requirement", "question"]
+          ["requirement", "question"],
+          "refine"
         )
 
         state =
@@ -417,7 +451,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp start_design(reference, actors, issue_dir, state, opts) do
-    procedure_id = seed_design_procedure!(reference)
+    procedure_id = seed_design_procedure!(reference, opts)
     base_round = Map.get(state, "round", 2)
     rounds = Keyword.get(opts, :rounds, 2)
     ref_docs = design_reference_docs(reference)
@@ -430,7 +464,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
       (base_round + 1)..(base_round + rounds),
       opts,
       ref_docs,
-      ["decision"]
+      ["decision"],
+      "design"
     )
 
     state = await_design(reference, actors, issue_dir, procedure_id, base_round + rounds, 0)
@@ -438,7 +473,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp resume_design(reference, actors, issue_dir, state, opts) do
-    procedure_id = seed_design_procedure!(reference)
+    procedure_id = seed_design_procedure!(reference, opts)
     round = Map.get(state, "round", 4)
     iteration = Map.get(state, "iteration", 0)
     human = blocking_human!(actors)
@@ -488,7 +523,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
           [next_round],
           opts,
           design_reference_docs(reference),
-          ["decision"]
+          ["decision"],
+          "design"
         )
 
         state =
@@ -1182,15 +1218,25 @@ defmodule Mix.Tasks.Tracefield.Dev do
          rounds,
          opts,
          ref_docs,
-         expected_types
+         expected_types,
+         stage
        ) do
     actors
     |> Enum.filter(&(&1.kind in [:llm, :cli]))
-    |> then(fn actors ->
+    |> then(fn machine_actors ->
       Enum.each(rounds, fn round ->
-        Enum.each(actors, fn actor ->
+        Enum.each(machine_actors, fn actor ->
           actor
-          |> build_agent(reference, issue_dir, procedure_id, opts, ref_docs, expected_types)
+          |> build_agent(
+            reference,
+            issue_dir,
+            procedure_id,
+            opts,
+            ref_docs,
+            expected_types,
+            actors,
+            stage
+          )
           |> Agent.run_turn(reference, round)
         end)
       end)
@@ -1288,17 +1334,47 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Agent.run_turn(reference, round)
   end
 
-  defp build_agent(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types) do
+  defp build_agent(
+         actor,
+         reference,
+         issue_dir,
+         procedure_id,
+         opts,
+         ref_docs,
+         expected_types,
+         actors,
+         stage
+       ) do
     Agent.new(
       actor.id,
       actor.domain,
       actor.desc,
-      agent_build_opts(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types)
+      agent_build_opts(
+        actor,
+        reference,
+        issue_dir,
+        procedure_id,
+        opts,
+        ref_docs,
+        expected_types,
+        stage,
+        actors
+      )
     )
   end
 
   @doc false
-  def agent_build_opts(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types) do
+  def agent_build_opts(
+        actor,
+        reference,
+        issue_dir,
+        procedure_id,
+        opts,
+        ref_docs,
+        expected_types,
+        stage \\ nil,
+        actors \\ []
+      ) do
     [
       anchor: File.read!(Path.join(issue_dir, "issue.md")),
       reference_docs: ref_docs || reference_docs(reference),
@@ -1314,6 +1390,29 @@ defmodule Mix.Tasks.Tracefield.Dev do
       serve_policy: :diverse,
       expected_types: expected_types
     ]
+    |> Kernel.++(sharing_agent_opts(opts, actor, stage, actors))
+  end
+
+  @doc false
+  def machine_actor_ids(actors) do
+    actors
+    |> Enum.filter(&(&1.kind in [:llm, :cli]))
+    |> Enum.map(& &1.id)
+    |> MapSet.new()
+  end
+
+  defp sharing_agent_opts(opts, actor, stage, actors) do
+    with policy when is_map(policy) <- Keyword.get(opts, :policy),
+         stage when is_binary(stage) <- stage,
+         true <- actor.kind in [:llm, :cli],
+         "independent" <- Policy.sharing_mode(policy, stage) do
+      [
+        exclude_machine_authors: machine_actor_ids(actors),
+        sharing_stage: stage
+      ]
+    else
+      _ -> []
+    end
   end
 
   defp build_human_agent(actor, reference, issue_dir, procedure_id, human_opts) do
@@ -1338,11 +1437,17 @@ defmodule Mix.Tasks.Tracefield.Dev do
     )
   end
 
-  defp seed_design_procedure!(reference) do
+  defp seed_design_procedure!(reference, opts) do
     [procedure] =
       Reference.absorb_idempotent(
         reference,
-        [%{type: :procedure, text: @design_procedure, meta: %{stage: "design"}}],
+        [
+          %{
+            type: :procedure,
+            text: design_procedure_text(opts),
+            meta: %{stage: "design"}
+          }
+        ],
         "FACILITATOR"
       )
 

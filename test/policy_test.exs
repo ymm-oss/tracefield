@@ -33,6 +33,35 @@ defmodule Tracefield.PolicyTest do
     assert sources["git.branch_template"] == :default
   end
 
+  test "sharing_mode defaults to shared and rejects invalid values" do
+  assert Policy.sharing_mode(Policy.default_policy(), "refine") == "shared"
+  assert Policy.sharing_mode(Policy.default_policy(), "design") == "shared"
+
+  policy = Map.put(Policy.default_policy(), "sharing", %{"refine" => "independent"})
+
+  assert Policy.sharing_mode(policy, "refine") == "independent"
+  assert Policy.sharing_mode(policy, "design") == "shared"
+
+  assert_raise Mix.Error, ~r/invalid sharing\.refine "avoid"/, fn ->
+    Policy.validate_top_keys!(%{"sharing" => %{"refine" => "avoid"}})
+  end
+  end
+
+  test "sharing cascade resolves per stage with layer priority" do
+    layers = [
+      {:default, Policy.default_policy()},
+      {:issue, %{"sharing" => %{"refine" => "independent", "design" => "combine"}}},
+      {:cli, %{"sharing" => %{"design" => "shared"}}}
+    ]
+
+    {policy, sources} = Policy.resolve(layers)
+
+    assert Policy.sharing_mode(policy, "refine") == "independent"
+    assert Policy.sharing_mode(policy, "design") == "shared"
+    assert sources["sharing.refine"] == :issue
+    assert sources["sharing.design"] == :cli
+  end
+
   test "resolve rejects unknown top-level keys" do
     assert_raise Mix.Error, ~r/unknown policy keys: typo/, fn ->
       Policy.resolve([{:default, Policy.default_policy()}, {:repo, %{"typo" => true}}])

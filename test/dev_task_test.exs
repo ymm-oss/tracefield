@@ -44,13 +44,19 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert Keyword.get(opts, :expected_types) == ["decision"]
   end
 
-  test "load_actors! reads actors.json with kind/turn defaults and human without private_doc" do
+  test "load_actors! reads actors.json with explicit kind/turn and human without private_doc" do
     dir = tmp_issue_dir()
 
     File.write!(
       Path.join(dir, "actors.json"),
       Jason.encode!([
-        %{id: "ARCH", domain: "architecture", desc: "architect", private_doc: "arch.md"},
+        %{
+          id: "ARCH",
+          domain: "architecture",
+          desc: "architect",
+          kind: "llm",
+          private_doc: "arch.md"
+        },
         %{id: "CLI", domain: "implementation", desc: "cli", kind: "cli", turn: "async"},
         %{id: "HUMAN", domain: "review", desc: "reviewer", kind: "human"}
       ])
@@ -70,11 +76,105 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert human.private_doc == ""
   end
 
+  test "load_actors! raises when actor kind is missing" do
+    dir = tmp_issue_dir()
+
+    File.write!(
+      Path.join(dir, "actors.json"),
+      Jason.encode!([%{id: "ARCH", domain: "architecture", desc: "architect"}])
+    )
+
+    assert_raise Mix.Error, ~r/missing actor kind for ARCH/, fn ->
+      Dev.load_actors!(dir)
+    end
+  end
+
+  test "load_actors! raises for unknown actor kind" do
+    dir = tmp_issue_dir()
+
+    File.write!(
+      Path.join(dir, "actors.json"),
+      Jason.encode!([
+        %{id: "ARCH", domain: "architecture", desc: "architect", kind: "robot"}
+      ])
+    )
+
+    assert_raise Mix.Error, ~r/invalid actor kind "robot" for ARCH/, fn ->
+      Dev.load_actors!(dir)
+    end
+  end
+
   test "load_actors! falls back to agents.json" do
     dir = tmp_issue_dir()
     File.write!(Path.join(dir, "agents.json"), Jason.encode!([human_actor()]))
 
     assert [%{id: "HUMAN", kind: :human}] = Dev.load_actors!(dir)
+  end
+
+  test "combine sharing appends synthesis instruction to refine procedure and policy entry" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    File.write!(
+      Path.join(dir, "policy.json"),
+      Jason.encode!(%{"sharing" => %{"refine" => "combine"}})
+    )
+
+    result = Dev.run_dev(issue: dir, adapter: "mock")
+
+    combine_text =
+      "PRESENTED ENTRIES の中に自分の専門と接続する entry があれば、帰結を述べてその entry と根拠 DOC の両方を引用せよ"
+
+    procedure =
+      Enum.find(result.entries, fn entry ->
+        entry.type == :procedure and Map.get(entry.meta, :stage) == "refine"
+      end)
+
+    assert procedure.text =~ combine_text
+
+    [policy] = Enum.filter(result.entries, &(&1.type == :policy and &1.author == "POLICY"))
+    assert policy.meta[:policy]["sharing"]["refine"] == "combine"
+    assert policy.text =~ "sharing.refine=combine(issue)"
+  end
+
+  test "independent sharing passes machine author exclusion to agent opts" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    File.write!(
+      Path.join(dir, "actors.json"),
+      Jason.encode!([
+        %{id: "ARCH", domain: "architecture", desc: "architect", kind: "llm"},
+        %{id: "SEC", domain: "security", desc: "security", kind: "llm"},
+        human_actor()
+      ])
+    )
+
+    {:ok, reference} = Reference.start_link()
+    actors = Dev.load_actors!(dir)
+    arch = Enum.find(actors, &(&1.id == "ARCH"))
+
+    opts = [
+      adapter: "mock",
+      policy: %{"sharing" => %{"refine" => "independent"}}
+    ]
+
+    agent_opts =
+      Dev.agent_build_opts(
+        arch,
+        reference,
+        dir,
+        "e1",
+        opts,
+        nil,
+        ["requirement", "question"],
+        "refine",
+        actors
+      )
+
+    excluded = Keyword.fetch!(agent_opts, :exclude_machine_authors)
+    assert MapSet.equal?(excluded, MapSet.new(["ARCH", "SEC"]))
+    assert Keyword.get(agent_opts, :sharing_stage) == "refine"
   end
 
   test "embed_module! maps mock and ollama adapters without fallback" do
@@ -1060,7 +1160,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
   end
 
   defp llm_actor do
-    %{id: "ARCH", domain: "architecture", desc: "architectural reviewer"}
+    %{id: "ARCH", domain: "architecture", desc: "architectural reviewer", kind: "llm"}
   end
 
   defp human_actor do

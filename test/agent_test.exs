@@ -469,6 +469,81 @@ defmodule Tracefield.AgentTest do
     assert [%{citations: [^index_only_doc_id]}] = absorbed
   end
 
+  test "independent sharing excludes machine peer entries but keeps human entries in both directions" do
+    {:ok, ref} = Reference.start_link()
+
+    [arch_entry] =
+      Reference.absorb(ref, [%{type: :belief, text: "architecture peer state"}], "ARCH")
+
+    [sec_entry] =
+      Reference.absorb(ref, [%{type: :belief, text: "security peer state"}], "SEC")
+
+    [human_entry] =
+      Reference.absorb(ref, [%{type: :requirement, text: "human approved requirement"}], "HUMAN")
+
+    machine_ids = MapSet.new(["ARCH", "SEC"])
+
+    sec_agent =
+      Agent.new("SEC", "security", "security reviewer",
+        anchor: "enterprise assistant security",
+        k_s: 10,
+        adapter: Tracefield.LLM.Mock,
+        model: "mock",
+        serve_policy: :diverse,
+        exclude_machine_authors: machine_ids,
+        sharing_stage: "refine"
+      )
+
+    {_sec_agent, _absorbed, sec_perception} = Agent.run_turn(sec_agent, ref, 1)
+
+    sec_served_ids = Enum.map(sec_perception.served, & &1.id)
+    refute arch_entry.id in sec_served_ids
+    assert human_entry.id in sec_served_ids
+    assert sec_perception.sharing_excluded_authors == ["ARCH"]
+    assert sec_perception.sharing_stage == "refine"
+    assert sec_perception.sharing_turn == 1
+    assert sec_perception.sharing_mode == "independent"
+
+    arch_agent =
+      Agent.new("ARCH", "architecture", "architect",
+        anchor: "enterprise assistant architecture",
+        k_s: 10,
+        adapter: Tracefield.LLM.Mock,
+        model: "mock",
+        serve_policy: :diverse,
+        exclude_machine_authors: machine_ids,
+        sharing_stage: "refine"
+      )
+
+    {_arch_agent, _absorbed, arch_perception} = Agent.run_turn(arch_agent, ref, 2)
+
+    arch_served_ids = Enum.map(arch_perception.served, & &1.id)
+    refute sec_entry.id in arch_served_ids
+    assert human_entry.id in arch_served_ids
+    assert arch_perception.sharing_excluded_authors == ["SEC"]
+    assert arch_perception.sharing_stage == "refine"
+    assert arch_perception.sharing_turn == 2
+  end
+
+  test "shared mode does not record sharing exclusion metadata" do
+    {:ok, ref} = Reference.start_link()
+
+    Reference.absorb(ref, [%{type: :belief, text: "peer state"}], "ARCH")
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        anchor: "enterprise assistant security",
+        k_s: 10,
+        adapter: Tracefield.LLM.Mock,
+        model: "mock",
+        serve_policy: :diverse
+      )
+
+    {_agent, _absorbed, perception} = Agent.run_turn(agent, ref, 1)
+
+    refute Map.has_key?(perception, :sharing_excluded_authors)
+  end
+
   test "document prompt records over_budget when selected prompt still exceeds budget" do
     Process.register(self(), PromptCaptureMock)
     {:ok, ref} = Reference.start_link()

@@ -36,6 +36,8 @@ defmodule Tracefield.Agent do
         serve_policy: [type: :any, default: :similar],
         entry_limit: [type: :integer, default: 2],
         expected_types: [type: :any, default: nil],
+        exclude_machine_authors: [type: :any, default: nil],
+        sharing_stage: [type: :string, default: nil],
         last_round: [type: :integer, default: 0],
         absorbed_count: [type: :integer, default: 0],
         last_absorbed: [type: :any, default: []],
@@ -65,7 +67,7 @@ defmodule Tracefield.Agent do
       note = Map.get(params, :note, "")
       query_text = query(state)
 
-      retrieved =
+      served =
         Tracefield.Reference.serve(reference, query_text,
           k: max(state.k_s, 0),
           exclude_author: state.id,
@@ -73,11 +75,13 @@ defmodule Tracefield.Agent do
           policy: state.serve_policy
         )
 
+      {retrieved, sharing_meta} = apply_sharing_filter(served, state, round)
+
       procedure = procedure_entry(reference, state.procedure_id)
       presented_ids = MapSet.new(Enum.map(retrieved, & &1.id))
       reference_doc_ids = MapSet.new(Enum.map(state.reference_docs, &doc_id/1))
       prompt = build_prompt(reference, state, round, retrieved, procedure, note, query_text)
-      perception = perception_log(query_text, retrieved, prompt)
+      perception = perception_log(query_text, retrieved, prompt, sharing_meta)
 
       entries =
         prompt.messages
@@ -144,7 +148,41 @@ defmodule Tracefield.Agent do
       Tracefield.Reference.get(reference, procedure_id)
     end
 
-    defp perception_log(query, retrieved, prompt) do
+    defp apply_sharing_filter(entries, state, round) do
+      authors = author_set(state.exclude_machine_authors)
+
+      if MapSet.size(authors) == 0 do
+        {entries, %{}}
+      else
+        excluded =
+          entries
+          |> Enum.filter(&MapSet.member?(authors, &1.author))
+          |> Enum.map(& &1.author)
+          |> Enum.uniq()
+
+        filtered = Enum.reject(entries, &MapSet.member?(authors, &1.author))
+        meta = sharing_perception_meta(excluded, state.sharing_stage, round)
+        {filtered, meta}
+      end
+    end
+
+    defp author_set(nil), do: MapSet.new()
+    defp author_set(%MapSet{} = set), do: set
+    defp author_set(authors) when is_list(authors), do: MapSet.new(authors)
+    defp author_set(_other), do: MapSet.new()
+
+    defp sharing_perception_meta([], _stage, _round), do: %{}
+
+    defp sharing_perception_meta(excluded, stage, round) do
+      %{
+        sharing_excluded_authors: excluded,
+        sharing_stage: stage,
+        sharing_turn: round,
+        sharing_mode: "independent"
+      }
+    end
+
+    defp perception_log(query, retrieved, prompt, sharing_meta) do
       %{
         query: query,
         served: Enum.map(retrieved, &%{id: &1.id, author: &1.author}),
@@ -153,6 +191,7 @@ defmodule Tracefield.Agent do
         docs_full_ids: prompt.docs_full_ids,
         over_budget: prompt.over_budget
       }
+      |> Map.merge(sharing_meta)
     end
 
     defp build_prompt(reference, state, round, retrieved, procedure, note, query_text) do
@@ -519,7 +558,9 @@ defmodule Tracefield.Agent do
           aware: Keyword.get(opts, :aware, false),
           serve_policy: Keyword.get(opts, :serve_policy, :similar),
           entry_limit: Keyword.get(opts, :entry_limit, 2),
-          expected_types: normalize_expected_types(Keyword.get(opts, :expected_types))
+          expected_types: normalize_expected_types(Keyword.get(opts, :expected_types)),
+          exclude_machine_authors: Keyword.get(opts, :exclude_machine_authors),
+          sharing_stage: Keyword.get(opts, :sharing_stage)
         }
       )
 

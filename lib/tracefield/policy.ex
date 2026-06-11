@@ -1,13 +1,15 @@
 defmodule Tracefield.Policy do
   @moduledoc "Policy cascade loading and resolution."
 
-  @known_top_keys MapSet.new(["coverage", "embed", "recruit", "rounds", "git"])
+  @known_top_keys MapSet.new(["coverage", "embed", "recruit", "rounds", "git", "sharing"])
+  @sharing_modes ~w(shared independent combine)
 
   @default_policy %{
     "coverage" => %{"mode" => "absolute", "threshold" => 0.2},
     "embed" => "mock",
     "recruit" => false,
     "rounds" => 2,
+    "sharing" => %{},
     "git" => %{
       "mode" => "current",
       "branch_template" => "tracefield/{slug}",
@@ -55,6 +57,14 @@ defmodule Tracefield.Policy do
     |> then(&"policy: #{&1}")
   end
 
+  @spec sharing_mode(map(), String.t()) :: String.t()
+  def sharing_mode(policy, stage) when is_map(policy) and is_binary(stage) do
+    policy
+    |> Map.get("sharing", %{})
+    |> Map.get(stage, "shared")
+    |> validate_sharing_mode!(stage)
+  end
+
   @spec validate_top_keys!(map()) :: :ok
   def validate_top_keys!(policy) when is_map(policy) do
     unknown =
@@ -67,6 +77,7 @@ defmodule Tracefield.Policy do
       Mix.raise("unknown policy keys: #{Enum.join(Enum.sort(unknown), ", ")}")
     end
 
+    validate_sharing_values!(policy)
     :ok
   end
 
@@ -196,4 +207,26 @@ defmodule Tracefield.Policy do
   defp format_value(value) when is_atom(value), do: Atom.to_string(value)
   defp format_value(value) when is_binary(value), do: value
   defp format_value(value), do: to_string(value)
+
+  defp validate_sharing_values!(policy) do
+    case Map.get(policy, "sharing") do
+      nil ->
+        :ok
+
+      sharing when is_map(sharing) ->
+        Enum.each(sharing, fn {stage, mode} ->
+          validate_sharing_mode!(mode, stage)
+        end)
+
+      other ->
+        Mix.raise("sharing must be a JSON object: #{inspect(other)}")
+    end
+  end
+
+  defp validate_sharing_mode!(mode, stage) when mode in @sharing_modes, do: mode
+
+  defp validate_sharing_mode!(mode, stage) do
+    label = if stage, do: "sharing.#{stage}", else: "sharing"
+    Mix.raise("invalid #{label} #{inspect(mode)}")
+  end
 end
