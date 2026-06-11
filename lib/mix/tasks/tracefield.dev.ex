@@ -108,7 +108,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
           model: :string,
           temperature: :float,
           cli_cmd: :string,
-          coverage_threshold: :float
+          coverage_threshold: :float,
+          coverage_mode: :string
         ]
       )
 
@@ -118,6 +119,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     # 0.2 flags chunks with no meaningful actor overlap while tolerating paraphrase.
     coverage_threshold = Keyword.get(opts, :coverage_threshold, 0.2)
+    coverage_mode = coverage_mode!(Keyword.get(opts, :coverage_mode, "absolute"))
 
     [
       issue: Keyword.get(opts, :issue) || Mix.raise("--issue is required"),
@@ -130,7 +132,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
       model: Keyword.get(opts, :model),
       temperature: Keyword.get(opts, :temperature, 0.4),
       cli_cmd: Keyword.get(opts, :cli_cmd),
-      coverage_threshold: coverage_threshold
+      coverage_threshold: coverage_threshold,
+      coverage_mode: coverage_mode
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -187,6 +190,11 @@ defmodule Mix.Tasks.Tracefield.Dev do
   def embed_module!("mock"), do: Tracefield.Embed.Mock
   def embed_module!("ollama"), do: Tracefield.Embed.Ollama
   def embed_module!(other), do: Mix.raise("invalid embed #{inspect(other)}")
+
+  @doc false
+  def coverage_mode!("absolute"), do: :absolute
+  def coverage_mode!("relative"), do: :relative
+  def coverage_mode!(other), do: Mix.raise("invalid coverage_mode #{inspect(other)}")
 
   defp load_state(issue_dir) do
     path = state_path(issue_dir)
@@ -1181,18 +1189,27 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp warn_uncovered_chunks!(reference, actors, opts) do
     threshold = Keyword.get(opts, :coverage_threshold, 0.2)
+    coverage_mode = Keyword.get(opts, :coverage_mode, :absolute)
 
-    uncovered =
+    coverage_opts = [
+      embed_adapter: Keyword.fetch!(opts, :embed_adapter),
+      threshold: threshold,
+      coverage_mode: coverage_mode
+    ]
+
+    {uncovered, detection_meta} =
       reference
       |> reference_docs()
-      |> Coverage.uncovered(actors,
-        embed_adapter: Keyword.fetch!(opts, :embed_adapter),
-        threshold: threshold
-      )
+      |> Coverage.analyze(actors, coverage_opts)
+
+    display_warning? =
+      uncovered != [] or Map.get(detection_meta, :insufficient_samples, false)
+
+    if display_warning? do
+      Mix.shell().info(Coverage.detection_warning(detection_meta))
+    end
 
     if uncovered != [] do
-      Mix.shell().info("⚠ coverage-threshold: #{threshold}")
-
       Enum.each(uncovered, fn item ->
         Mix.shell().info(
           "⚠ uncovered chunk #{item.id} (#{item.file}) — nearest: #{item.nearest_actor} (#{format_sim(item.sim)})"

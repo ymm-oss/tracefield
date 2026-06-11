@@ -7,6 +7,8 @@ defmodule Tracefield.Coverage do
 
   # 0.2 flags chunks with no meaningful actor overlap while tolerating paraphrase.
   @default_threshold 0.2
+  @default_k 1.0
+  @min_relative_samples 3
 
   @type chunk :: %{
           required(:id) => String.t(),
@@ -20,17 +22,24 @@ defmodule Tracefield.Coverage do
           required(:kind) => atom(),
           required(:private_doc) => String.t()
         }
-  @type uncovered_chunk :: %{
+  @type scored_chunk :: %{
           id: String.t(),
           file: String.t(),
           nearest_actor: String.t(),
           sim: float()
         }
+  @type uncovered_chunk :: scored_chunk()
+  @type detection_meta :: map()
 
   @spec uncovered([chunk()], [actor()], keyword()) :: [uncovered_chunk()]
   def uncovered(chunks, actors, opts) do
+    analyze(chunks, actors, opts) |> elem(0)
+  end
+
+  @doc false
+  @spec analyze([chunk()], [actor()], keyword()) :: {[uncovered_chunk()], detection_meta()}
+  def analyze(chunks, actors, opts) do
     embed_adapter = Keyword.fetch!(opts, :embed_adapter)
-    threshold = Keyword.get(opts, :threshold, @default_threshold)
 
     measurable_actors =
       actors
@@ -38,13 +47,73 @@ defmodule Tracefield.Coverage do
       |> Enum.map(fn actor -> {actor.id, actor_profile(actor)} end)
 
     cond do
-      measurable_actors == [] -> []
-      chunks == [] -> []
-      true -> uncovered_chunks(chunks, measurable_actors, embed_adapter, threshold)
+      measurable_actors == [] ->
+        {[], %{mode: coverage_mode(opts)}}
+
+      chunks == [] ->
+        {[], %{mode: coverage_mode(opts)}}
+
+      true ->
+        chunks
+        |> score_chunks(measurable_actors, embed_adapter)
+        |> then(&detect_uncovered(&1, opts))
     end
   end
 
-  defp uncovered_chunks(chunks, measurable_actors, embed_adapter, threshold) do
+  @spec detect_uncovered([scored_chunk()], keyword()) :: {[uncovered_chunk()], detection_meta()}
+  def detect_uncovered(scored_chunks, opts) do
+    mode = coverage_mode(opts)
+
+    case mode do
+      :absolute ->
+        threshold = Keyword.get(opts, :threshold, @default_threshold)
+
+        uncovered =
+          Enum.filter(scored_chunks, fn %{sim: sim} ->
+            sim < threshold
+          end)
+
+        {uncovered, %{mode: :absolute, threshold: threshold}}
+
+      :relative ->
+        sims = Enum.map(scored_chunks, & &1.sim)
+        n = length(sims)
+
+        if n < @min_relative_samples do
+          {[], %{mode: :relative, insufficient_samples: true, n: n}}
+        else
+          k = Keyword.get(opts, :coverage_k, @default_k)
+          median = median(sims)
+          mad = mad(sims)
+          cutoff = median - k * mad
+
+          uncovered =
+            Enum.filter(scored_chunks, fn %{sim: sim} ->
+              sim < cutoff
+            end)
+
+          {uncovered,
+           %{mode: :relative, cutoff: cutoff, median: median, mad: mad, k: k}}
+        end
+    end
+  end
+
+  @doc false
+  @spec detection_warning(detection_meta()) :: String.t() | nil
+  def detection_warning(%{insufficient_samples: true, n: n}) do
+    "⚠ coverage-relative: insufficient samples (N=#{n}), skipping relative detection"
+  end
+
+  def detection_warning(%{mode: :absolute, threshold: threshold}) do
+    "⚠ coverage-threshold: #{threshold}"
+  end
+
+  def detection_warning(%{mode: :relative, cutoff: cutoff, median: median, mad: mad, k: k}) do
+    "⚠ coverage-relative: cutoff=#{format_stat(cutoff)} (median=#{format_stat(median)} MAD=#{format_stat(mad)} k=#{format_stat(k)})"
+  end
+
+  @spec score_chunks([chunk()], [{String.t(), String.t()}], module()) :: [scored_chunk()]
+  def score_chunks(chunks, measurable_actors, embed_adapter) do
     actor_profiles = Enum.map(measurable_actors, fn {_id, profile} -> profile end)
     chunk_texts = Enum.map(chunks, & &1.text)
 
@@ -59,7 +128,7 @@ defmodule Tracefield.Coverage do
 
     chunks
     |> Enum.zip(chunk_embeddings)
-    |> Enum.reduce([], fn {chunk, chunk_embedding}, acc ->
+    |> Enum.map(fn {chunk, chunk_embedding} ->
       {nearest_actor, max_sim} =
         actor_ids
         |> Enum.zip(actor_embeddings)
@@ -68,13 +137,44 @@ defmodule Tracefield.Coverage do
         end)
         |> Enum.max_by(fn {_actor_id, sim} -> sim end, fn -> {"", 0.0} end)
 
-      if max_sim < threshold do
-        [%{id: chunk.id, file: chunk.file, nearest_actor: nearest_actor, sim: max_sim} | acc]
-      else
-        acc
-      end
+      %{id: chunk.id, file: chunk.file, nearest_actor: nearest_actor, sim: max_sim}
     end)
-    |> Enum.reverse()
+  end
+
+  defp coverage_mode(opts) do
+    case Keyword.get(opts, :coverage_mode, :absolute) do
+      :absolute -> :absolute
+      :relative -> :relative
+      other -> raise ArgumentError, "invalid coverage_mode #{inspect(other)}"
+    end
+  end
+
+  defp median(values) when values == [], do: 0.0
+
+  defp median(values) do
+    sorted = Enum.sort(values)
+    n = length(sorted)
+    mid = div(n, 2)
+
+    if rem(n, 2) == 1 do
+      Enum.at(sorted, mid)
+    else
+      (Enum.at(sorted, mid - 1) + Enum.at(sorted, mid)) / 2
+    end
+  end
+
+  defp mad(values) do
+    m = median(values)
+
+    values
+    |> Enum.map(fn value -> abs(value - m) end)
+    |> median()
+  end
+
+  defp format_stat(value) do
+    value
+    |> Float.round(3)
+    |> :erlang.float_to_binary(decimals: 3)
   end
 
   defp actor_profile(%{domain: domain, desc: desc, private_doc: private_doc}) do
