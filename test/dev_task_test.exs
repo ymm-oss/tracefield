@@ -332,7 +332,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert git!(repo, ["status", "--porcelain"]) == ""
   end
 
-  test "git flow policy is seeded once and cited by implementation changes" do
+  test "effective policy is seeded once and cited by implementation changes" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
 
@@ -346,10 +346,13 @@ defmodule Mix.Tasks.Tracefield.DevTest do
 
     [policy] = Enum.filter(implement1.entries, &(&1.type == :policy and &1.author == "POLICY"))
 
-    assert policy.text ==
-             "git flow: mode=branch branch=tracefield/#{Path.basename(dir)} base=main"
-
-    assert policy.meta[:kind] == "git_flow"
+    assert policy.text =~ "policy: "
+    assert policy.text =~ "coverage.mode=absolute(default)"
+    assert policy.text =~ "git.mode=branch(issue)"
+    assert policy.text =~ "git.base=main(issue)"
+    assert policy.meta[:kind] == "effective_policy"
+    assert policy.meta[:policy]["git"]["mode"] == "branch"
+    assert policy.meta[:sources]["git.mode"] == "issue"
 
     change = Enum.find(implement1.entries, &(&1.type == :change and &1.author == "ORGAN"))
     assert List.last(change.citations) == policy.id
@@ -357,6 +360,84 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     implement2 = Dev.run_dev(issue: dir, adapter: "mock")
 
     assert Enum.count(implement2.entries, &(&1.type == :policy and &1.author == "POLICY")) == 1
+  end
+
+  test "repo policy drives relative coverage mode and CLI flag overrides it" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    repo = init_workspace_repo!(dir)
+    File.mkdir_p!(Path.join([repo, ".tracefield"]))
+
+    File.write!(
+      Path.join([repo, ".tracefield", "policy.json"]),
+      Jason.encode!(%{"coverage" => %{"mode" => "relative"}})
+    )
+
+    repo_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.run_dev(issue: dir, adapter: "mock")
+      end)
+
+    assert repo_output =~
+             "⚠ coverage-relative: insufficient samples (N=2), skipping relative detection"
+
+    cli_dir = tmp_issue_dir()
+    write_issue_files!(cli_dir)
+    cli_repo = init_workspace_repo!(cli_dir)
+    File.mkdir_p!(Path.join([cli_repo, ".tracefield"]))
+
+    File.write!(
+      Path.join([cli_repo, ".tracefield", "policy.json"]),
+      Jason.encode!(%{"coverage" => %{"mode" => "relative"}})
+    )
+
+    cli_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.run_dev(
+          issue: cli_dir,
+          adapter: "mock",
+          coverage_mode: :absolute,
+          coverage_threshold: 0.0
+        )
+      end)
+
+    refute cli_output =~ "coverage-relative"
+  end
+
+  test "policy entry records value and source metadata" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    repo = init_workspace_repo!(dir)
+    File.mkdir_p!(Path.join([repo, ".tracefield"]))
+
+    File.write!(
+      Path.join([repo, ".tracefield", "policy.json"]),
+      Jason.encode!(%{"coverage" => %{"mode" => "relative"}, "embed" => "mock"})
+    )
+
+    result = Dev.run_dev(issue: dir, adapter: "mock", coverage_mode: :absolute)
+    [policy] = Enum.filter(result.entries, &(&1.type == :policy and &1.author == "POLICY"))
+
+    assert policy.text =~ "coverage.mode=absolute(cli)"
+    assert policy.text =~ "embed=mock(repo)"
+    assert policy.meta[:kind] == "effective_policy"
+    assert policy.meta[:policy]["coverage"]["mode"] == "absolute"
+    assert policy.meta[:sources]["coverage.mode"] in [:cli, "cli"]
+    assert policy.meta[:sources]["embed"] in [:repo, "repo"]
+  end
+
+  test "status prints effective policy values and sources" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.run_dev(issue: dir, adapter: "mock", status: true, rounds: 3)
+      end)
+
+    assert output =~ "effective policy:"
+    assert output =~ "  rounds: 3 (cli)"
+    assert output =~ "  coverage.mode: absolute (default)"
   end
 
   test "qa stage passes after implement done with verdict provenance chain" do

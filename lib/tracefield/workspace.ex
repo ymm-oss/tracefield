@@ -34,8 +34,8 @@ defmodule Tracefield.Workspace do
     File.exists?(Path.join(issue_dir, "workspace.json"))
   end
 
-  @spec load!(String.t()) :: %__MODULE__{}
-  def load!(issue_dir) do
+  @spec load!(String.t(), map() | nil) :: %__MODULE__{}
+  def load!(issue_dir, git_override \\ nil) do
     path = Path.join(issue_dir, "workspace.json")
 
     unless File.exists?(path) do
@@ -47,7 +47,7 @@ defmodule Tracefield.Workspace do
     validate_repo!(repo_path)
 
     organ = Map.get(config, "organ", %{})
-    git = normalize_git_config!(config, repo_path)
+    git = normalize_git_config!(config, repo_path, git_override)
 
     %__MODULE__{
       path: repo_path,
@@ -343,8 +343,8 @@ defmodule Tracefield.Workspace do
   defp normalize_args(args) when is_list(args), do: Enum.map(args, &to_string/1)
   defp normalize_args(_args), do: @default_organ_args
 
-  defp normalize_git_config!(config, repo_path) do
-    git = Map.get(config, "git", %{})
+  defp normalize_git_config!(config, repo_path, git_override) do
+    git = git_override || Map.get(config, "git", %{})
     mode = normalize_git_mode!(Map.get(git, "mode", "current"))
     branch_template = Map.get(git, "branch_template", @default_git_branch_template) |> to_string()
     base = Map.get(git, "base", @default_git_base) |> to_string()

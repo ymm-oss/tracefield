@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   @moduledoc "Run the Tracefield development pipeline over an issue directory."
   use Mix.Task
 
-  alias Tracefield.{Agent, Coverage, QA, Reference, Workspace}
+  alias Tracefield.{Agent, Coverage, Policy, QA, Reference, Workspace}
 
   @shortdoc "Run Tracefield dev pipeline"
   @refine_procedure """
@@ -29,7 +29,10 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   def run_dev(opts) do
     issue_dir = Keyword.fetch!(opts, :issue)
-    embed_mod = embed_module!(Keyword.get(opts, :embed, "mock"))
+    cli_policy = Keyword.get(opts, :cli_policy, cli_policy_from_opts(opts))
+    {policy, policy_sources} = Policy.load_layers!(issue_dir, cli_policy) |> Policy.resolve()
+    opts = put_effective_policy!(opts, policy, policy_sources)
+    embed_mod = embed_module!(Keyword.fetch!(opts, :embed))
     opts = Keyword.put(opts, :embed_adapter, embed_mod)
     status? = Keyword.get(opts, :status, false)
     state = load_state(issue_dir)
@@ -42,8 +45,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     actors = load_actors!(issue_dir)
     procedure_id = seed_reference!(reference, issue_dir)
-    git_policy_id = seed_git_policy!(reference, issue_dir)
-    opts = Keyword.put(opts, :git_policy_id, git_policy_id)
+    policy_id = seed_policy!(reference, policy, policy_sources)
+    opts = Keyword.put(opts, :policy_id, policy_id)
 
     cond do
       adopt_recruit = Keyword.get(opts, :adopt_recruit) ->
@@ -51,7 +54,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         %{state: state, entries: Reference.all(reference)}
 
       status? ->
-        print_status(issue_dir, state, reference, actors)
+        print_status(issue_dir, state, reference, actors, policy, policy_sources)
         %{state: state, entries: Reference.all(reference)}
 
       state["stage"] == "refine" and state["status"] == "done" ->
@@ -77,7 +80,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
       state["stage"] == "qa" and state["status"] == "done" ->
         Mix.shell().info("qa 完了。Issue 完遂（refine→design→implement→qa）")
-        print_qa_done(reference, issue_dir, state)
+        print_qa_done_from_issue(reference, issue_dir, state, opts)
         %{state: state, entries: Reference.all(reference)}
 
       state["stage"] == "implement" ->
@@ -119,25 +122,41 @@ defmodule Mix.Tasks.Tracefield.Dev do
       Mix.raise("invalid options: #{inspect(invalid)}")
     end
 
-    # 0.2 flags chunks with no meaningful actor overlap while tolerating paraphrase.
-    coverage_threshold = Keyword.get(opts, :coverage_threshold, 0.2)
-    coverage_mode = coverage_mode!(Keyword.get(opts, :coverage_mode, "absolute"))
-
     [
       issue: Keyword.get(opts, :issue) || Mix.raise("--issue is required"),
       status: Keyword.get(opts, :status, false),
-      recruit: Keyword.get(opts, :recruit, false),
       adopt_recruit: Keyword.get(opts, :adopt_recruit),
-      rounds: Keyword.get(opts, :rounds, 2),
       adapter: Keyword.get(opts, :adapter, "mock"),
-      embed: Keyword.get(opts, :embed, "mock"),
       model: Keyword.get(opts, :model),
       temperature: Keyword.get(opts, :temperature, 0.4),
       cli_cmd: Keyword.get(opts, :cli_cmd),
-      coverage_threshold: coverage_threshold,
-      coverage_mode: coverage_mode
+      cli_policy: cli_policy_from_opts(opts)
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp cli_policy_from_opts(opts) do
+    %{}
+    |> maybe_put_policy(["coverage", "threshold"], opts, :coverage_threshold)
+    |> maybe_put_policy(["coverage", "mode"], opts, :coverage_mode, &coverage_mode_string!/1)
+    |> maybe_put_policy(["embed"], opts, :embed)
+    |> maybe_put_policy(["recruit"], opts, :recruit)
+    |> maybe_put_policy(["rounds"], opts, :rounds)
+  end
+
+  defp maybe_put_policy(policy, path, opts, opt_key, mapper \\ & &1) do
+    if Keyword.has_key?(opts, opt_key) do
+      put_in_policy(policy, path, mapper.(Keyword.fetch!(opts, opt_key)))
+    else
+      policy
+    end
+  end
+
+  defp put_in_policy(_policy, [], value), do: value
+
+  defp put_in_policy(policy, [key | rest], value) do
+    existing = Map.get(policy, key, %{})
+    Map.put(policy, key, put_in_policy(existing, rest, value))
   end
 
   defp actors_path(issue_dir) do
@@ -196,7 +215,50 @@ defmodule Mix.Tasks.Tracefield.Dev do
   @doc false
   def coverage_mode!("absolute"), do: :absolute
   def coverage_mode!("relative"), do: :relative
+  def coverage_mode!(mode) when is_atom(mode), do: coverage_mode!(Atom.to_string(mode))
   def coverage_mode!(other), do: Mix.raise("invalid coverage_mode #{inspect(other)}")
+
+  defp coverage_mode_string!(mode) do
+    mode
+    |> coverage_mode!()
+    |> Atom.to_string()
+  end
+
+  defp put_effective_policy!(opts, policy, sources) do
+    coverage = Map.fetch!(policy, "coverage")
+
+    opts
+    |> Keyword.put(:policy, policy)
+    |> Keyword.put(:policy_sources, sources)
+    |> Keyword.put(:embed, Map.fetch!(policy, "embed"))
+    |> Keyword.put(:recruit, Map.fetch!(policy, "recruit"))
+    |> Keyword.put(:rounds, Map.fetch!(policy, "rounds"))
+    |> Keyword.put(:coverage_threshold, Map.fetch!(coverage, "threshold"))
+    |> Keyword.put(:coverage_mode, coverage |> Map.fetch!("mode") |> coverage_mode!())
+    |> validate_effective_policy_opts!()
+  end
+
+  defp validate_effective_policy_opts!(opts) do
+    embed_module!(Keyword.fetch!(opts, :embed))
+
+    unless is_boolean(Keyword.fetch!(opts, :recruit)) do
+      Mix.raise("invalid recruit policy #{inspect(Keyword.fetch!(opts, :recruit))}")
+    end
+
+    rounds = Keyword.fetch!(opts, :rounds)
+
+    unless is_integer(rounds) and rounds >= 1 do
+      Mix.raise("invalid rounds policy #{inspect(rounds)}")
+    end
+
+    threshold = Keyword.fetch!(opts, :coverage_threshold)
+
+    unless is_number(threshold) do
+      Mix.raise("invalid coverage threshold policy #{inspect(threshold)}")
+    end
+
+    opts
+  end
 
   defp load_state(issue_dir) do
     path = state_path(issue_dir)
@@ -239,27 +301,22 @@ defmodule Mix.Tasks.Tracefield.Dev do
     procedure.id
   end
 
-  defp seed_git_policy!(reference, issue_dir) do
-    if Workspace.configured?(issue_dir) do
-      ws = Workspace.load!(issue_dir)
-      policy = Workspace.git_policy(ws, issue_slug(issue_dir))
+  defp seed_policy!(reference, policy, sources) do
+    [entry] =
+      Reference.absorb_idempotent(
+        reference,
+        [
+          %{
+            type: :policy,
+            author: "POLICY",
+            text: Policy.summary(policy, sources),
+            meta: %{kind: "effective_policy", policy: policy, sources: sources}
+          }
+        ],
+        "POLICY"
+      )
 
-      [entry] =
-        Reference.absorb_idempotent(
-          reference,
-          [
-            %{
-              type: :policy,
-              author: "POLICY",
-              text: policy.text,
-              meta: policy.meta
-            }
-          ],
-          "POLICY"
-        )
-
-      entry.id
-    end
+    entry.id
   end
 
   defp doc_seed_entries(issue_dir) do
@@ -442,7 +499,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp start_implement(reference, actors, issue_dir, state, opts) do
-    ws = Workspace.load!(issue_dir)
+    ws = load_workspace!(issue_dir, opts)
     ws = Workspace.ensure_flow!(ws, issue_slug(issue_dir))
     print_git_flow(ws, issue_dir)
 
@@ -463,7 +520,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp resume_implement(reference, actors, issue_dir, state, opts) do
-    ws = Workspace.load!(issue_dir)
+    ws = load_workspace!(issue_dir, opts)
     ws = Workspace.ensure_flow!(ws, issue_slug(issue_dir))
     round = Map.get(state, "round", 1)
     iteration = Map.get(state, "iteration", 0)
@@ -566,7 +623,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     test_label = if test_result.exit == 0, do: "green", else: "red"
 
     citations =
-      approved |> Enum.map(& &1.id) |> maybe_append_policy(Keyword.get(opts, :git_policy_id))
+      approved |> Enum.map(& &1.id) |> maybe_append_policy(Keyword.get(opts, :policy_id))
 
     [change] =
       Reference.absorb(
@@ -772,7 +829,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp start_qa(reference, actors, issue_dir, state, opts) do
-    ws = Workspace.load!(issue_dir)
+    ws = load_workspace!(issue_dir, opts)
     ws = Workspace.ensure_flow!(ws, issue_slug(issue_dir))
     round = Map.get(state, "round", 0) + 1
     adapter = adapter_module(Keyword.get(opts, :adapter, "mock"))
@@ -940,7 +997,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       |> Reference.all()
       |> Enum.filter(&(&1.type == :policy and &1.author == "POLICY" and &1.status == :active))
       |> Enum.find_value(fn entry ->
-        if Map.get(entry.meta, :kind, Map.get(entry.meta, "kind")) == "git_flow" do
+        if Map.get(entry.meta, :kind, Map.get(entry.meta, "kind")) == "effective_policy" do
           entry.text
         end
       end)
@@ -969,10 +1026,20 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info("git flow: #{ws.git_mode} (branch=#{policy.branch})")
   end
 
-  defp print_qa_done(reference, issue_dir, state) do
+  defp load_workspace!(issue_dir, opts) do
+    Workspace.load!(issue_dir, git_policy(opts))
+  end
+
+  defp git_policy(opts) do
+    opts
+    |> Keyword.fetch!(:policy)
+    |> Map.fetch!("git")
+  end
+
+  defp print_qa_done_from_issue(reference, issue_dir, state, opts) do
     ws =
       issue_dir
-      |> Workspace.load!()
+      |> Workspace.load!(git_policy(opts))
       |> Workspace.resolve_flow_path!(issue_slug(issue_dir))
 
     print_qa_done(reference, issue_dir, ws, state)
@@ -1589,13 +1656,18 @@ defmodule Mix.Tasks.Tracefield.Dev do
     state
   end
 
-  defp print_status(issue_dir, state, reference, actors) do
+  defp print_status(issue_dir, state, reference, actors, policy, policy_sources) do
     stats = Reference.stats(reference)
     Mix.shell().info("Tracefield Dev status")
     Mix.shell().info("issue: #{issue_dir}")
     Mix.shell().info("stage: #{state["stage"]}")
     Mix.shell().info("status: #{state["status"]}")
     print_pr_url(state)
+    Mix.shell().info("effective policy:")
+
+    policy
+    |> flattened_policy_lines(policy_sources)
+    |> Enum.each(fn line -> Mix.shell().info(line) end)
 
     Mix.shell().info(
       "store: #{Path.join(issue_dir, "store.jsonl")} entries=#{stats.entries} restored=#{stats.restored}"
@@ -1603,6 +1675,29 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     print_retire_advice(reference, actors)
   end
+
+  defp flattened_policy_lines(policy, sources) do
+    policy
+    |> flatten_policy()
+    |> Enum.sort_by(fn {key, _value} -> key end)
+    |> Enum.map(fn {key, value} ->
+      "  #{key}: #{format_policy_value(value)} (#{Map.fetch!(sources, key)})"
+    end)
+  end
+
+  defp flatten_policy(map), do: flatten_policy(map, [])
+
+  defp flatten_policy(map, prefix) when is_map(map) do
+    Enum.flat_map(map, fn {key, value} ->
+      flatten_policy(value, prefix ++ [to_string(key)])
+    end)
+  end
+
+  defp flatten_policy(value, prefix), do: [{Enum.join(prefix, "."), value}]
+
+  defp format_policy_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp format_policy_value(value) when is_binary(value), do: value
+  defp format_policy_value(value), do: to_string(value)
 
   defp print_retire_advice(reference, actors) do
     entries = Reference.all(reference)
