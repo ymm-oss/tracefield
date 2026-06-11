@@ -482,6 +482,82 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert Enum.any?(pass_verdicts, &(&1.meta[:pass] == true))
   end
 
+  test "pr git flow creates PR once, preserves URL through QA rollback, and pushes updates" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    gh = fake_gh!(dir)
+    bare = init_bare_repo!(dir, "origin.git")
+
+    repo =
+      init_workspace_repo!(dir,
+        test_cmd: "false",
+        git: %{
+          "mode" => "pr",
+          "base" => "main",
+          "branch_template" => "tracefield/{slug}",
+          "remote" => "origin",
+          "gh_cmd" => gh
+        }
+      )
+
+    git!(repo, ["remote", "add", "origin", bare])
+    drive_to_design_done!(dir)
+
+    Dev.run_dev(issue: dir, adapter: "mock")
+    append_response!(Path.join([dir, "pending", "HUMAN-implement.md"]), "APPROVE\n")
+
+    {implement_done, implement_output} = run_dev_capture(dir)
+    branch = "tracefield/#{Path.basename(dir)}"
+
+    assert implement_done.state["stage"] == "implement"
+    assert implement_done.state["status"] == "done"
+    assert implement_done.state["pr_url"] == "https://example.com/pr/1"
+    assert implement_output =~ "PR: https://example.com/pr/1"
+    assert branch_ref?(bare, branch)
+    assert gh_create_count(dir) == 1
+
+    first_remote_sha = git!(bare, ["rev-parse", branch]) |> String.trim()
+
+    qa_fail = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert qa_fail.state["stage"] == "implement"
+    assert qa_fail.state["status"] == "awaiting_human"
+    assert qa_fail.state["pr_url"] == "https://example.com/pr/1"
+
+    append_response!(Path.join([dir, "pending", "HUMAN-implement.md"]), "APPROVE\n")
+    {reapprove_done, reapprove_output} = run_dev_capture(dir)
+
+    assert reapprove_done.state["stage"] == "implement"
+    assert reapprove_done.state["status"] == "done"
+    assert reapprove_done.state["pr_url"] == "https://example.com/pr/1"
+    assert reapprove_output =~ "PR 更新: push 済み（https://example.com/pr/1）"
+    assert gh_create_count(dir) == 1
+
+    second_remote_sha = git!(bare, ["rev-parse", branch]) |> String.trim()
+    local_sha = git!(repo, ["rev-parse", branch]) |> String.trim()
+
+    assert second_remote_sha == local_sha
+    assert second_remote_sha != first_remote_sha
+
+    workspace_path = Path.join(dir, "workspace.json")
+
+    workspace_config =
+      workspace_path
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.put("test_cmd", "true")
+
+    File.write!(workspace_path, Jason.encode!(workspace_config, pretty: true))
+
+    {qa_pass, qa_output} = run_dev_capture(dir)
+
+    assert qa_pass.state["stage"] == "qa"
+    assert qa_pass.state["status"] == "done"
+    assert qa_pass.state["pr_url"] == "https://example.com/pr/1"
+    assert qa_output =~ "PR: https://example.com/pr/1"
+    assert gh_create_count(dir) == 1
+  end
+
   test "implement raises when workspace is dirty" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
@@ -828,6 +904,68 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     File.write!(Path.join(issue_dir, "workspace.json"), Jason.encode!(workspace_config))
 
     repo
+  end
+
+  defp init_bare_repo!(parent_dir, name) do
+    dir = Path.join(parent_dir, name)
+    {_output, 0} = System.cmd("git", ["init", "--bare", dir], stderr_to_stdout: true)
+    dir
+  end
+
+  defp fake_gh!(dir) do
+    path = Path.join(dir, "fake-gh")
+
+    File.write!(
+      path,
+      """
+      #!/bin/sh
+      DIR=$(dirname "$0")
+      printf '%s\\n' "$*" >> "$DIR/gh-args.log"
+      printf '%s\\n' "https://example.com/pr/1"
+      exit 0
+      """
+    )
+
+    File.chmod!(path, 0o755)
+    path
+  end
+
+  defp run_dev_capture(dir) do
+    parent = self()
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        send(parent, {:dev_result, Dev.run_dev(issue: dir, adapter: "mock")})
+      end)
+
+    result =
+      receive do
+        {:dev_result, result} -> result
+      after
+        1_000 -> flunk("Dev.run_dev did not return")
+      end
+
+    {result, output}
+  end
+
+  defp gh_create_count(dir) do
+    path = Path.join(dir, "gh-args.log")
+
+    if File.exists?(path) do
+      path
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.count(&String.starts_with?(&1, "pr create "))
+    else
+      0
+    end
+  end
+
+  defp branch_ref?(bare, branch) do
+    case System.cmd("git", ["show-ref", "--verify", "--quiet", "refs/heads/#{branch}"], cd: bare) do
+      {_output, 0} -> true
+      _other -> false
+    end
   end
 
   defp maybe_put_git_config(config, nil), do: config

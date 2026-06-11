@@ -13,7 +13,9 @@ defmodule Tracefield.Workspace do
     :git_mode,
     :git_branch_template,
     :git_base,
-    :git_worktree_root
+    :git_worktree_root,
+    :git_remote,
+    :git_gh_cmd
   ]
 
   @default_test_cmd "mise exec -- mix test"
@@ -22,7 +24,9 @@ defmodule Tracefield.Workspace do
   @default_organ_author "ORGAN"
   @default_git_branch_template "tracefield/{slug}"
   @default_git_base "main"
-  @git_modes [:current, :main, :branch, :worktree]
+  @default_git_remote "origin"
+  @default_git_gh_cmd "gh"
+  @git_modes [:current, :main, :branch, :worktree, :pr]
   @git_identity ["-c", "user.email=t@tracefield", "-c", "user.name=tracefield"]
 
   @spec configured?(String.t()) :: boolean()
@@ -55,7 +59,9 @@ defmodule Tracefield.Workspace do
       git_mode: git.mode,
       git_branch_template: git.branch_template,
       git_base: git.base,
-      git_worktree_root: git.worktree_root
+      git_worktree_root: git.worktree_root,
+      git_remote: git.remote,
+      git_gh_cmd: git.gh_cmd
     }
   end
 
@@ -73,6 +79,22 @@ defmodule Tracefield.Workspace do
   end
 
   def ensure_flow!(%__MODULE__{git_mode: :branch} = ws, slug) do
+    branch = branch_name(ws, slug)
+
+    if current_branch(ws.path) != branch do
+      ensure_clean_for_checkout!(ws)
+
+      if branch_exists?(ws.path, branch) do
+        git!(ws.path, ["checkout", branch])
+      else
+        git!(ws.path, ["checkout", "-b", branch, ws.git_base])
+      end
+    end
+
+    ws
+  end
+
+  def ensure_flow!(%__MODULE__{git_mode: :pr} = ws, slug) do
     branch = branch_name(ws, slug)
 
     if current_branch(ws.path) != branch do
@@ -133,7 +155,7 @@ defmodule Tracefield.Workspace do
   def git_policy(ws, slug) do
     branch =
       case ws.git_mode do
-        mode when mode in [:branch, :worktree] -> branch_name(ws, slug)
+        mode when mode in [:branch, :worktree, :pr] -> branch_name(ws, slug)
         _mode -> "-"
       end
 
@@ -236,6 +258,53 @@ defmodule Tracefield.Workspace do
     end
   end
 
+  @spec push_and_create_pr!(%__MODULE__{}, String.t(), String.t(), String.t(), boolean()) ::
+          {:ok, String.t() | nil}
+  def push_and_create_pr!(ws, branch, title, body, create_pr?) do
+    case System.cmd("git", ["push", "-u", ws.git_remote, branch],
+           cd: ws.path,
+           stderr_to_stdout: true
+         ) do
+      {_output, 0} ->
+        :ok
+
+      {output, code} ->
+        Mix.raise(
+          "git push failed for remote #{ws.git_remote} (exit #{code}): #{String.slice(output, 0, 300)}"
+        )
+    end
+
+    if create_pr? do
+      args = [
+        "pr",
+        "create",
+        "--base",
+        ws.git_base,
+        "--head",
+        branch,
+        "--title",
+        title,
+        "--body",
+        body
+      ]
+
+      case System.cmd(ws.git_gh_cmd, args, cd: ws.path, stderr_to_stdout: true) do
+        {output, 0} ->
+          url =
+            output
+            |> String.split("\n", trim: true)
+            |> List.last()
+
+          {:ok, url}
+
+        {output, code} ->
+          Mix.raise("gh pr create failed (exit #{code}): #{String.slice(output, 0, 300)}")
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
   defp commit_message_with_footer(ws, message) do
     trailer = commit_footer(ws)
     message <> "\n\nCo-Authored-By: " <> trailer
@@ -280,12 +349,17 @@ defmodule Tracefield.Workspace do
     branch_template = Map.get(git, "branch_template", @default_git_branch_template) |> to_string()
     base = Map.get(git, "base", @default_git_base) |> to_string()
     worktree_root = Map.get(git, "worktree_root") || default_worktree_root(repo_path)
+    remote = Map.get(git, "remote", @default_git_remote) |> to_string()
+    gh_cmd = Map.get(git, "gh_cmd", @default_git_gh_cmd) |> to_string()
+    gh_cmd = if mode == :pr, do: validate_gh_cmd!(gh_cmd), else: gh_cmd
 
     %{
       mode: mode,
       branch_template: branch_template,
       base: base,
-      worktree_root: Path.expand(worktree_root)
+      worktree_root: Path.expand(worktree_root),
+      remote: remote,
+      gh_cmd: gh_cmd
     }
   end
 
@@ -306,8 +380,32 @@ defmodule Tracefield.Workspace do
     Path.join(Path.dirname(repo_path), "#{Path.basename(repo_path)}-worktrees")
   end
 
-  defp branch_name(ws, slug) do
+  @spec branch_name(%__MODULE__{}, String.t()) :: String.t()
+  def branch_name(ws, slug) do
     String.replace(ws.git_branch_template, "{slug}", slug)
+  end
+
+  defp validate_gh_cmd!(cmd) do
+    cond do
+      Path.type(cmd) == :absolute and executable_file?(cmd) ->
+        cmd
+
+      Path.type(cmd) == :absolute ->
+        Mix.raise("git mode pr requires executable gh_cmd: #{cmd}")
+
+      found = System.find_executable(cmd) ->
+        found
+
+      true ->
+        Mix.raise("git mode pr requires executable gh_cmd: #{cmd}")
+    end
+  end
+
+  defp executable_file?(path) do
+    case File.stat(path) do
+      {:ok, %{type: :regular, mode: mode}} -> Bitwise.band(mode, 0o111) != 0
+      _other -> false
+    end
   end
 
   defp worktree_path(ws, slug) do
