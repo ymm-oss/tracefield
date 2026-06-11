@@ -84,6 +84,10 @@ defmodule Tracefield.LLM.Mock do
       String.contains?(prompt, "TRACEFIELD_STANCE") ->
         {:ok, Jason.encode!(stance_assessment(prompt))}
 
+      String.contains?(prompt, "TRACEFIELD_QA") ->
+        matched = String.contains?(prompt, "IMPLEMENTED")
+        {:ok, Jason.encode!(%{matched: matched, note: "mock突合"})}
+
       true ->
         {:ok, render_review(prompt, Keyword.get(opts, :seed, 0))}
     end

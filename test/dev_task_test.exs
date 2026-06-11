@@ -189,8 +189,145 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert issue_chunk
 
     again = Dev.run_dev(issue: dir, adapter: "mock")
-    assert again.state["stage"] == "implement"
+    assert again.state["stage"] == "qa"
     assert again.state["status"] == "done"
+
+    assert Enum.any?(again.entries, &(&1.type == :verdict and &1.author == "QA"))
+
+    latest_change =
+      again.entries
+      |> Enum.filter(&(&1.type == :change and &1.author == "ORGAN" and &1.status == :active))
+      |> Enum.max_by(&String.to_integer(String.trim_leading(&1.id, "e")))
+
+    requirement = Enum.find(again.entries, &(&1.type == :requirement and &1.status == :active))
+
+    verdict =
+      Enum.find(again.entries, fn entry ->
+        entry.type == :verdict and requirement.id in entry.citations and latest_change.id in entry.citations
+      end)
+
+    assert verdict
+    assert verdict.meta[:pass] == true
+  end
+
+  test "qa stage passes after implement done with verdict provenance chain" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    init_workspace_repo!(dir)
+    drive_to_implement_done!(dir)
+
+    result = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert result.state["stage"] == "qa"
+    assert result.state["status"] == "done"
+
+    requirements = Enum.filter(result.entries, &(&1.type == :requirement and &1.status == :active))
+
+    latest_change =
+      result.entries
+      |> Enum.filter(&(&1.type == :change and &1.author == "ORGAN" and &1.status == :active))
+      |> Enum.max_by(&String.to_integer(String.trim_leading(&1.id, "e")))
+
+    Enum.each(requirements, fn requirement ->
+      verdict =
+        Enum.find(result.entries, fn entry ->
+          entry.type == :verdict and entry.author == "QA" and
+            requirement.id in entry.citations and latest_change.id in entry.citations
+        end)
+
+      assert verdict
+      assert verdict.meta[:pass] == true
+    end)
+
+    by_id = Map.new(result.entries, &{&1.id, &1})
+
+    verdict = Enum.find(result.entries, &(&1.type == :verdict and &1.author == "QA"))
+    change = Map.fetch!(by_id, Enum.find(verdict.citations, &(Map.get(by_id, &1).type == :change)))
+
+    decision =
+      change.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :decision))
+
+    requirement =
+      verdict.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :requirement))
+
+    issue_chunk =
+      requirement.citations
+      |> Enum.map(&Map.get(by_id, &1))
+      |> Enum.find(&(&1 && &1.type == :chunk and &1.author == "ISSUE"))
+
+    assert change
+    assert decision
+    assert requirement
+    assert issue_chunk
+
+    again = Dev.run_dev(issue: dir, adapter: "mock")
+    assert again.state["stage"] == "qa"
+    assert again.state["status"] == "done"
+  end
+
+  test "qa fail rolls back to implement and requires re-approval of latest change" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    repo = init_workspace_repo!(dir, test_cmd: "false")
+    drive_to_implement_done!(dir)
+
+    fail_qa = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert fail_qa.state["stage"] == "implement"
+    assert fail_qa.state["status"] == "awaiting_human"
+
+    fail_verdict = Enum.find(fail_qa.entries, &(&1.type == :verdict and &1.author == "QA"))
+    assert fail_verdict
+    assert fail_verdict.meta[:pass] == false
+
+    changes =
+      fail_qa.entries
+      |> Enum.filter(&(&1.type == :change and &1.author == "ORGAN" and &1.status == :active))
+
+    assert length(changes) == 2
+
+    patches =
+      dir
+      |> Path.join("pending")
+      |> File.ls!()
+      |> Enum.filter(&String.starts_with?(&1, "implement-r"))
+
+    assert length(patches) == 2
+
+    resume = Dev.run_dev(issue: dir, adapter: "mock")
+    assert resume.state["stage"] == "implement"
+    assert resume.state["status"] == "awaiting_human"
+
+    workspace_path = Path.join(dir, "workspace.json")
+
+    workspace_config =
+      workspace_path
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.put("test_cmd", "true")
+
+    File.write!(workspace_path, Jason.encode!(workspace_config, pretty: true))
+
+    implement_pending = Path.join([dir, "pending", "HUMAN-implement.md"])
+    append_response!(implement_pending, "APPROVE\n")
+    implement_done = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert implement_done.state["stage"] == "implement"
+    assert implement_done.state["status"] == "done"
+
+    {commits_after_fix, 0} = System.cmd("git", ["rev-list", "--count", "HEAD"], cd: repo)
+    assert String.to_integer(String.trim(commits_after_fix)) == 3
+
+    pass_qa = Dev.run_dev(issue: dir, adapter: "mock")
+    assert pass_qa.state["stage"] == "qa"
+    assert pass_qa.state["status"] == "done"
+
+    pass_verdicts = Enum.filter(pass_qa.entries, &(&1.type == :verdict and &1.author == "QA"))
+    assert Enum.any?(pass_verdicts, &(&1.meta[:pass] == true))
   end
 
   test "implement raises when workspace is dirty" do
@@ -311,6 +448,13 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
     dir
+  end
+
+  defp drive_to_implement_done!(dir) do
+    drive_to_design_done!(dir)
+    Dev.run_dev(issue: dir, adapter: "mock")
+    append_response!(Path.join([dir, "pending", "HUMAN-implement.md"]), "APPROVE\n")
+    Dev.run_dev(issue: dir, adapter: "mock")
   end
 
   defp drive_to_design_done!(dir) do
