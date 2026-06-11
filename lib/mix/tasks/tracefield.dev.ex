@@ -235,7 +235,16 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp start_refine(reference, actors, issue_dir, procedure_id, opts) do
     warn_uncovered_chunks!(reference, actors, opts)
     rounds = Keyword.get(opts, :rounds, 2)
-    run_llm_rounds(reference, actors, issue_dir, procedure_id, 1..rounds, opts, nil)
+    run_llm_rounds(
+      reference,
+      actors,
+      issue_dir,
+      procedure_id,
+      1..rounds,
+      opts,
+      nil,
+      ["requirement", "question"]
+    )
     state = await_human(reference, actors, issue_dir, procedure_id, rounds, 0, opts)
     %{state: state, entries: Reference.all(reference)}
   end
@@ -271,7 +280,16 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
       true ->
         next_round = round + 1
-        run_llm_rounds(reference, actors, issue_dir, procedure_id, [next_round], opts, nil)
+        run_llm_rounds(
+          reference,
+          actors,
+          issue_dir,
+          procedure_id,
+          [next_round],
+          opts,
+          nil,
+          ["requirement", "question"]
+        )
 
         state =
           await_human(reference, actors, issue_dir, procedure_id, next_round, iteration + 1, opts)
@@ -293,7 +311,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
       procedure_id,
       (base_round + 1)..(base_round + rounds),
       opts,
-      ref_docs
+      ref_docs,
+      ["decision"]
     )
 
     state = await_design(reference, actors, issue_dir, procedure_id, base_round + rounds, 0)
@@ -341,7 +360,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
           procedure_id,
           [next_round],
           opts,
-          design_reference_docs(reference)
+          design_reference_docs(reference),
+          ["decision"]
         )
 
         state = await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1)
@@ -895,14 +915,14 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp run_llm_rounds(reference, actors, issue_dir, procedure_id, rounds, opts, ref_docs) do
+  defp run_llm_rounds(reference, actors, issue_dir, procedure_id, rounds, opts, ref_docs, expected_types) do
     actors
     |> Enum.filter(&(&1.kind in [:llm, :cli]))
     |> then(fn actors ->
       Enum.each(rounds, fn round ->
         Enum.each(actors, fn actor ->
           actor
-          |> build_agent(reference, issue_dir, procedure_id, opts, ref_docs)
+          |> build_agent(reference, issue_dir, procedure_id, opts, ref_docs, expected_types)
           |> Agent.run_turn(reference, round)
         end)
       end)
@@ -984,8 +1004,15 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Agent.run_turn(reference, round)
   end
 
-  defp build_agent(actor, reference, issue_dir, procedure_id, opts, ref_docs) do
+  defp build_agent(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types) do
     Agent.new(actor.id, actor.domain, actor.desc,
+      agent_build_opts(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types)
+    )
+  end
+
+  @doc false
+  def agent_build_opts(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types) do
+    [
       anchor: File.read!(Path.join(issue_dir, "issue.md")),
       reference_docs: ref_docs || reference_docs(reference),
       private_doc: actor.private_doc,
@@ -996,8 +1023,9 @@ defmodule Mix.Tasks.Tracefield.Dev do
       temperature: Keyword.get(opts, :temperature, 0.4),
       seed: :erlang.phash2(actor.id),
       procedure_id: procedure_id,
-      serve_policy: :diverse
-    )
+      serve_policy: :diverse,
+      expected_types: expected_types
+    ]
   end
 
   defp build_human_agent(actor, reference, issue_dir, procedure_id, human_opts) do

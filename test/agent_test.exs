@@ -279,6 +279,69 @@ defmodule Tracefield.AgentTest do
     assert perception.served == [%{id: foreign.id, author: "BIZ"}]
   end
 
+  @baseline_system_prompt_without_aware """
+  TRACEFIELD_AGENT_TURN
+  Return only JSON {"entries":[{"type":"belief","text":"...","citations":["e1"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly.
+  """
+  |> String.trim()
+
+  test "expected_types nil keeps the baseline system prompt unchanged" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+
+    system = hd(messages).content
+    assert system == @baseline_system_prompt_without_aware
+  end
+
+  test "expected_types replaces the JSON example type with the first expected type" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        expected_types: ["decision"],
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+
+    system = hd(messages).content
+    assert system =~ ~S("type":"decision")
+    refute system =~ ~S("type":"belief")
+    refute system =~ "Expected entry types this turn:"
+  end
+
+  test "multiple expected_types add an expected-types hint after the JSON example" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        expected_types: ["requirement", "question"],
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+
+    system = hd(messages).content
+    assert system =~ ~S("type":"requirement")
+    assert system =~ "Expected entry types this turn: requirement, question."
+    refute system =~ ~S("type":"belief")
+  end
+
   test "aware option inserts situation preamble into system prompt only when enabled" do
     Process.register(self(), PromptCaptureMock)
 
