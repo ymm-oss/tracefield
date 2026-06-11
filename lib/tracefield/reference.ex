@@ -604,6 +604,7 @@ defmodule Tracefield.Reference do
   defp normalize_meta(meta) when is_map(meta) do
     Map.new(meta, fn {key, value} ->
       key = normalize_meta_key(key)
+
       value = if key == :source_chain, do: normalize_source_chain(value), else: value
       {key, value}
     end)

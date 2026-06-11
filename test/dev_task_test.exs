@@ -177,6 +177,49 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert Keyword.get(agent_opts, :sharing_stage) == "refine"
   end
 
+  test "independent sharing seeds static machine actor ids on policy entry meta" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    File.write!(
+      Path.join(dir, "policy.json"),
+      Jason.encode!(%{"sharing" => %{"refine" => "independent"}})
+    )
+
+    File.write!(
+      Path.join(dir, "actors.json"),
+      Jason.encode!([
+        %{id: "ARCH", domain: "architecture", desc: "architect", kind: "llm"},
+        %{id: "SEC", domain: "security", desc: "security", kind: "llm"},
+        human_actor()
+      ])
+    )
+
+    result = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+
+    [policy] = Enum.filter(result.entries, &(&1.type == :policy and &1.author == "POLICY"))
+    assert policy.meta[:policy]["sharing"]["refine"] == "independent"
+    assert policy.meta[:sharing]["refine"]["mode"] == "independent"
+    assert policy.meta[:sharing]["refine"]["exclude_machine_authors"] == ["ARCH", "SEC"]
+    assert policy.meta[:sharing]["design"]["mode"] == "shared"
+    refute Map.has_key?(policy.meta[:sharing]["design"], "exclude_machine_authors")
+
+    store = Path.join(dir, "store.jsonl")
+    assert File.exists?(store)
+    assert store |> File.read!() |> String.contains?("exclude_machine_authors")
+
+    {:ok, restored} =
+      Reference.start_link(
+        persist_path: store,
+        embed_adapter: Tracefield.Embed.Mock
+      )
+
+    [restored_policy] =
+      Enum.filter(Reference.all(restored), &(&1.type == :policy and &1.author == "POLICY"))
+
+    assert restored_policy.meta[:sharing]["refine"]["exclude_machine_authors"] == ["ARCH", "SEC"]
+  end
+
   test "embed_module! maps mock and ollama adapters without fallback" do
     assert Dev.embed_module!("mock") == Tracefield.Embed.Mock
     assert Dev.embed_module!("ollama") == Tracefield.Embed.Ollama

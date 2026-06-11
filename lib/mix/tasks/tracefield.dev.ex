@@ -50,7 +50,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     actors = load_actors!(issue_dir)
     procedure_id = seed_reference!(reference, issue_dir, opts)
-    policy_id = seed_policy!(reference, policy, policy_sources)
+    policy_id = seed_policy!(reference, policy, policy_sources, actors)
     opts = Keyword.put(opts, :policy_id, policy_id)
 
     cond do
@@ -333,7 +333,27 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Policy.sharing_mode(stage)
   end
 
-  defp seed_policy!(reference, policy, sources) do
+  defp seed_policy!(reference, policy, sources, actors) do
+    machine_ids =
+      actors
+      |> machine_actor_ids()
+      |> MapSet.to_list()
+      |> Enum.sort()
+
+    sharing =
+      for stage <- ["refine", "design"], into: %{} do
+        mode = Policy.sharing_mode(policy, stage)
+
+        meta =
+          if mode == "independent" do
+            %{"mode" => mode, "exclude_machine_authors" => machine_ids}
+          else
+            %{"mode" => mode}
+          end
+
+        {stage, meta}
+      end
+
     [entry] =
       Reference.absorb_idempotent(
         reference,
@@ -342,7 +362,12 @@ defmodule Mix.Tasks.Tracefield.Dev do
             type: :policy,
             author: "POLICY",
             text: Policy.summary(policy, sources),
-            meta: %{kind: "effective_policy", policy: policy, sources: sources}
+            meta: %{
+              kind: "effective_policy",
+              policy: policy,
+              sources: sources,
+              sharing: sharing
+            }
           }
         ],
         "POLICY"
@@ -1226,18 +1251,19 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> then(fn machine_actors ->
       Enum.each(rounds, fn round ->
         Enum.each(machine_actors, fn actor ->
-          actor
-          |> build_agent(
-            reference,
-            issue_dir,
-            procedure_id,
-            opts,
-            ref_docs,
-            expected_types,
-            actors,
-            stage
-          )
-          |> Agent.run_turn(reference, round)
+          {_agent, _absorbed, _perception} =
+            actor
+            |> build_agent(
+              reference,
+              issue_dir,
+              procedure_id,
+              opts,
+              ref_docs,
+              expected_types,
+              actors,
+              stage
+            )
+            |> Agent.run_turn(reference, round)
         end)
       end)
     end)
