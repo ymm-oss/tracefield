@@ -3,7 +3,7 @@ defmodule Tracefield.Workspace do
 
   alias Tracefield.Workspace.OrganMock
 
-  defstruct [:path, :test_cmd, :organ_cmd, :organ_args, :organ_author]
+  defstruct [:path, :test_cmd, :organ_cmd, :organ_args, :organ_author, :organ_footer]
 
   @default_test_cmd "mise exec -- mix test"
   @default_organ_cmd "claude"
@@ -35,7 +35,8 @@ defmodule Tracefield.Workspace do
       test_cmd: Map.get(config, "test_cmd", @default_test_cmd),
       organ_cmd: Map.get(organ, "cmd", @default_organ_cmd),
       organ_args: normalize_args(Map.get(organ, "args", @default_organ_args)),
-      organ_author: Map.get(organ, "author", @default_organ_author)
+      organ_author: Map.get(organ, "author", @default_organ_author),
+      organ_footer: Map.get(organ, "footer")
     }
   end
 
@@ -123,10 +124,21 @@ defmodule Tracefield.Workspace do
     if String.trim(staged) == "" do
       {:error, :empty}
     else
-      git!(ws.path, @git_identity ++ ["commit", "-m", message])
+      git!(ws.path, @git_identity ++ ["commit", "-m", commit_message_with_footer(ws, message)])
       {short_sha, 0} = git!(ws.path, ["rev-parse", "--short", "HEAD"])
       {:ok, String.trim(short_sha)}
     end
+  end
+
+  defp commit_message_with_footer(ws, message) do
+    trailer = commit_footer(ws)
+    message <> "\n\nCo-Authored-By: " <> trailer
+  end
+
+  defp commit_footer(%__MODULE__{organ_footer: footer}) when is_binary(footer), do: footer
+
+  defp commit_footer(%__MODULE__{organ_author: author}) do
+    "#{author} via tracefield <noreply@tracefield.local>"
   end
 
   defp resolve_path(issue_dir, path) do
