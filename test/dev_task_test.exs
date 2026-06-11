@@ -179,7 +179,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
       end)
 
     assert change
-    assert Enum.all?(change.citations, &MapSet.member?(approved_decision_ids, &1))
+    assert Enum.all?(approved_decision_ids, &(&1 in change.citations))
     assert change.text =~ "テスト: green"
     assert File.exists?(Path.join(repo, "IMPLEMENTED.md"))
 
@@ -211,7 +211,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
            end)
 
     {commits_after, 0} = System.cmd("git", ["rev-list", "--count", "HEAD"], cd: repo)
-    assert String.to_integer(String.trim(commits_before)) + 1 == String.to_integer(String.trim(commits_after))
+
+    assert String.to_integer(String.trim(commits_before)) + 1 ==
+             String.to_integer(String.trim(commits_after))
 
     by_id = Map.new(implement3.entries, &{&1.id, &1})
 
@@ -236,7 +238,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     issue_chunk =
       requirement.citations
       |> Enum.map(&Map.get(by_id, &1))
-      |> Enum.find(&(&1 && &1.type == :chunk and &1.author == "ISSUE"))
+      |> Enum.find(&((&1 && &1.type == :chunk) and &1.author == "ISSUE"))
 
     assert cited_change.type == :change
     assert cited_decision
@@ -258,11 +260,103 @@ defmodule Mix.Tasks.Tracefield.DevTest do
 
     verdict =
       Enum.find(again.entries, fn entry ->
-        entry.type == :verdict and requirement.id in entry.citations and latest_change.id in entry.citations
+        entry.type == :verdict and requirement.id in entry.citations and
+          latest_change.id in entry.citations
       end)
 
     assert verdict
     assert verdict.meta[:pass] == true
+  end
+
+  test "branch git flow commits implementation on issue branch without moving base" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    repo =
+      init_workspace_repo!(dir,
+        git: %{"mode" => "branch", "base" => "main", "branch_template" => "tracefield/{slug}"}
+      )
+
+    drive_to_design_done!(dir)
+
+    base_before = git!(repo, ["rev-parse", "main"]) |> String.trim()
+
+    implement1 = Dev.run_dev(issue: dir, adapter: "mock")
+    branch = "tracefield/#{Path.basename(dir)}"
+
+    assert implement1.state["stage"] == "implement"
+    assert current_branch(repo) == branch
+    assert git!(repo, ["rev-parse", "main"]) |> String.trim() == base_before
+
+    append_response!(Path.join([dir, "pending", "HUMAN-implement.md"]), "APPROVE\n")
+    implement2 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert implement2.state["status"] == "done"
+    assert current_branch(repo) == branch
+    assert git!(repo, ["rev-parse", "main"]) |> String.trim() == base_before
+    assert git!(repo, ["rev-parse", branch]) |> String.trim() != base_before
+  end
+
+  test "worktree git flow commits implementation in worktree while original repo stays put" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    repo =
+      init_workspace_repo!(dir,
+        git: %{"mode" => "worktree", "base" => "main", "branch_template" => "tracefield/{slug}"}
+      )
+
+    drive_to_design_done!(dir)
+
+    base_before = git!(repo, ["rev-parse", "main"]) |> String.trim()
+    original_branch = current_branch(repo)
+
+    implement1 = Dev.run_dev(issue: dir, adapter: "mock")
+    branch = "tracefield/#{Path.basename(dir)}"
+    worktree = Path.join([dir, "workspace-repo-worktrees", Path.basename(dir)])
+
+    assert implement1.state["stage"] == "implement"
+    assert current_branch(repo) == original_branch
+    assert current_branch(worktree) == branch
+    assert git!(repo, ["rev-parse", "HEAD"]) |> String.trim() == base_before
+    refute File.exists?(Path.join(repo, "IMPLEMENTED.md"))
+    assert File.exists?(Path.join(worktree, "IMPLEMENTED.md"))
+
+    append_response!(Path.join([dir, "pending", "HUMAN-implement.md"]), "APPROVE\n")
+    implement2 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert implement2.state["status"] == "done"
+    assert current_branch(repo) == original_branch
+    assert git!(repo, ["rev-parse", "HEAD"]) |> String.trim() == base_before
+    assert git!(worktree, ["rev-parse", "HEAD"]) |> String.trim() != base_before
+    assert git!(repo, ["status", "--porcelain"]) == ""
+  end
+
+  test "git flow policy is seeded once and cited by implementation changes" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    init_workspace_repo!(dir,
+      git: %{"mode" => "branch", "base" => "main", "branch_template" => "tracefield/{slug}"}
+    )
+
+    drive_to_design_done!(dir)
+
+    implement1 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    [policy] = Enum.filter(implement1.entries, &(&1.type == :policy and &1.author == "POLICY"))
+
+    assert policy.text ==
+             "git flow: mode=branch branch=tracefield/#{Path.basename(dir)} base=main"
+
+    assert policy.meta[:kind] == "git_flow"
+
+    change = Enum.find(implement1.entries, &(&1.type == :change and &1.author == "ORGAN"))
+    assert List.last(change.citations) == policy.id
+
+    implement2 = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert Enum.count(implement2.entries, &(&1.type == :policy and &1.author == "POLICY")) == 1
   end
 
   test "qa stage passes after implement done with verdict provenance chain" do
@@ -276,7 +370,8 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert result.state["stage"] == "qa"
     assert result.state["status"] == "done"
 
-    requirements = Enum.filter(result.entries, &(&1.type == :requirement and &1.status == :active))
+    requirements =
+      Enum.filter(result.entries, &(&1.type == :requirement and &1.status == :active))
 
     latest_change =
       result.entries
@@ -297,7 +392,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     by_id = Map.new(result.entries, &{&1.id, &1})
 
     verdict = Enum.find(result.entries, &(&1.type == :verdict and &1.author == "QA"))
-    change = Map.fetch!(by_id, Enum.find(verdict.citations, &(Map.get(by_id, &1).type == :change)))
+
+    change =
+      Map.fetch!(by_id, Enum.find(verdict.citations, &(Map.get(by_id, &1).type == :change)))
 
     decision =
       change.citations
@@ -312,7 +409,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     issue_chunk =
       requirement.citations
       |> Enum.map(&Map.get(by_id, &1))
-      |> Enum.find(&(&1 && &1.type == :chunk and &1.author == "ISSUE"))
+      |> Enum.find(&((&1 && &1.type == :chunk) and &1.author == "ISSUE"))
 
     assert change
     assert decision
@@ -415,7 +512,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     {:ok, reference} = Reference.start_link()
     actors = sample_actors()
 
-    [req] = Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+    [req] =
+      Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+
     [chunk] = Reference.absorb(reference, [%{type: :chunk, text: "reference chunk"}], "DOCS")
 
     [cited] =
@@ -440,11 +539,17 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     {:ok, reference} = Reference.start_link()
     actors = sample_actors()
 
-    [req] = Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+    [req] =
+      Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+
     [chunk] = Reference.absorb(reference, [%{type: :chunk, text: "reference chunk"}], "DOCS")
 
     [d1] =
-      Reference.absorb(reference, [%{type: :decision, text: "design 1", citations: [req.id]}], "ARCH")
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "design 1", citations: [req.id]}],
+        "ARCH"
+      )
 
     [d2] =
       Reference.absorb(
@@ -461,7 +566,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     {:ok, reference} = Reference.start_link()
     actors = sample_actors()
 
-    [req] = Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+    [req] =
+      Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+
     [chunk] = Reference.absorb(reference, [%{type: :chunk, text: "reference chunk"}], "DOCS")
 
     Reference.absorb(
@@ -565,7 +672,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
       |> Enum.map(& &1.id)
       |> MapSet.new()
 
-    machine_decisions = Enum.filter(design1.entries, &(&1.type == :decision and &1.author == "ARCH"))
+    machine_decisions =
+      Enum.filter(design1.entries, &(&1.type == :decision and &1.author == "ARCH"))
+
     assert machine_decisions != []
 
     assert Enum.all?(machine_decisions, fn decision ->
@@ -619,7 +728,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     issue_chunk =
       requirement.citations
       |> Enum.map(&Map.get(by_id, &1))
-      |> Enum.find(&(&1 && &1.type == :chunk and &1.author == "ISSUE"))
+      |> Enum.find(&((&1 && &1.type == :chunk) and &1.author == "ISSUE"))
 
     assert issue_chunk
 
@@ -687,24 +796,42 @@ defmodule Mix.Tasks.Tracefield.DevTest do
 
   defp init_workspace_repo!(issue_dir, opts \\ []) do
     test_cmd = Keyword.get(opts, :test_cmd, "true")
+    git_config = Keyword.get(opts, :git)
     repo = Path.join(issue_dir, "workspace-repo")
     File.mkdir_p!(repo)
     git!(repo, ["init"])
     File.write!(Path.join(repo, "README.md"), "initial\n")
     git!(repo, ["add", "README.md"])
-    git!(repo, ["-c", "user.email=t@tracefield", "-c", "user.name=tracefield", "commit", "-m", "init"])
 
-    File.write!(
-      Path.join(issue_dir, "workspace.json"),
-      Jason.encode!(%{
+    git!(repo, [
+      "-c",
+      "user.email=t@tracefield",
+      "-c",
+      "user.name=tracefield",
+      "commit",
+      "-m",
+      "init"
+    ])
+
+    if git_config do
+      git!(repo, ["branch", "-M", Map.get(git_config, "base", "main")])
+    end
+
+    workspace_config =
+      %{
         "path" => "workspace-repo",
         "test_cmd" => test_cmd,
         "organ" => %{"cmd" => "true", "args" => [], "author" => "ORGAN"}
-      })
-    )
+      }
+      |> maybe_put_git_config(git_config)
+
+    File.write!(Path.join(issue_dir, "workspace.json"), Jason.encode!(workspace_config))
 
     repo
   end
+
+  defp maybe_put_git_config(config, nil), do: config
+  defp maybe_put_git_config(config, git_config), do: Map.put(config, "git", git_config)
 
   defp write_issue_files!(dir) do
     File.mkdir_p!(Path.join(dir, "docs"))
@@ -729,5 +856,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
   defp git!(path, args) do
     {output, 0} = System.cmd("git", args, cd: path, stderr_to_stdout: true)
     output
+  end
+
+  defp current_branch(path) do
+    git!(path, ["branch", "--show-current"]) |> String.trim()
   end
 end

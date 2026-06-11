@@ -24,6 +24,51 @@ defmodule Tracefield.WorkspaceTest do
     end
   end
 
+  test "load! defaults git flow to current mode when git section is omitted" do
+    issue_dir = tmp_dir()
+    repo = init_git_repo_in!(issue_dir, "repo")
+
+    write_workspace!(issue_dir, %{"path" => "repo"})
+
+    ws = Workspace.load!(issue_dir)
+
+    assert ws.path == repo
+    assert ws.git_mode == :current
+    assert ws.git_branch_template == "tracefield/{slug}"
+    assert ws.git_base == "main"
+    assert ws.git_worktree_root == Path.join(issue_dir, "repo-worktrees")
+  end
+
+  test "load! expands git config and rejects invalid mode" do
+    issue_dir = tmp_dir()
+    repo = init_git_repo_in!(issue_dir, "repo")
+    root = Path.join(issue_dir, "trees")
+
+    write_workspace!(issue_dir, %{
+      "path" => "repo",
+      "git" => %{
+        "mode" => "worktree",
+        "branch_template" => "tf/{slug}",
+        "base" => "trunk",
+        "worktree_root" => root
+      }
+    })
+
+    ws = Workspace.load!(issue_dir)
+
+    assert ws.path == repo
+    assert ws.git_mode == :worktree
+    assert ws.git_branch_template == "tf/{slug}"
+    assert ws.git_base == "trunk"
+    assert ws.git_worktree_root == root
+
+    write_workspace!(issue_dir, %{"path" => "repo", "git" => %{"mode" => "sideways"}})
+
+    assert_raise Mix.Error, ~r/invalid git mode/, fn ->
+      Workspace.load!(issue_dir)
+    end
+  end
+
   test "OrganMock appends mock implementation and design decision lines" do
     repo = init_git_repo!()
 
@@ -205,6 +250,75 @@ defmodule Tracefield.WorkspaceTest do
     refute Workspace.clean?(ws)
   end
 
+  test "ensure_flow! current mode is a no-op" do
+    repo = init_git_repo!()
+    branch_before = current_branch(repo)
+    head_before = git!(repo, ["rev-parse", "HEAD"]) |> String.trim()
+
+    ws = flow_workspace(repo, :current)
+
+    assert Workspace.ensure_flow!(ws, "issue-42").path == repo
+    assert current_branch(repo) == branch_before
+    assert git!(repo, ["rev-parse", "HEAD"]) |> String.trim() == head_before
+  end
+
+  test "ensure_flow! main mode checks out base branch" do
+    repo = init_git_repo!()
+    git!(repo, ["branch", "-M", "main"])
+    git!(repo, ["checkout", "-b", "topic"])
+
+    ws = flow_workspace(repo, :main)
+
+    Workspace.ensure_flow!(ws, "issue-42")
+
+    assert current_branch(repo) == "main"
+  end
+
+  test "ensure_flow! branch mode creates and reuses issue branch and blocks dirty checkout" do
+    repo = init_git_repo!()
+    git!(repo, ["branch", "-M", "main"])
+
+    ws = flow_workspace(repo, :branch)
+
+    assert Workspace.ensure_flow!(ws, "issue-42").path == repo
+    assert current_branch(repo) == "tracefield/issue-42"
+
+    head = git!(repo, ["rev-parse", "HEAD"]) |> String.trim()
+    assert Workspace.ensure_flow!(ws, "issue-42").path == repo
+    assert current_branch(repo) == "tracefield/issue-42"
+    assert git!(repo, ["rev-parse", "HEAD"]) |> String.trim() == head
+
+    git!(repo, ["checkout", "main"])
+    File.write!(Path.join(repo, "dirty.txt"), "dirty\n")
+
+    assert_raise Mix.Error, ~r/clean/, fn ->
+      Workspace.ensure_flow!(ws, "issue-42")
+    end
+  end
+
+  test "ensure_flow! worktree mode creates a branch worktree and resolves it idempotently" do
+    parent = tmp_dir()
+    repo = init_git_repo_in!(parent, "repo")
+    git!(repo, ["branch", "-M", "main"])
+    root = Path.join(parent, "worktrees")
+
+    ws = %{flow_workspace(repo, :worktree) | git_worktree_root: root}
+
+    resolved = Workspace.ensure_flow!(ws, "issue-42")
+
+    assert resolved.path == Path.join(root, "issue-42")
+    assert File.exists?(Path.join(resolved.path, ".git"))
+    assert current_branch(resolved.path) == "tracefield/issue-42"
+    assert current_branch(repo) == "main"
+    assert Workspace.clean?(%Workspace{path: repo})
+
+    again = Workspace.ensure_flow!(ws, "issue-42")
+
+    assert again.path == resolved.path
+    assert current_branch(repo) == "main"
+    assert Workspace.clean?(%Workspace{path: repo})
+  end
+
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "tracefield-ws-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -239,6 +353,24 @@ defmodule Tracefield.WorkspaceTest do
   defp git!(path, args) do
     {output, 0} = System.cmd("git", args, cd: path, stderr_to_stdout: true)
     output
+  end
+
+  defp current_branch(path) do
+    git!(path, ["branch", "--show-current"]) |> String.trim()
+  end
+
+  defp flow_workspace(repo, mode) do
+    %Workspace{
+      path: repo,
+      test_cmd: "true",
+      organ_cmd: "true",
+      organ_args: [],
+      organ_author: "ORGAN",
+      git_mode: mode,
+      git_branch_template: "tracefield/{slug}",
+      git_base: "main",
+      git_worktree_root: Path.join(Path.dirname(repo), "#{Path.basename(repo)}-worktrees")
+    }
   end
 
   defp write_workspace!(issue_dir, config) do

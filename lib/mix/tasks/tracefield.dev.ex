@@ -42,6 +42,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     actors = load_actors!(issue_dir)
     procedure_id = seed_reference!(reference, issue_dir)
+    git_policy_id = seed_git_policy!(reference, issue_dir)
+    opts = Keyword.put(opts, :git_policy_id, git_policy_id)
 
     cond do
       adopt_recruit = Keyword.get(opts, :adopt_recruit) ->
@@ -237,6 +239,29 @@ defmodule Mix.Tasks.Tracefield.Dev do
     procedure.id
   end
 
+  defp seed_git_policy!(reference, issue_dir) do
+    if Workspace.configured?(issue_dir) do
+      ws = Workspace.load!(issue_dir)
+      policy = Workspace.git_policy(ws, issue_slug(issue_dir))
+
+      [entry] =
+        Reference.absorb_idempotent(
+          reference,
+          [
+            %{
+              type: :policy,
+              author: "POLICY",
+              text: policy.text,
+              meta: policy.meta
+            }
+          ],
+          "POLICY"
+        )
+
+      entry.id
+    end
+  end
+
   defp doc_seed_entries(issue_dir) do
     docs_dir = Path.join(issue_dir, "docs")
 
@@ -261,6 +286,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp start_refine(reference, actors, issue_dir, procedure_id, opts) do
     warn_uncovered_chunks!(reference, actors, opts)
     rounds = Keyword.get(opts, :rounds, 2)
+
     run_llm_rounds(
       reference,
       actors,
@@ -271,6 +297,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       nil,
       ["requirement", "question"]
     )
+
     state = await_human(reference, actors, issue_dir, procedure_id, rounds, 0, opts)
     %{state: state, entries: Reference.all(reference)}
   end
@@ -282,7 +309,14 @@ defmodule Mix.Tasks.Tracefield.Dev do
     before_ids = entry_ids(reference)
 
     {_agent, _absorbed, _perception} =
-      run_human_turn(reference, human, issue_dir, procedure_id, round, refine_human_opts(reference))
+      run_human_turn(
+        reference,
+        human,
+        issue_dir,
+        procedure_id,
+        round,
+        refine_human_opts(reference)
+      )
 
     new_human_entries = new_entries(reference, before_ids, human.id)
 
@@ -306,6 +340,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
       true ->
         next_round = round + 1
+
         run_llm_rounds(
           reference,
           actors,
@@ -355,7 +390,14 @@ defmodule Mix.Tasks.Tracefield.Dev do
     warn_uncited_decisions(reference, actors)
 
     {_agent, _absorbed, _perception} =
-      run_human_turn(reference, human, issue_dir, procedure_id, round, design_human_opts(reference, actors))
+      run_human_turn(
+        reference,
+        human,
+        issue_dir,
+        procedure_id,
+        round,
+        design_human_opts(reference, actors)
+      )
 
     new_human_entries = new_entries(reference, before_ids, human.id)
 
@@ -392,13 +434,17 @@ defmodule Mix.Tasks.Tracefield.Dev do
           ["decision"]
         )
 
-        state = await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1)
+        state =
+          await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1)
+
         %{state: state, entries: Reference.all(reference)}
     end
   end
 
   defp start_implement(reference, actors, issue_dir, state, opts) do
     ws = Workspace.load!(issue_dir)
+    ws = Workspace.ensure_flow!(ws, issue_slug(issue_dir))
+    print_git_flow(ws, issue_dir)
 
     unless Workspace.clean?(ws) do
       Mix.raise("workspace が clean ではありません")
@@ -418,6 +464,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp resume_implement(reference, actors, issue_dir, state, opts) do
     ws = Workspace.load!(issue_dir)
+    ws = Workspace.ensure_flow!(ws, issue_slug(issue_dir))
     round = Map.get(state, "round", 1)
     iteration = Map.get(state, "iteration", 0)
     human = blocking_human!(actors)
@@ -452,7 +499,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         }
 
         write_state!(issue_dir, done)
-        print_implement_done(reference, actors, issue_dir, done)
+        print_implement_done(reference, actors, issue_dir, done, ws)
         %{state: done, entries: Reference.all(reference)}
 
       new_human_entries == [] ->
@@ -483,7 +530,17 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp run_organ_round(reference, _actors, issue_dir, ws, round, approved, opts, comments, last_stat) do
+  defp run_organ_round(
+         reference,
+         _actors,
+         issue_dir,
+         ws,
+         round,
+         approved,
+         opts,
+         comments,
+         last_stat
+       ) do
     prompt = build_implement_prompt(issue_dir, reference, approved, comments, last_stat)
     adapter = adapter_module(Keyword.get(opts, :adapter, "mock"))
 
@@ -497,6 +554,9 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     test_label = if test_result.exit == 0, do: "green", else: "red"
 
+    citations =
+      approved |> Enum.map(& &1.id) |> maybe_append_policy(Keyword.get(opts, :git_policy_id))
+
     [change] =
       Reference.absorb(
         reference,
@@ -504,7 +564,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
           type: :change,
           text:
             "実装変更 r#{round}: #{diff.stat} / テスト: #{test_label} (exit #{test_result.exit}) / diff: pending/implement-r#{round}.patch",
-          citations: Enum.map(approved, & &1.id),
+          citations: citations,
           meta: %{
             files: diff.files,
             diff_sha: diff.sha,
@@ -546,7 +606,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         }
 
         write_state!(issue_dir, state)
-        print_implement_done(reference, actors, issue_dir, state)
+        print_implement_done(reference, actors, issue_dir, state, ws)
         state
 
       true ->
@@ -643,9 +703,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp organ_change_ids(reference, organ_author) do
     reference
     |> Reference.all()
-    |> Enum.filter(
-      &(&1.type == :change and &1.status == :active and &1.author == organ_author)
-    )
+    |> Enum.filter(&(&1.type == :change and &1.status == :active and &1.author == organ_author))
     |> Enum.map(& &1.id)
   end
 
@@ -682,9 +740,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp latest_organ_change!(reference, organ_author) do
     reference
     |> Reference.all()
-    |> Enum.filter(
-      &(&1.type == :change and &1.status == :active and &1.author == organ_author)
-    )
+    |> Enum.filter(&(&1.type == :change and &1.status == :active and &1.author == organ_author))
     |> Enum.max_by(&entry_number(&1.id), fn -> nil end)
     |> case do
       nil -> Mix.raise("active organ change がありません")
@@ -694,6 +750,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp start_qa(reference, actors, issue_dir, state, opts) do
     ws = Workspace.load!(issue_dir)
+    ws = Workspace.ensure_flow!(ws, issue_slug(issue_dir))
     round = Map.get(state, "round", 0) + 1
     adapter = adapter_module(Keyword.get(opts, :adapter, "mock"))
 
@@ -749,7 +806,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       }
 
       write_state!(issue_dir, done)
-      print_qa_done(reference, issue_dir)
+      print_qa_done(reference, issue_dir, ws)
       %{state: done, entries: Reference.all(reference)}
     else
       fail_feedback =
@@ -785,9 +842,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp latest_change_stat(reference, organ_author) do
     reference
     |> Reference.all()
-    |> Enum.filter(
-      &(&1.type == :change and &1.status == :active and &1.author == organ_author)
-    )
+    |> Enum.filter(&(&1.type == :change and &1.status == :active and &1.author == organ_author))
     |> Enum.sort_by(&entry_number(&1.id), :desc)
     |> case do
       [%{text: text} | _] ->
@@ -818,9 +873,27 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> String.slice(0, 60)
   end
 
+  defp issue_slug(issue_dir), do: issue_dir |> Path.expand() |> Path.basename()
+
+  defp maybe_append_policy(citations, nil), do: citations
+  defp maybe_append_policy(citations, policy_id), do: citations ++ [policy_id]
+
+  defp print_git_flow(ws, issue_dir) do
+    policy = Workspace.git_policy(ws, issue_slug(issue_dir))
+    Mix.shell().info("git flow: #{ws.git_mode} (branch=#{policy.branch})")
+  end
+
   defp print_qa_done(reference, issue_dir) do
+    ws =
+      issue_dir
+      |> Workspace.load!()
+      |> Workspace.resolve_flow_path!(issue_slug(issue_dir))
+
+    print_qa_done(reference, issue_dir, ws)
+  end
+
+  defp print_qa_done(reference, _issue_dir, ws) do
     entries = Reference.all(reference)
-    ws = Workspace.load!(issue_dir)
     verdicts = Enum.filter(entries, &(&1.type == :verdict and &1.status == :active))
 
     {head_sha, _} =
@@ -883,9 +956,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp print_implement_done(reference, _actors, issue_dir, _state) do
+  defp print_implement_done(reference, _actors, _issue_dir, _state, ws) do
     entries = Reference.all(reference)
-    ws = Workspace.load!(issue_dir)
     changes = Enum.filter(entries, &(&1.type == :change and &1.status == :active))
 
     {head_sha, _} =
@@ -902,9 +974,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     change_hop =
       entries
-      |> Enum.filter(
-        &(&1.type == :change and &1.status == :active and &1.author == organ_author)
-      )
+      |> Enum.filter(&(&1.type == :change and &1.status == :active and &1.author == organ_author))
       |> Enum.find_value(fn change ->
         change.citations
         |> Enum.find(fn id ->
@@ -943,7 +1013,16 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp run_llm_rounds(reference, actors, issue_dir, procedure_id, rounds, opts, ref_docs, expected_types) do
+  defp run_llm_rounds(
+         reference,
+         actors,
+         issue_dir,
+         procedure_id,
+         rounds,
+         opts,
+         ref_docs,
+         expected_types
+       ) do
     actors
     |> Enum.filter(&(&1.kind in [:llm, :cli]))
     |> then(fn actors ->
@@ -961,7 +1040,14 @@ defmodule Mix.Tasks.Tracefield.Dev do
     human = blocking_human!(actors)
 
     {_agent, _absorbed, _perception} =
-      run_human_turn(reference, human, issue_dir, procedure_id, round, refine_human_opts(reference))
+      run_human_turn(
+        reference,
+        human,
+        issue_dir,
+        procedure_id,
+        round,
+        refine_human_opts(reference)
+      )
 
     cond do
       human_decision?(reference, actors) ->
@@ -989,7 +1075,14 @@ defmodule Mix.Tasks.Tracefield.Dev do
     warn_uncited_decisions(reference, actors)
 
     {_agent, _absorbed, _perception} =
-      run_human_turn(reference, human, issue_dir, procedure_id, round, design_human_opts(reference, actors))
+      run_human_turn(
+        reference,
+        human,
+        issue_dir,
+        procedure_id,
+        round,
+        design_human_opts(reference, actors)
+      )
 
     cond do
       design_complete?(reference, actors) ->
@@ -1035,7 +1128,10 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp build_agent(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types) do
-    Agent.new(actor.id, actor.domain, actor.desc,
+    Agent.new(
+      actor.id,
+      actor.domain,
+      actor.desc,
       agent_build_opts(actor, reference, issue_dir, procedure_id, opts, ref_docs, expected_types)
     )
   end
@@ -1112,7 +1208,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     reference
     |> Reference.all()
     |> Enum.filter(
-      &(&1.type == :decision and &1.status == :active and MapSet.member?(machine_authors, &1.author))
+      &(&1.type == :decision and &1.status == :active and
+          MapSet.member?(machine_authors, &1.author))
     )
     |> Enum.map(& &1.id)
   end
@@ -1242,8 +1339,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     %{
       type: :recruit,
-      text:
-        "投入提案: 無人領土 #{file_names} を担当するレンズ。id候補 #{actor_id}、domain候補 #{domain}",
+      text: "投入提案: 無人領土 #{file_names} を担当するレンズ。id候補 #{actor_id}、domain候補 #{domain}",
       citations: uncovered |> Enum.map(& &1.id) |> Enum.sort(),
       meta: %{
         actor_id: actor_id,
