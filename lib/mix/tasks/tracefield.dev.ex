@@ -44,8 +44,12 @@ defmodule Mix.Tasks.Tracefield.Dev do
     procedure_id = seed_reference!(reference, issue_dir)
 
     cond do
+      adopt_recruit = Keyword.get(opts, :adopt_recruit) ->
+        adopt_recruit!(reference, issue_dir, adopt_recruit)
+        %{state: state, entries: Reference.all(reference)}
+
       status? ->
-        print_status(issue_dir, state, reference)
+        print_status(issue_dir, state, reference, actors)
         %{state: state, entries: Reference.all(reference)}
 
       state["stage"] == "refine" and state["status"] == "done" ->
@@ -96,6 +100,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
         strict: [
           issue: :string,
           status: :boolean,
+          recruit: :boolean,
+          adopt_recruit: :string,
           rounds: :integer,
           adapter: :string,
           embed: :string,
@@ -116,6 +122,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     [
       issue: Keyword.get(opts, :issue) || Mix.raise("--issue is required"),
       status: Keyword.get(opts, :status, false),
+      recruit: Keyword.get(opts, :recruit, false),
+      adopt_recruit: Keyword.get(opts, :adopt_recruit),
       rounds: Keyword.get(opts, :rounds, 2),
       adapter: Keyword.get(opts, :adapter, "mock"),
       embed: Keyword.get(opts, :embed, "mock"),
@@ -152,7 +160,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
       private_doc_file: private_doc_file,
       private_doc_path: private_doc_path(issue_dir, private_doc_file),
       private_doc: read_private_doc(issue_dir, private_doc_file),
-      model: optional_string(Map.get(actor, "model"))
+      model: optional_string(Map.get(actor, "model")),
+      recruit_entry: optional_string(Map.get(actor, "recruit_entry"))
     }
   end
 
@@ -1032,6 +1041,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       temperature: Keyword.get(opts, :temperature, 0.4),
       seed: :erlang.phash2(actor.id),
       procedure_id: procedure_id,
+      recruit_id: actor.recruit_entry,
       serve_policy: :diverse,
       expected_types: expected_types
     ]
@@ -1152,7 +1162,100 @@ defmodule Mix.Tasks.Tracefield.Dev do
           "⚠ uncovered chunk #{item.id} (#{item.file}) — nearest: #{item.nearest_actor} (#{format_sim(item.sim)})"
         )
       end)
+
+      if Keyword.get(opts, :recruit, false) do
+        maybe_absorb_recruit_proposal!(reference, uncovered)
+      end
     end
+  end
+
+  defp maybe_absorb_recruit_proposal!(reference, uncovered) do
+    entry = build_recruit_entry(uncovered)
+    before_ids = entry_ids(reference)
+
+    [recruit] = Reference.absorb_idempotent(reference, [entry], "RECRUITER")
+
+    unless MapSet.member?(before_ids, recruit.id) do
+      Mix.shell().info("⚠ recruit 提案 #{recruit.id}: #{recruit.text}")
+    end
+  end
+
+  defp build_recruit_entry(uncovered) do
+    files = uncovered |> Enum.map(& &1.file) |> Enum.sort()
+    basenames = Enum.map(files, &Path.basename/1)
+    actor_id = derive_lens_id(files)
+    domain = "territory"
+    file_names = Enum.join(basenames, ", ")
+
+    %{
+      type: :recruit,
+      text:
+        "投入提案: 無人領土 #{file_names} を担当するレンズ。id候補 #{actor_id}、domain候補 #{domain}",
+      citations: uncovered |> Enum.map(& &1.id) |> Enum.sort(),
+      meta: %{
+        actor_id: actor_id,
+        domain: domain,
+        desc: "無人領土 #{file_names} を担当するレンズ",
+        territory_files: files
+      }
+    }
+  end
+
+  defp derive_lens_id(files) do
+    files
+    |> Enum.map(&Path.basename/1)
+    |> Enum.map(&String.replace_suffix(&1, ".md", ""))
+    |> Enum.map(&lens_segment/1)
+    |> Enum.join("-")
+    |> then(&"LENS-#{&1}")
+  end
+
+  defp lens_segment(name) do
+    name
+    |> String.upcase()
+    |> String.replace(~r/[^A-Z0-9]+/, "-")
+    |> String.trim("-")
+  end
+
+  defp adopt_recruit!(reference, issue_dir, entry_id) do
+    entry = Reference.get(reference, entry_id)
+
+    cond do
+      is_nil(entry) ->
+        Mix.raise("recruit entry not found: #{entry_id}")
+
+      entry.type != :recruit ->
+        Mix.raise("entry #{entry_id} is not a recruit proposal")
+
+      entry.status != :active ->
+        Mix.raise("recruit entry #{entry_id} is not active")
+
+      true ->
+        actor_id = meta_string(entry.meta, :actor_id)
+        domain = meta_string(entry.meta, :domain)
+        desc = meta_string(entry.meta, :desc)
+        path = actors_path(issue_dir)
+        actors = Jason.decode!(File.read!(path))
+
+        if Enum.any?(actors, &(&1["id"] == actor_id)) do
+          Mix.raise("actor #{actor_id} already exists in actors.json")
+        end
+
+        new_actor = %{
+          "id" => actor_id,
+          "domain" => domain,
+          "desc" => desc,
+          "kind" => "llm",
+          "recruit_entry" => entry_id
+        }
+
+        File.write!(path, Jason.encode!(actors ++ [new_actor], pretty: true))
+        Mix.shell().info("採用: #{actor_id}（recruit #{entry_id}）を名簿に追加")
+    end
+  end
+
+  defp meta_string(meta, key) when is_map(meta) do
+    meta |> Map.get(key, Map.get(meta, Atom.to_string(key))) |> to_string()
   end
 
   defp format_sim(sim) do
@@ -1243,7 +1346,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     state
   end
 
-  defp print_status(issue_dir, state, reference) do
+  defp print_status(issue_dir, state, reference, actors) do
     stats = Reference.stats(reference)
     Mix.shell().info("Tracefield Dev status")
     Mix.shell().info("issue: #{issue_dir}")
@@ -1253,6 +1356,36 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info(
       "store: #{Path.join(issue_dir, "store.jsonl")} entries=#{stats.entries} restored=#{stats.restored}"
     )
+
+    print_retire_advice(reference, actors)
+  end
+
+  defp print_retire_advice(reference, actors) do
+    entries = Reference.all(reference)
+    active = Enum.filter(entries, &(&1.status == :active))
+
+    actors
+    |> Enum.filter(&(&1.kind in [:llm, :cli]))
+    |> Enum.each(fn actor ->
+      authored_ids =
+        active
+        |> Enum.filter(&(&1.author == actor.id))
+        |> Enum.map(& &1.id)
+        |> MapSet.new()
+
+      if MapSet.size(authored_ids) > 0 do
+        cited_count =
+          active
+          |> Enum.reject(&(&1.author == actor.id))
+          |> Enum.count(fn entry ->
+            Enum.any?(entry.citations, &MapSet.member?(authored_ids, &1))
+          end)
+
+        if cited_count == 0 do
+          Mix.shell().info("⚠ retire候補: #{actor.id}（被引用 0）")
+        end
+      end
+    end)
   end
 
   defp print_awaiting(issue_dir, human, stage) do

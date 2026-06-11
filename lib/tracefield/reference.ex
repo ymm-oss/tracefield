@@ -25,6 +25,7 @@ defmodule Tracefield.Reference do
     :verdict,
     :chunk,
     :procedure,
+    :recruit,
     :genesis,
     :house_view
   ]

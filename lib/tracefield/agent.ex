@@ -31,6 +31,7 @@ defmodule Tracefield.Agent do
         num_ctx: [type: :integer, default: 8192],
         k_docs: [type: :integer, default: 3],
         procedure_id: [type: :string, default: nil],
+        recruit_id: [type: :string, default: nil],
         aware: [type: :boolean, default: false],
         serve_policy: [type: :any, default: :similar],
         entry_limit: [type: :integer, default: 2],
@@ -437,6 +438,7 @@ defmodule Tracefield.Agent do
           |> Enum.map(&to_string/1)
           |> Enum.filter(&allowed_citation?(&1, presented_ids, reference_doc_ids, procedure))
           |> append_procedure_id(procedure, state.adapter)
+          |> append_recruit_id(state.recruit_id, state.adapter)
           |> Enum.uniq(),
         meta: %{domain: state.domain, round: round}
       }
@@ -455,6 +457,13 @@ defmodule Tracefield.Agent do
     defp append_procedure_id(citations, _procedure, Tracefield.LLM.Human), do: citations
     defp append_procedure_id(citations, nil, _adapter), do: citations
     defp append_procedure_id(citations, procedure, _adapter), do: citations ++ [procedure.id]
+
+    defp append_recruit_id(citations, _recruit_id, Tracefield.LLM.Human), do: citations
+    defp append_recruit_id(citations, nil, _adapter), do: citations
+
+    defp append_recruit_id(citations, recruit_id, _adapter) do
+      if recruit_id in citations, do: citations, else: citations ++ [recruit_id]
+    end
 
     defp decode_json_object(content) do
       with {:error, _reason} <- Jason.decode(content),
@@ -506,6 +515,7 @@ defmodule Tracefield.Agent do
           num_ctx: Keyword.get(opts, :num_ctx, 8192),
           k_docs: Keyword.get(opts, :k_docs, 3),
           procedure_id: Keyword.get(opts, :procedure_id),
+          recruit_id: Keyword.get(opts, :recruit_id),
           aware: Keyword.get(opts, :aware, false),
           serve_policy: Keyword.get(opts, :serve_policy, :similar),
           entry_limit: Keyword.get(opts, :entry_limit, 2),
