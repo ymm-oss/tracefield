@@ -306,6 +306,7 @@ defmodule Tracefield.CoverageTest do
           id: "ARCH",
           domain: "frontend",
           desc: "React UI components styling",
+          kind: "llm",
           private_doc: "arch.md"
         },
         human_actor()
@@ -332,6 +333,7 @@ defmodule Tracefield.CoverageTest do
           id: "ARCH",
           domain: "frontend",
           desc: "React UI components styling",
+          kind: "llm",
           private_doc: "arch.md"
         },
         human_actor()
@@ -361,6 +363,7 @@ defmodule Tracefield.CoverageTest do
           id: "ARCH",
           domain: "architecture",
           desc: "CLI駆動の詳細化パイプライン設計",
+          kind: "llm",
           private_doc: "arch.md"
         },
         human_actor()
@@ -400,7 +403,7 @@ defmodule Tracefield.CoverageTest do
   end
 
   defp llm_actor do
-    %{id: "ARCH", domain: "architecture", desc: "architectural reviewer"}
+    %{id: "ARCH", domain: "architecture", desc: "architectural reviewer", kind: "llm"}
   end
 
   defp human_actor do
