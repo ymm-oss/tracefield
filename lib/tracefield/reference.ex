@@ -27,7 +27,8 @@ defmodule Tracefield.Reference do
     :procedure,
     :recruit,
     :genesis,
-    :house_view
+    :house_view,
+    :policy
   ]
   @statuses [:active, :retracted, :superseded]
 
