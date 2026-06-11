@@ -223,7 +223,7 @@ defmodule Tracefield.Policy do
     end
   end
 
-  defp validate_sharing_mode!(mode, stage) when mode in @sharing_modes, do: mode
+  defp validate_sharing_mode!(mode, _stage) when mode in @sharing_modes, do: mode
 
   defp validate_sharing_mode!(mode, stage) do
     label = if stage, do: "sharing.#{stage}", else: "sharing"
