@@ -134,6 +134,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
 
     [policy] = Enum.filter(result.entries, &(&1.type == :policy and &1.author == "POLICY"))
     assert policy.meta[:policy]["sharing"]["refine"] == "combine"
+    assert policy.meta[:sharing]["refine"]["mode"] == "combine"
     assert policy.text =~ "sharing.refine=combine(issue)"
   end
 
@@ -200,13 +201,15 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     [policy] = Enum.filter(result.entries, &(&1.type == :policy and &1.author == "POLICY"))
     assert policy.meta[:policy]["sharing"]["refine"] == "independent"
     assert policy.meta[:sharing]["refine"]["mode"] == "independent"
-    assert policy.meta[:sharing]["refine"]["exclude_machine_authors"] == ["ARCH", "SEC"]
+    assert policy.meta[:sharing]["refine"]["sharing_excluded_authors"] == ["ARCH", "SEC"]
     assert policy.meta[:sharing]["design"]["mode"] == "shared"
-    refute Map.has_key?(policy.meta[:sharing]["design"], "exclude_machine_authors")
+    refute Map.has_key?(policy.meta[:sharing]["design"], "sharing_excluded_authors")
+    assert policy.text =~ "sharing.refine=independent(issue)"
 
     store = Path.join(dir, "store.jsonl")
     assert File.exists?(store)
-    assert store |> File.read!() |> String.contains?("exclude_machine_authors")
+    assert store |> File.read!() |> String.contains?("sharing_excluded_authors")
+    refute store |> File.read!() |> String.contains?("exclude_machine_authors")
 
     {:ok, restored} =
       Reference.start_link(
@@ -217,7 +220,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     [restored_policy] =
       Enum.filter(Reference.all(restored), &(&1.type == :policy and &1.author == "POLICY"))
 
-    assert restored_policy.meta[:sharing]["refine"]["exclude_machine_authors"] == ["ARCH", "SEC"]
+    assert restored_policy.meta[:sharing]["refine"]["sharing_excluded_authors"] == ["ARCH", "SEC"]
   end
 
   test "embed_module! maps mock and ollama adapters without fallback" do

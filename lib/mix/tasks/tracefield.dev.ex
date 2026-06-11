@@ -346,7 +346,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
         meta =
           if mode == "independent" do
-            %{"mode" => mode, "exclude_machine_authors" => machine_ids}
+            %{"mode" => mode, "sharing_excluded_authors" => machine_ids}
           else
             %{"mode" => mode}
           end
