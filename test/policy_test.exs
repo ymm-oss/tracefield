@@ -31,6 +31,10 @@ defmodule Tracefield.PolicyTest do
     assert sources["git.base"] == :org
     assert sources["git.remote"] == :repo
     assert sources["git.branch_template"] == :default
+    assert policy["warnings"]["unowned"]["enabled"] == true
+    assert policy["warnings"]["stale"]["rounds"] == 2
+    assert sources["warnings.unowned.enabled"] == :default
+    assert sources["warnings.stale.rounds"] == :default
   end
 
   test "sharing_mode defaults to shared and rejects invalid values" do

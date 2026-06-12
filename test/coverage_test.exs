@@ -222,6 +222,131 @@ defmodule Tracefield.CoverageTest do
     refute output =~ "⚠ uncovered chunk"
   end
 
+  test "detect_unowned_entries flags distant machine entries in relative mode" do
+    territory = "frontend React UI components styling CSS flexbox grid layout"
+    territories = [{"ARCH", territory}]
+
+    entries = [
+      %{id: "e1", type: :requirement, text: "React UI components styling flexbox grid layout"},
+      %{id: "e2", type: :question, text: "frontend CSS flexbox grid layout components"},
+      %{
+        id: "e3",
+        type: :observation,
+        text: "quantum entanglement superposition particle physics relativity cosmology"
+      }
+    ]
+
+    warnings =
+      Coverage.detect_unowned_entries(entries, territories,
+        embed_adapter: Embed.Mock,
+        coverage_k: 1.0
+      )
+
+    assert length(warnings) == 1
+    assert hd(warnings) =~ "⚠ 無人論点: e3 (observation)"
+    assert hd(warnings) =~ "nearest: ARCH"
+  end
+
+  test "detect_unowned_entries stays silent for territory-aligned entries" do
+    territory = "frontend React UI components styling CSS flexbox grid layout"
+    territories = [{"ARCH", territory}]
+
+    entries = [
+      %{id: "e1", type: :requirement, text: "React UI components styling flexbox grid layout"},
+      %{id: "e2", type: :question, text: "frontend CSS flexbox grid layout components"},
+      %{id: "e3", type: :decision, text: "React UI flexbox grid layout styling components"}
+    ]
+
+    assert Coverage.detect_unowned_entries(entries, territories,
+             embed_adapter: Embed.Mock,
+             coverage_k: 1.0
+           ) == []
+  end
+
+  test "detect_stale_questions warns after N rounds without human answer citation" do
+    entries = [
+      %{
+        id: "e1",
+        type: :question,
+        status: :active,
+        text: "未回答の質問",
+        citations: [],
+        meta: %{"round" => 1}
+      },
+      %{
+        id: "e2",
+        type: :question,
+        status: :active,
+        text: "まだ新しい質問",
+        citations: [],
+        meta: %{"round" => 3}
+      },
+      %{
+        id: "e3",
+        type: :answer,
+        status: :active,
+        text: "回答済み",
+        citations: ["e4"],
+        meta: %{}
+      },
+      %{
+        id: "e4",
+        type: :question,
+        status: :active,
+        text: "回答された質問",
+        citations: [],
+        meta: %{"round" => 1}
+      }
+    ]
+
+    {warnings, skipped} = Coverage.detect_stale_questions(entries, 3, 2)
+
+    assert skipped == 0
+    assert warnings == ["⚠ 未回答の質問: e1（r1から放置）"]
+    refute Enum.any?(warnings, &String.contains?(&1, "e4"))
+  end
+
+  test "detect_stale_questions skips questions without round metadata" do
+    entries = [
+      %{
+        id: "e1",
+        type: :question,
+        status: :active,
+        text: "round 欠損",
+        citations: [],
+        meta: %{}
+      }
+    ]
+
+    assert Coverage.detect_stale_questions(entries, 5, 2) == {[], 1}
+  end
+
+  test "detect_unowned_entries and detect_stale_questions have no IO side effects" do
+    entries = [
+      %{
+        id: "e1",
+        type: :question,
+        status: :active,
+        text: "quantum entanglement superposition particle physics relativity cosmology",
+        citations: [],
+        meta: %{"round" => 1}
+      }
+    ]
+
+    output =
+      capture_io(fn ->
+        Coverage.detect_unowned_entries(
+          entries,
+          [{"ARCH", "frontend React UI components styling"}],
+          embed_adapter: Embed.Mock
+        )
+
+        Coverage.detect_stale_questions(entries, 3, 2)
+      end)
+
+    assert output == ""
+  end
+
   test "detect_uncovered has no IO side effects" do
     scored = relative_fixture_chunks()
 

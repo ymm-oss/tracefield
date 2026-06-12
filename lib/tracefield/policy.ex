@@ -1,7 +1,15 @@
 defmodule Tracefield.Policy do
   @moduledoc "Policy cascade loading and resolution."
 
-  @known_top_keys MapSet.new(["coverage", "embed", "recruit", "rounds", "git", "sharing"])
+  @known_top_keys MapSet.new([
+                    "coverage",
+                    "embed",
+                    "recruit",
+                    "rounds",
+                    "git",
+                    "sharing",
+                    "warnings"
+                  ])
   @sharing_modes ~w(shared independent combine)
 
   @default_policy %{
@@ -10,6 +18,10 @@ defmodule Tracefield.Policy do
     "recruit" => false,
     "rounds" => 2,
     "sharing" => %{},
+    "warnings" => %{
+      "unowned" => %{"enabled" => true, "threshold" => 1.0},
+      "stale" => %{"enabled" => true, "rounds" => 2}
+    },
     "git" => %{
       "mode" => "current",
       "branch_template" => "tracefield/{slug}",
