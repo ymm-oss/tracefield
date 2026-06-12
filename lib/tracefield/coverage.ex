@@ -178,6 +178,99 @@ defmodule Tracefield.Coverage do
   end
 
   defp actor_profile(%{domain: domain, desc: desc, private_doc: private_doc}) do
+    territory_text(domain, desc, private_doc)
+  end
+
+  @doc false
+  @spec detect_unowned_entries([map()], [{String.t(), String.t()}], keyword()) :: [String.t()]
+  def detect_unowned_entries(entries, territories, opts) when is_list(entries) do
+    measurable_actors = territories
+
+    cond do
+      measurable_actors == [] ->
+        []
+
+      entries == [] ->
+        []
+
+      true ->
+        embed_adapter = Keyword.fetch!(opts, :embed_adapter)
+        coverage_k = Keyword.get(opts, :coverage_k, @default_k)
+
+        chunks =
+          Enum.map(entries, fn entry ->
+            %{
+              id: entry.id,
+              file: Atom.to_string(entry.type),
+              text: entry.text
+            }
+          end)
+
+        detection_opts = [
+          coverage_mode: :relative,
+          coverage_k: coverage_k
+        ]
+
+        chunks
+        |> score_chunks(measurable_actors, embed_adapter)
+        |> then(&detect_uncovered(&1, detection_opts))
+        |> elem(0)
+        |> Enum.map(fn %{id: id, file: type, nearest_actor: actor, sim: sim} ->
+          "⚠ 無人論点: #{id} (#{type}) — nearest: #{actor} (#{format_stat(sim)})"
+        end)
+    end
+  end
+
+  @doc false
+  @spec detect_stale_questions([map()], non_neg_integer(), non_neg_integer()) ::
+          {[String.t()], non_neg_integer()}
+  def detect_stale_questions(entries, current_round, stale_rounds) do
+    answered_ids = answered_question_ids(entries)
+
+    Enum.reduce(entries, {[], 0}, fn entry, {warnings, skipped} ->
+      cond do
+        entry.type != :question or entry.status != :active ->
+          {warnings, skipped}
+
+        MapSet.member?(answered_ids, entry.id) ->
+          {warnings, skipped}
+
+        true ->
+          case entry_round(entry) do
+            nil ->
+              {warnings, skipped + 1}
+
+            round when current_round - round >= stale_rounds ->
+              message = "⚠ 未回答の質問: #{entry.id}（r#{round}から放置）"
+              {[message | warnings], skipped}
+
+            _round ->
+              {warnings, skipped}
+          end
+      end
+    end)
+    |> then(fn {warnings, skipped} -> {Enum.reverse(warnings), skipped} end)
+  end
+
+  defp answered_question_ids(entries) do
+    entries
+    |> Enum.filter(&(&1.type == :answer and &1.status == :active))
+    |> Enum.flat_map(& &1.citations)
+    |> MapSet.new()
+  end
+
+  defp entry_round(entry) do
+    meta = entry.meta || %{}
+
+    case Map.get(meta, :round, Map.get(meta, "round")) do
+      nil -> nil
+      round when is_integer(round) -> round
+      round when is_binary(round) -> String.to_integer(round)
+    end
+  end
+
+  @doc false
+  def territory_text(domain, desc, private_doc) do
     [domain, desc, private_doc]
     |> Enum.map(&to_string/1)
     |> Enum.join(" ")

@@ -1048,6 +1048,105 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert design_md =~ "設計判断(ARCH)"
   end
 
+  test "compute_gate_warnings does not mutate entries or state" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    File.write!(Path.join(dir, "state.json"), Jason.encode!(%{"stage" => "refine", "status" => "new"}))
+
+    {:ok, reference} =
+      Reference.start_link(
+        persist_path: Path.join(dir, "store.jsonl"),
+        embed_adapter: Tracefield.Embed.Mock
+      )
+
+    actors = Dev.load_actors!(dir)
+
+    for {type, text, round} <- [
+          {:requirement, "React UI components styling flexbox grid layout", 1},
+          {:question, "frontend CSS flexbox grid layout components", 1},
+          {:observation, "quantum entanglement superposition particle physics relativity", 1}
+        ] do
+      Reference.absorb(
+        reference,
+        [%{type: type, text: text, meta: %{round: round}}],
+        "ARCH"
+      )
+    end
+
+    {policy, policy_sources} = Tracefield.Policy.load_layers!(dir, %{}) |> Tracefield.Policy.resolve()
+
+    opts = [
+      policy: policy,
+      policy_sources: policy_sources,
+      embed_adapter: Tracefield.Embed.Mock
+    ]
+
+    pending_path = Path.join([dir, "pending", "HUMAN-refine.md"])
+    entries_before = Reference.all(reference)
+    state_before = Jason.decode!(File.read!(Path.join(dir, "state.json")))
+
+    {warnings, _skipped} = Dev.compute_gate_warnings(reference, actors, opts, 3, pending_path)
+
+    assert warnings != []
+    assert Reference.all(reference) == entries_before
+    assert Jason.decode!(File.read!(Path.join(dir, "state.json"))) == state_before
+  end
+
+  test "AMEND in implement supersedes old requirement without quarantining citing decisions" do
+    {:ok, reference} = Reference.start_link()
+    [old_req] = Reference.absorb(reference, [%{type: :requirement, text: "旧要件文"}], "ARCH")
+
+    [decision] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "承認判断", citations: [old_req.id]}],
+        "HUMAN"
+      )
+
+    dir = tmp_issue_dir()
+    File.mkdir_p!(Path.join(dir, "pending"))
+    pending = Path.join([dir, "pending", "HUMAN-implement.md"])
+
+    File.write!(pending, """
+    ## RESPONSE（この下に回答を書いてください）
+    AMEND #{old_req.id}: 実装段階で修正した要件文
+    """)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.apply_amend_pre_pass(reference, pending, "HUMAN")
+      end)
+
+    assert output =~ "要件修正: #{old_req.id} →"
+    assert Reference.get(reference, old_req.id).status == :superseded
+    assert Reference.get(reference, decision.id).status == :active
+
+    new_req =
+      reference
+      |> Reference.all()
+      |> Enum.find(&(&1.type == :requirement and &1.status == :active))
+
+    assert new_req.text == "実装段階で修正した要件文"
+    assert new_req.meta[:amends] == old_req.id
+    assert old_req.id in new_req.citations
+  end
+
+  test "run start records effective warnings policy values" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    File.write!(
+      Path.join(dir, "policy.json"),
+      Jason.encode!(%{"warnings" => %{"stale" => %{"rounds" => 4}}})
+    )
+
+    {result, _output} = run_dev_capture(dir)
+
+    [policy] = Enum.filter(result.entries, &(&1.type == :policy and &1.author == "POLICY"))
+    assert policy.text =~ "warnings.stale.rounds=4(issue)"
+    assert policy.text =~ "warnings.unowned.enabled=true(default)"
+  end
+
   test "AMEND supersedes old requirement without quarantining citing decisions" do
     {:ok, reference} = Reference.start_link()
     [old_req] = Reference.absorb(reference, [%{type: :requirement, text: "旧要件文"}], "ARCH")

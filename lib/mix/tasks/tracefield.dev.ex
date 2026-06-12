@@ -6,6 +6,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
   alias Tracefield.LLM.Human
 
   @response_heading "## RESPONSE（この下に回答を書いてください）"
+  @gate_entry_types ~w(requirement question decision observation)a
 
   @shortdoc "Run Tracefield dev pipeline"
   @refine_procedure """
@@ -489,7 +490,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     human = blocking_human!(actors)
     before_ids = entry_ids(reference)
 
-    apply_amend_lines(reference, human_pending_path(issue_dir, human, "refine"), human.id)
+    pending_path = human_pending_path(issue_dir, human, "refine")
+    apply_amend_pre_pass(reference, pending_path, human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -561,7 +563,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       "design"
     )
 
-    state = await_design(reference, actors, issue_dir, procedure_id, base_round + rounds, 0)
+    state = await_design(reference, actors, issue_dir, procedure_id, base_round + rounds, 0, opts)
     %{state: state, entries: Reference.all(reference)}
   end
 
@@ -574,7 +576,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     warn_uncited_decisions(reference, actors)
 
-    apply_amend_lines(reference, human_pending_path(issue_dir, human, "design"), human.id)
+    pending_path = human_pending_path(issue_dir, human, "design")
+    apply_amend_pre_pass(reference, pending_path, human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -623,7 +626,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         )
 
         state =
-          await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1)
+          await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1, opts)
 
         %{state: state, entries: Reference.all(reference)}
     end
@@ -646,7 +649,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     round = Map.get(state, "round", 0) + 1
     run_organ_round(reference, actors, issue_dir, ws, round, approved, opts, nil, nil)
-    state = await_implement(reference, actors, issue_dir, ws, round, 0)
+    state = await_implement(reference, actors, issue_dir, ws, round, 0, %{}, opts)
     %{state: state, entries: Reference.all(reference)}
   end
 
@@ -657,6 +660,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     iteration = Map.get(state, "iteration", 0)
     human = blocking_human!(actors)
     before_ids = entry_ids(reference)
+    pending_path = human_pending_path(issue_dir, human, "implement")
+    apply_amend_pre_pass(reference, pending_path, human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(reference, human, issue_dir, nil, round, implement_human_opts(reference, ws))
@@ -723,7 +728,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         )
 
         state =
-          await_implement(reference, actors, issue_dir, ws, next_round, iteration + 1, state)
+          await_implement(reference, actors, issue_dir, ws, next_round, iteration + 1, state, opts)
 
         %{state: state, entries: Reference.all(reference)}
     end
@@ -778,8 +783,12 @@ defmodule Mix.Tasks.Tracefield.Dev do
     change
   end
 
-  defp await_implement(reference, actors, issue_dir, ws, round, iteration, prior_state \\ %{}) do
+  defp await_implement(reference, actors, issue_dir, ws, round, iteration, prior_state, opts) do
     human = blocking_human!(actors)
+    pending_path = human_pending_path(issue_dir, human, "implement")
+
+    display_gate_warnings(compute_gate_warnings(reference, actors, opts, round, pending_path))
+    apply_amend_pre_pass(reference, pending_path, human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(reference, human, issue_dir, nil, round, implement_human_opts(reference, ws))
@@ -1043,7 +1052,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         latest_change_stat(reference, ws.organ_author)
       )
 
-      state = await_implement(reference, actors, issue_dir, ws, next_round, 0, state)
+      state = await_implement(reference, actors, issue_dir, ws, next_round, 0, state, opts)
       %{state: state, entries: Reference.all(reference)}
     end
   end
@@ -1339,10 +1348,12 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end)
   end
 
-  defp await_human(reference, actors, issue_dir, procedure_id, round, iteration, _opts) do
+  defp await_human(reference, actors, issue_dir, procedure_id, round, iteration, opts) do
     human = blocking_human!(actors)
+    pending_path = human_pending_path(issue_dir, human, "refine")
 
-    apply_amend_lines(reference, human_pending_path(issue_dir, human, "refine"), human.id)
+    display_gate_warnings(compute_gate_warnings(reference, actors, opts, round, pending_path))
+    apply_amend_pre_pass(reference, pending_path, human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -1374,12 +1385,13 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp await_design(reference, actors, issue_dir, procedure_id, round, iteration) do
+  defp await_design(reference, actors, issue_dir, procedure_id, round, iteration, opts) do
     human = blocking_human!(actors)
+    pending_path = human_pending_path(issue_dir, human, "design")
 
     warn_uncited_decisions(reference, actors)
-
-    apply_amend_lines(reference, human_pending_path(issue_dir, human, "design"), human.id)
+    display_gate_warnings(compute_gate_warnings(reference, actors, opts, round, pending_path))
+    apply_amend_pre_pass(reference, pending_path, human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -2057,6 +2069,87 @@ defmodule Mix.Tasks.Tracefield.Dev do
       actor_id: human.id,
       stage: stage
     })
+  end
+
+  @doc false
+  def compute_gate_warnings(reference, actors, opts, round, pending_path) do
+    if File.exists?(pending_path) do
+      {[], 0}
+    else
+      policy = Keyword.fetch!(opts, :policy)
+      warnings_cfg = Map.get(policy, "warnings", %{})
+      entries = Reference.all(reference)
+      unowned_cfg = Map.get(warnings_cfg, "unowned", %{})
+      stale_cfg = Map.get(warnings_cfg, "stale", %{})
+
+      unowned_warnings =
+        if warnings_enabled?(unowned_cfg) do
+          gate_entries = machine_gate_entries(entries, actors)
+          territories = actor_territories(actors)
+
+          coverage_opts = [
+            embed_adapter: Keyword.fetch!(opts, :embed_adapter),
+            coverage_k: Map.get(unowned_cfg, "threshold", 1.0)
+          ]
+
+          Coverage.detect_unowned_entries(gate_entries, territories, coverage_opts)
+        else
+          []
+        end
+
+      {stale_warnings, skipped} =
+        if warnings_enabled?(stale_cfg) do
+          stale_rounds = Map.get(stale_cfg, "rounds", 2)
+          Coverage.detect_stale_questions(entries, round, stale_rounds)
+        else
+          {[], 0}
+        end
+
+      {unowned_warnings ++ stale_warnings, skipped}
+    end
+  end
+
+  defp display_gate_warnings({warnings, skipped}) do
+    Enum.each(warnings, fn warning -> Mix.shell().info(warning) end)
+
+    if skipped > 0 do
+      Mix.shell().info(
+        "ℹ #{skipped} 件の質問は round メタデータ欠損のため老化判定を省略しました"
+      )
+    end
+  end
+
+  defp warnings_enabled?(cfg) do
+    case Map.get(cfg, "enabled", true) do
+      enabled when enabled in [true, false] -> enabled
+      other -> Mix.raise("invalid warnings enabled policy #{inspect(other)}")
+    end
+  end
+
+  defp machine_gate_entries(entries, actors) do
+    machine_authors =
+      actors
+      |> Enum.filter(&(&1.kind in [:llm, :cli]))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    Enum.filter(entries, fn entry ->
+      entry.status == :active and entry.type in @gate_entry_types and
+        MapSet.member?(machine_authors, entry.author)
+    end)
+  end
+
+  defp actor_territories(actors) do
+    actors
+    |> Enum.filter(&(&1.kind in [:llm, :cli]))
+    |> Enum.map(fn actor ->
+      {actor.id, Coverage.territory_text(actor.domain, actor.desc, actor.private_doc)}
+    end)
+  end
+
+  @doc false
+  def apply_amend_pre_pass(reference, pending_path, human_actor) do
+    apply_amend_lines(reference, pending_path, human_actor)
   end
 
   @doc false
