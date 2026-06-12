@@ -2,6 +2,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
   @moduledoc "Run the Tracefield development pipeline over an issue directory."
   use Mix.Task
 
+  require Logger
+
   alias Tracefield.{Agent, Coverage, Policy, QA, Reference, Workspace}
   alias Tracefield.LLM.Human
 
@@ -1504,6 +1506,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     ]
     |> Kernel.++(sharing_agent_opts(opts, actor, stage, actors))
     |> Kernel.++(territory_agent_opts(actor, actors, opts))
+    |> Kernel.++(patrol_agent_opts(actor, opts))
   end
 
   @doc false
@@ -1533,6 +1536,23 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
       _other ->
         []
+    end
+  end
+
+  defp patrol_agent_opts(actor, opts) do
+    with policy when is_map(policy) <- Keyword.get(opts, :policy),
+         true <- actor.kind in [:llm, :cli] do
+      mobilization = Map.get(policy, "mobilization", %{})
+      patrol = Map.get(mobilization, "patrol", %{})
+
+      [
+        patrol: %{
+          enabled: Map.get(patrol, "enabled", true),
+          token_threshold: Map.get(patrol, "token_threshold", 100_000)
+        }
+      ]
+    else
+      _ -> []
     end
   end
 
@@ -2081,6 +2101,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       entries = Reference.all(reference)
       unowned_cfg = Map.get(warnings_cfg, "unowned", %{})
       stale_cfg = Map.get(warnings_cfg, "stale", %{})
+      mobilization_cfg = Map.get(warnings_cfg, "mobilization", %{})
 
       unowned_warnings =
         if warnings_enabled?(unowned_cfg) do
@@ -2105,7 +2126,14 @@ defmodule Mix.Tasks.Tracefield.Dev do
           {[], 0}
         end
 
-      {unowned_warnings ++ stale_warnings, skipped}
+      mobilization_warnings =
+        if warnings_enabled?(mobilization_cfg) do
+          detect_mobilization_warnings(entries, actors, policy, opts)
+        else
+          []
+        end
+
+      {unowned_warnings ++ stale_warnings ++ mobilization_warnings, skipped}
     end
   end
 
@@ -2144,6 +2172,36 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Enum.filter(&(&1.kind in [:llm, :cli]))
     |> Enum.map(fn actor ->
       {actor.id, Coverage.territory_text(actor.domain, actor.desc, actor.private_doc)}
+    end)
+  end
+
+  defp detect_mobilization_warnings(entries, actors, policy, opts) do
+    mobilization = Map.get(policy, "mobilization", %{})
+    threshold = Map.get(mobilization, "similarity_threshold", 0.5)
+    embed_adapter = Keyword.fetch!(opts, :embed_adapter)
+    gate_entries = machine_gate_entries(entries, actors)
+
+    coverage_opts = [
+      embed_adapter: embed_adapter,
+      threshold: threshold
+    ]
+
+    actors
+    |> Enum.filter(&(&1.kind in [:llm, :cli]))
+    |> Enum.flat_map(fn actor ->
+      sections = Tracefield.Patrol.split_sections(actor.private_doc)
+
+      actor_entries =
+        Enum.filter(gate_entries, fn entry -> entry.author == actor.id end)
+
+      result = Coverage.mobilization_rate(actor_entries, sections, coverage_opts)
+
+      Logger.debug(mobilization_details: %{actor: actor.id, details: result.details})
+
+      case Coverage.mobilization_warning(actor.id, result) do
+        nil -> []
+        warning -> [warning]
+      end
     end)
   end
 

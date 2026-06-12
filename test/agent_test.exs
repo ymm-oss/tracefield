@@ -234,6 +234,111 @@ defmodule Tracefield.AgentTest do
     assert Enum.any?(absorbed, fn entry -> entry.citations == [foreign.id] end)
   end
 
+  test "private_doc below patrol threshold is injected verbatim for backward compatibility" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    private_doc = "small private doc retention-90d-private-test stays verbatim"
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        private_doc: private_doc,
+        patrol: %{enabled: true, token_threshold: 10_000},
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+    prompt = Enum.at(messages, 1).content
+
+    assert prompt =~ "PRIVATE DOCUMENT (yours only):\nsmall private doc retention-90d-private-test stays verbatim"
+    refute prompt =~ "SECTION INDEX (full territory map):"
+    refute prompt =~ "SECTION CONTENT (patrol slice"
+  end
+
+  test "private_doc above patrol threshold injects toc plus rotating slice per round" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    private_doc = large_patrol_doc()
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        private_doc: private_doc,
+        patrol: %{enabled: true, token_threshold: 50},
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    {agent, _absorbed, _perception} = Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+    round1 = Enum.at(messages, 1).content
+
+    assert round1 =~ "SECTION INDEX (full territory map):"
+    assert round1 =~ "- Patrol Alpha"
+    assert round1 =~ "- Patrol Beta"
+    assert round1 =~ "- Patrol Gamma"
+    assert round1 =~ "SECTION CONTENT (patrol slice for round 1):"
+    assert round1 =~ "PATROL_SLICE_ALPHA_MARKER"
+    refute round1 =~ "PATROL_SLICE_BETA_MARKER"
+    refute round1 =~ "PATROL_SLICE_GAMMA_MARKER"
+
+    {agent, _absorbed, _perception} = Agent.run_turn(agent, ref, 2)
+    assert_receive {:agent_messages, messages}
+    round2 = Enum.at(messages, 1).content
+
+    assert round2 =~ "SECTION CONTENT (patrol slice for round 2):"
+    assert round2 =~ "PATROL_SLICE_BETA_MARKER"
+    refute round2 =~ "PATROL_SLICE_ALPHA_MARKER"
+    refute round2 =~ "PATROL_SLICE_GAMMA_MARKER"
+
+    {agent, _absorbed, _perception} = Agent.run_turn(agent, ref, 3)
+    assert_receive {:agent_messages, messages}
+    round3 = Enum.at(messages, 1).content
+
+    assert round3 =~ "SECTION CONTENT (patrol slice for round 3):"
+    assert round3 =~ "PATROL_SLICE_GAMMA_MARKER"
+    refute round3 =~ "PATROL_SLICE_ALPHA_MARKER"
+    refute round3 =~ "PATROL_SLICE_BETA_MARKER"
+
+    {_agent, _absorbed, _perception} = Agent.run_turn(agent, ref, 4)
+    assert_receive {:agent_messages, messages}
+    round4 = Enum.at(messages, 1).content
+
+    assert round4 =~ "SECTION CONTENT (patrol slice for round 4):"
+    assert round4 =~ "PATROL_SLICE_ALPHA_MARKER"
+    refute round4 =~ "PATROL_SLICE_BETA_MARKER"
+    refute round4 =~ "PATROL_SLICE_GAMMA_MARKER"
+  end
+
+  test "patrol slice that still exceeds reference budget defers to existing budget mechanism" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    Reference.absorb(
+      ref,
+      [long_doc("ALPHA SUMMARY", "ALPHA_FULL_MARKER", String.duplicate("alpha ", 200))],
+      "DOCS"
+    )
+
+    agent =
+      Agent.new("SEC", "alpha", "security reviewer",
+        anchor: "alpha",
+        private_doc: large_patrol_doc(),
+        patrol: %{enabled: true, token_threshold: 50},
+        adapter: PromptCaptureMock,
+        model: "mock",
+        num_ctx: 1,
+        k_docs: 1
+      )
+
+    {_agent, _absorbed, perception} = Agent.run_turn(agent, ref, 1)
+
+    assert perception.doc_mode == :selected
+    assert perception.over_budget
+  end
+
   test "private_doc is included in prompt but not absorbed into the reference store" do
     {:ok, ref} = Reference.start_link()
 
@@ -690,6 +795,25 @@ defmodule Tracefield.AgentTest do
 
     assert perception.doc_mode == :selected
     assert perception.over_budget
+  end
+
+  defp large_patrol_doc do
+    filler = String.duplicate("territory patrol padding text ", 120)
+
+    """
+    ## Patrol Alpha
+    PATROL_SLICE_ALPHA_MARKER
+    #{filler}
+
+    ## Patrol Beta
+    PATROL_SLICE_BETA_MARKER
+    #{filler}
+
+    ## Patrol Gamma
+    PATROL_SLICE_GAMMA_MARKER
+    #{filler}
+    """
+    |> String.trim()
   end
 
   defp long_doc(summary, marker, body_seed) do

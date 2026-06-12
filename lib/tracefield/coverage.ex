@@ -7,6 +7,7 @@ defmodule Tracefield.Coverage do
 
   # 0.2 flags chunks with no meaningful actor overlap while tolerating paraphrase.
   @default_threshold 0.2
+  @default_mobilization_threshold 0.5
   @default_k 1.0
   @min_relative_samples 3
 
@@ -275,5 +276,104 @@ defmodule Tracefield.Coverage do
     |> Enum.map(&to_string/1)
     |> Enum.join(" ")
     |> String.trim()
+  end
+
+  @spec mobilization_rate([map()], [map()], keyword()) :: %{
+          rate: float(),
+          details: [%{title: String.t(), score: float(), mobilized: boolean()}]
+        }
+  def mobilization_rate(entries, sections, opts) when is_list(entries) and is_list(sections) do
+    threshold = Keyword.get(opts, :threshold, @default_mobilization_threshold)
+
+    case sections do
+      [] ->
+        %{rate: 1.0, details: []}
+
+      _ ->
+        active_entries = Enum.filter(entries, &(Map.get(&1, :status, :active) == :active))
+
+        if active_entries == [] do
+          details =
+            Enum.map(sections, fn section ->
+              %{title: section_title(section), score: 0.0, mobilized: false}
+            end)
+
+          %{rate: 0.0, details: details}
+        else
+          embed_adapter = Keyword.fetch!(opts, :embed_adapter)
+          section_texts = Enum.map(sections, &section_body/1)
+          entry_texts = Enum.map(active_entries, & &1.text)
+
+          {:ok, embeddings} =
+            Embed.embed(section_texts ++ entry_texts,
+              adapter: embed_adapter,
+              model: "nomic-embed-text"
+            )
+
+          {section_embeddings, entry_embeddings} =
+            Enum.split(embeddings, length(section_texts))
+
+          details =
+            sections
+            |> Enum.zip(section_embeddings)
+            |> Enum.map(fn {section, section_embedding} ->
+              score =
+                entry_embeddings
+                |> Enum.map(&Embed.cosine(section_embedding, &1))
+                |> Enum.max(fn -> 0.0 end)
+
+              %{
+                title: section_title(section),
+                score: score,
+                mobilized: score >= threshold
+              }
+            end)
+
+          mobilized_count = Enum.count(details, & &1.mobilized)
+          rate = mobilized_count / length(details)
+
+          %{rate: rate, details: details}
+        end
+    end
+  end
+
+  @doc false
+  @spec mobilization_warning(String.t(), %{rate: float(), details: list()}) :: String.t() | nil
+  def mobilization_warning(actor_id, %{rate: rate, details: details}) do
+    unmobilized = Enum.filter(details, &(!&1.mobilized))
+
+    if unmobilized == [] do
+      nil
+    else
+      sections_text =
+        Enum.map_join(unmobilized, ", ", fn detail ->
+          "#{detail.title}(score=#{format_stat(detail.score)})"
+        end)
+
+      rate_pct =
+        rate
+        |> Kernel.*(100)
+        |> Float.round(1)
+        |> :erlang.float_to_binary(decimals: 1)
+
+      "⚠ 未動員領土: #{actor_id} #{rate_pct}%（未動員節: #{sections_text}）"
+    end
+  end
+
+  defp section_title(%{title: title}), do: to_string(title)
+  defp section_title(%{"title" => title}), do: to_string(title)
+
+  defp section_body(%{title: title, body: body}) do
+    body = to_string(body) |> String.trim()
+
+    if body == "" do
+      to_string(title)
+    else
+      "#{title}\n#{body}"
+    end
+  end
+
+  defp section_body(%{"title" => title, "body" => body}) do
+    section_body(%{title: title, body: body})
   end
 end

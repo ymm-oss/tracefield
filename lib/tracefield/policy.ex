@@ -4,6 +4,7 @@ defmodule Tracefield.Policy do
   @known_top_keys MapSet.new([
                     "coverage",
                     "embed",
+                    "mobilization",
                     "recruit",
                     "rounds",
                     "git",
@@ -15,12 +16,17 @@ defmodule Tracefield.Policy do
   @default_policy %{
     "coverage" => %{"mode" => "absolute", "threshold" => 0.2},
     "embed" => "mock",
+    "mobilization" => %{
+      "similarity_threshold" => 0.5,
+      "patrol" => %{"enabled" => true, "token_threshold" => 100_000}
+    },
     "recruit" => false,
     "rounds" => 2,
     "sharing" => %{},
     "warnings" => %{
       "unowned" => %{"enabled" => true, "threshold" => 1.0},
-      "stale" => %{"enabled" => true, "rounds" => 2}
+      "stale" => %{"enabled" => true, "rounds" => 2},
+      "mobilization" => %{"enabled" => true}
     },
     "git" => %{
       "mode" => "current",

@@ -39,6 +39,7 @@ defmodule Tracefield.Agent do
         territory: [type: :any, default: nil],
         exclude_machine_authors: [type: :any, default: nil],
         sharing_stage: [type: :string, default: nil],
+        patrol: [type: :any, default: %{enabled: true, token_threshold: 100_000}],
         last_round: [type: :integer, default: 0],
         absorbed_count: [type: :integer, default: 0],
         last_absorbed: [type: :any, default: []],
@@ -321,7 +322,7 @@ defmodule Tracefield.Agent do
       ROUND #{round}
 
       PRIVATE DOCUMENT (yours only):
-      #{state.private_doc}
+      #{format_private_doc(state, round)}
 
       #{format_private_memory(state.private_memory)}
 
@@ -334,6 +335,27 @@ defmodule Tracefield.Agent do
       #{format_note(note)}
       """
       |> String.trim()
+    end
+
+    defp format_private_doc(state, round) do
+      private_doc = state.private_doc
+
+      if patrol_mode?(state, private_doc) do
+        private_doc
+        |> Tracefield.Patrol.split_sections()
+        |> Tracefield.Patrol.select_slice(round)
+        |> Tracefield.Patrol.format_patrol_body(round)
+      else
+        private_doc
+      end
+    end
+
+    defp patrol_mode?(state, private_doc) do
+      patrol = Map.get(state, :patrol, %{})
+      enabled = Map.get(patrol, :enabled, Map.get(patrol, "enabled", true))
+      threshold = Map.get(patrol, :token_threshold, Map.get(patrol, "token_threshold", 100_000))
+
+      enabled and Tracefield.Tokens.estimate(private_doc) > threshold
     end
 
     defp format_note(nil), do: ""
@@ -636,7 +658,8 @@ defmodule Tracefield.Agent do
           expected_types: normalize_expected_types(Keyword.get(opts, :expected_types)),
           territory: Keyword.get(opts, :territory),
           exclude_machine_authors: Keyword.get(opts, :exclude_machine_authors),
-          sharing_stage: Keyword.get(opts, :sharing_stage)
+          sharing_stage: Keyword.get(opts, :sharing_stage),
+          patrol: Keyword.get(opts, :patrol, %{enabled: true, token_threshold: 100_000})
         }
       )
 
