@@ -25,6 +25,7 @@ defmodule Tracefield.Reference do
     :verdict,
     :chunk,
     :procedure,
+    :territory_contract,
     :recruit,
     :genesis,
     :house_view,
@@ -354,7 +355,7 @@ defmodule Tracefield.Reference do
     entry =
       state.entries
       |> Enum.filter(&(&1.status == :active))
-      |> Enum.reject(&(&1.type in [:chunk, :procedure]))
+      |> Enum.reject(&(&1.type in [:chunk, :procedure, :territory_contract]))
       |> Enum.map(&{&1, Map.get(counts, &1.id, 0)})
       |> Enum.filter(fn {_entry, count} -> count >= min_count end)
       |> Enum.sort_by(fn {entry, count} -> {-count, entry_number(entry.id)} end)

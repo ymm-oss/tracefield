@@ -32,6 +32,42 @@ defmodule Tracefield.AgentTest do
     end
   end
 
+  defmodule TerritoryPromptMock do
+    @behaviour Tracefield.LLM
+
+    @impl true
+    def complete(messages, _opts) do
+      prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
+
+      ledger_id =
+        case Regex.run(~r/Territory ledger entry: (e\d+)/, prompt) do
+          [_, id] -> id
+          _ -> nil
+        end
+
+      entries =
+        if ledger_id &&
+             String.contains?(prompt, "TERRITORY CONTRACT:") and
+             String.contains?(prompt, "private document: sec.md") and
+             String.contains?(prompt, "ARCH domain=architecture desc=architect") and
+             String.contains?(prompt, "YOUR TERRITORY:") and
+             String.contains?(prompt, "PORTFOLIO MAP:") and
+             String.contains?(prompt, "境界は分担のためにあり") do
+          [
+            %{
+              type: "belief",
+              text: "territory contract was injected(security)",
+              citations: [ledger_id]
+            }
+          ]
+        else
+          []
+        end
+
+      {:ok, Jason.encode!(%{entries: entries})}
+    end
+  end
+
   defmodule ProcedurePromptMock do
     @behaviour Tracefield.LLM
 
@@ -244,6 +280,93 @@ defmodule Tracefield.AgentTest do
     assert prompt =~ ~r/PRIVATE DOCUMENT[\s\S]+PRIVATE MEMORY[\s\S]+PRESENTED ENTRIES/
     refute Enum.any?(Reference.all(ref), &String.contains?(&1.text, "prior private judgment"))
     assert [%{text: "captured prompt state(security)"}] = absorbed
+  end
+
+  test "territory nil keeps the user prompt unchanged" do
+    Process.register(self(), PromptCaptureMock)
+    {:ok, ref} = Reference.start_link()
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        anchor: "enterprise assistant",
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(agent, ref, 1)
+    assert_receive {:agent_messages, messages}
+    prompt = Enum.at(messages, 1).content
+
+    refute prompt =~ "TERRITORY CONTRACT"
+    refute prompt =~ "PORTFOLIO MAP"
+    refute prompt =~ "ENGAGEMENT NORM"
+  end
+
+  test "territory contract section is injected and cited for mechanical actors" do
+    {:ok, ref} = Reference.start_link()
+
+    [ledger] =
+      Reference.absorb(
+        ref,
+        [
+          %{
+            type: :territory_contract,
+            text: "territory ledger body",
+            meta: %{kind: "territory_ledger"}
+          }
+        ],
+        "FACILITATOR"
+      )
+
+    self_actor = %{
+      id: "SEC",
+      domain: "security",
+      desc: "security reviewer",
+      private_doc_file: "sec.md"
+    }
+
+    others = [
+      %{id: "ARCH", domain: "architecture", desc: "architect", private_doc_file: nil}
+    ]
+
+    agent =
+      Agent.new("SEC", "security", "security reviewer",
+        anchor: "enterprise assistant",
+        adapter: TerritoryPromptMock,
+        model: "mock",
+        territory: %{
+          self: self_actor,
+          others: others,
+          territory_contract_id: ledger.id
+        }
+      )
+
+    {_agent, absorbed, _perception} = Agent.run_turn(agent, ref, 1)
+
+    assert [%{citations: citations, text: text}] = absorbed
+    assert ledger.id in citations
+    assert text =~ "territory contract was injected"
+  end
+
+  test "human adapter prompt omits territory contract section" do
+    {:ok, ref} = Reference.start_link()
+    pending_dir = System.tmp_dir!() |> Path.join("tracefield-human-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(pending_dir)
+    on_exit(fn -> File.rm_rf(pending_dir) end)
+
+    agent =
+      Agent.new("HUMAN", "review", "human reviewer",
+        anchor: "enterprise assistant",
+        adapter: Tracefield.LLM.Human,
+        model: "human",
+        human: %{pending_dir: pending_dir, actor_id: "HUMAN", stage: "refine"}
+      )
+
+    {agent, [], _perception} = Agent.run_turn(agent, ref, 1)
+
+    pending = agent.core.state.human |> Tracefield.LLM.Human.pending_path()
+    assert File.exists?(pending)
+    refute File.read!(pending) =~ "TERRITORY CONTRACT"
   end
 
   test "procedure entries are injected and cited as adoption provenance" do

@@ -138,6 +138,102 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert policy.text =~ "sharing.refine=combine(issue)"
   end
 
+  test "seed_territory_contract! is idempotent and supersedes stale ledgers when roster changes" do
+    {:ok, reference} = Reference.start_link()
+
+    actors = [
+      %{id: "ARCH", domain: "architecture", desc: "architect", kind: :llm, private_doc_file: nil},
+      %{id: "SEC", domain: "security", desc: "security", kind: :llm, private_doc_file: "sec.md"}
+    ]
+
+    first_id = Dev.seed_territory_contract!(reference, actors)
+    again_id = Dev.seed_territory_contract!(reference, actors)
+    assert first_id == again_id
+
+    [ledger] =
+      Enum.filter(Reference.all(reference), &(&1.type == :territory_contract and &1.status == :active))
+
+    assert ledger.author == "FACILITATOR"
+    assert ledger.text =~ "ARCH domain=architecture desc=architect"
+    assert ledger.text =~ "SEC domain=security desc=security private_doc=sec.md"
+
+    changed_actors = [
+      %{id: "ARCH", domain: "architecture", desc: "architect", kind: :llm, private_doc_file: nil},
+      %{id: "SEC", domain: "security", desc: "security", kind: :llm, private_doc_file: "sec.md"},
+      %{id: "CLI", domain: "implementation", desc: "cli worker", kind: :cli, private_doc_file: nil}
+    ]
+
+    new_id = Dev.seed_territory_contract!(reference, changed_actors)
+    refute new_id == first_id
+    assert Reference.get(reference, first_id).status == :superseded
+    assert Reference.get(reference, new_id).status == :active
+  end
+
+  test "machine agent opts include territory contract but human opts do not" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    File.write!(
+      Path.join(dir, "actors.json"),
+      Jason.encode!([
+        %{id: "ARCH", domain: "architecture", desc: "architect", kind: "llm"},
+        %{id: "SEC", domain: "security", desc: "security", kind: "llm"},
+        human_actor()
+      ])
+    )
+
+    {:ok, reference} = Reference.start_link()
+    actors = Dev.load_actors!(dir)
+    territory_contract_id = Dev.seed_territory_contract!(reference, actors)
+    arch = Enum.find(actors, &(&1.id == "ARCH"))
+    human = Enum.find(actors, &(&1.id == "HUMAN"))
+
+    machine_opts =
+      Dev.agent_build_opts(
+        arch,
+        reference,
+        dir,
+        "e1",
+        [adapter: "mock", territory_contract_id: territory_contract_id],
+        nil,
+        ["requirement", "question"],
+        "refine",
+        actors
+      )
+
+    assert %{territory: territory} = Map.new(machine_opts)
+    assert territory.territory_contract_id == territory_contract_id
+    assert territory.self.id == "ARCH"
+    assert Enum.map(territory.others, & &1.id) == ["SEC"]
+
+    human_opts =
+      Dev.agent_build_opts(
+        human,
+        reference,
+        dir,
+        "e1",
+        [adapter: "mock", territory_contract_id: territory_contract_id],
+        nil,
+        ["requirement", "question"],
+        "refine",
+        actors
+      )
+
+    refute Keyword.has_key?(human_opts, :territory)
+  end
+
+  test "human pending file omits territory contract section" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    first = Dev.run_dev(issue: dir, adapter: "mock")
+
+    assert first.state["status"] == "awaiting_human"
+
+    pending = Path.join([dir, "pending", "HUMAN-refine.md"])
+    assert File.read!(pending) =~ "REFINE手続き"
+    refute File.read!(pending) =~ "TERRITORY CONTRACT"
+  end
+
   test "independent sharing passes machine author exclusion to agent opts" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
