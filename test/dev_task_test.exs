@@ -952,6 +952,159 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert design_md =~ "設計判断(ARCH)"
   end
 
+  test "AMEND supersedes old requirement without quarantining citing decisions" do
+    {:ok, reference} = Reference.start_link()
+    [old_req] = Reference.absorb(reference, [%{type: :requirement, text: "旧要件文"}], "ARCH")
+
+    [decision] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "承認判断", citations: [old_req.id]}],
+        "HUMAN"
+      )
+
+    dir = tmp_issue_dir()
+    File.mkdir_p!(Path.join(dir, "pending"))
+    pending = Path.join([dir, "pending", "HUMAN-refine.md"])
+
+    File.write!(pending, """
+    ## RESPONSE（この下に回答を書いてください）
+    AMEND #{old_req.id}: 新しい要件文
+    """)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.apply_amend_lines(reference, pending, "HUMAN")
+      end)
+
+    assert output =~ "要件修正: #{old_req.id} →"
+
+    assert Reference.get(reference, old_req.id).status == :superseded
+    assert Reference.get(reference, decision.id).status == :active
+
+    new_req =
+      reference
+      |> Reference.all()
+      |> Enum.find(&(&1.type == :requirement and &1.status == :active))
+
+    assert new_req.text == "新しい要件文"
+    assert new_req.meta[:amends] == old_req.id
+    assert old_req.id in new_req.citations
+  end
+
+  test "AMEND before APPROVE resolves approve_targets to new requirement ids" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+
+    first = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+    assert first.state["status"] == "awaiting_human"
+
+    old_req = Enum.find(first.entries, &(&1.type == :requirement and &1.status == :active))
+    pending = Path.join([dir, "pending", "HUMAN-refine.md"])
+
+    append_response!(
+      pending,
+      "AMEND #{old_req.id}: 修正後の受入基準はテスト green\nAPPROVE\n"
+    )
+
+    refined = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+
+    assert refined.state["status"] == "done"
+
+    new_req =
+      Enum.find(refined.entries, fn entry ->
+        entry.type == :requirement and entry.status == :active and
+          entry.meta[:amends] == old_req.id
+      end)
+
+    assert new_req
+
+    human_decision =
+      Enum.find(refined.entries, fn entry ->
+        entry.type == :decision and entry.author == "HUMAN" and entry.status == :active
+      end)
+
+    assert new_req.id in human_decision.citations
+    refute old_req.id in human_decision.citations
+
+    old = Enum.find(refined.entries, &(&1.id == old_req.id))
+    assert old.status == :superseded
+  end
+
+  test "invalid AMEND lines are skipped with warnings and do not halt the run" do
+    dir = tmp_issue_dir()
+    {:ok, reference} = Reference.start_link()
+    [belief] = Reference.absorb(reference, [%{type: :belief, text: "not a requirement"}], "ARCH")
+    [old_req] = Reference.absorb(reference, [%{type: :requirement, text: "old"}], "ARCH")
+    Reference.quarantine(reference, [old_req.id])
+
+    File.mkdir_p!(Path.join(dir, "pending"))
+    pending = Path.join([dir, "pending", "HUMAN-refine.md"])
+
+    File.write!(pending, """
+    ## RESPONSE（この下に回答を書いてください）
+    AMEND e999: missing
+    AMEND #{belief.id}: wrong type
+    AMEND #{old_req.id}: retracted target
+    """)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        assert Dev.apply_amend_lines(reference, pending, "HUMAN") == reference
+      end)
+
+    assert output =~ "AMEND 警告: e999"
+    assert output =~ "AMEND 警告: #{belief.id}"
+    assert output =~ "AMEND 警告: #{old_req.id}"
+    refute output =~ "要件修正:"
+  end
+
+  test "AMEND in refine propagates amended requirement to design and QA verdicts" do
+    amended_text = "修正要件: 受入基準は mix test が全 green であること"
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    init_workspace_repo!(dir)
+
+    first = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+    old_req = Enum.find(first.entries, &(&1.type == :requirement and &1.status == :active))
+    pending = Path.join([dir, "pending", "HUMAN-refine.md"])
+
+    append_response!(pending, "AMEND #{old_req.id}: #{amended_text}\nAPPROVE\n")
+    refined = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+
+    assert refined.state["status"] == "done"
+
+    new_req = Enum.find(refined.entries, &(&1.meta[:amends] == old_req.id))
+    assert new_req.text == amended_text
+
+    design_awaiting = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+    assert design_awaiting.state["stage"] == "design"
+
+    latest_arch =
+      design_awaiting.entries
+      |> Enum.filter(&(&1.type == :decision and &1.author == "ARCH"))
+      |> Enum.max_by(&String.to_integer(String.trim_leading(&1.id, "e")))
+
+    assert new_req.id in latest_arch.citations
+    refute old_req.id in latest_arch.citations
+
+    append_response!(Path.join([dir, "pending", "HUMAN-design.md"]), "APPROVE\n")
+    Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+
+    implement_awaiting = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+    assert implement_awaiting.state["stage"] == "implement"
+
+    append_response!(Path.join([dir, "pending", "HUMAN-implement.md"]), "APPROVE\n")
+    Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+
+    qa = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+    assert qa.state["stage"] == "qa"
+
+    verdict = Enum.find(qa.entries, &(&1.type == :verdict and &1.author == "QA"))
+    assert new_req.id in verdict.citations
+    refute old_req.id in verdict.citations
+  end
+
   test "design stage starts after refine, iterates on comments, completes with design.md and 2-hop provenance" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
