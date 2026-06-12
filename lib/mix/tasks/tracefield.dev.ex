@@ -3,6 +3,9 @@ defmodule Mix.Tasks.Tracefield.Dev do
   use Mix.Task
 
   alias Tracefield.{Agent, Coverage, Policy, QA, Reference, Workspace}
+  alias Tracefield.LLM.Human
+
+  @response_heading "## RESPONSE（この下に回答を書いてください）"
 
   @shortdoc "Run Tracefield dev pipeline"
   @refine_procedure """
@@ -423,6 +426,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     human = blocking_human!(actors)
     before_ids = entry_ids(reference)
 
+    apply_amend_lines(reference, human_pending_path(issue_dir, human, "refine"), human.id)
+
     {_agent, _absorbed, _perception} =
       run_human_turn(
         reference,
@@ -505,6 +510,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     before_ids = entry_ids(reference)
 
     warn_uncited_decisions(reference, actors)
+
+    apply_amend_lines(reference, human_pending_path(issue_dir, human, "design"), human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -1272,6 +1279,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
   defp await_human(reference, actors, issue_dir, procedure_id, round, iteration, _opts) do
     human = blocking_human!(actors)
 
+    apply_amend_lines(reference, human_pending_path(issue_dir, human, "refine"), human.id)
+
     {_agent, _absorbed, _perception} =
       run_human_turn(
         reference,
@@ -1306,6 +1315,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     human = blocking_human!(actors)
 
     warn_uncited_decisions(reference, actors)
+
+    apply_amend_lines(reference, human_pending_path(issue_dir, human, "design"), human.id)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -1342,7 +1353,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     %{
       stage: "refine",
       approve_targets: active_ids(reference, :requirement),
-      ref_docs: reference_docs(reference)
+      ref_docs: requirement_reference_docs(reference)
     }
   end
 
@@ -1481,13 +1492,18 @@ defmodule Mix.Tasks.Tracefield.Dev do
   end
 
   defp design_reference_docs(reference) do
-    requirements =
-      reference
-      |> Reference.all()
-      |> Enum.filter(&(&1.type == :requirement and &1.status == :active))
-      |> Enum.map(&%{id: &1.id, file: "requirement", text: &1.text})
+    reference_docs(reference) ++ active_requirement_docs(reference)
+  end
 
-    reference_docs(reference) ++ requirements
+  defp requirement_reference_docs(reference) do
+    reference_docs(reference) ++ active_requirement_docs(reference)
+  end
+
+  defp active_requirement_docs(reference) do
+    reference
+    |> Reference.all()
+    |> Enum.filter(&(&1.type == :requirement and &1.status == :active))
+    |> Enum.map(&%{id: &1.id, file: "requirement", text: &1.text})
   end
 
   defp machine_decision_ids(reference, actors) do
@@ -1947,5 +1963,73 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Path.join("pending")
     |> then(&Path.join(&1, "#{human.id}-#{stage}.md"))
     |> Path.relative_to(issue_dir)
+  end
+
+  defp human_pending_path(issue_dir, human, stage) do
+    Human.pending_path(%{
+      pending_dir: Path.join(issue_dir, "pending"),
+      actor_id: human.id,
+      stage: stage
+    })
+  end
+
+  @doc false
+  def apply_amend_lines(reference, pending_path, human_actor) do
+    if File.exists?(pending_path) do
+      pending_path
+      |> File.read!()
+      |> amend_response_body()
+      |> Enum.each(fn [_line, old_id, new_text] ->
+        case Reference.get(reference, old_id) do
+          nil ->
+            Mix.shell().info("AMEND 警告: #{old_id} - entry が存在しません")
+
+          %{type: :requirement, status: :active} = _entry ->
+            inline_refs =
+              ~r/\[(e\d+)\]/
+              |> Regex.scan(new_text, capture: :all_but_first)
+              |> List.flatten()
+              |> Enum.uniq()
+
+            citations = Enum.uniq([old_id | inline_refs])
+
+            [new_entry] =
+              Reference.absorb(
+                reference,
+                %{
+                  type: :requirement,
+                  text: new_text,
+                  citations: citations,
+                  meta: %{amends: old_id}
+                },
+                human_actor
+              )
+
+            Reference.quarantine(reference, [old_id])
+            Mix.shell().info("要件修正: #{old_id} → #{new_entry.id}")
+
+          %{type: type} when type != :requirement ->
+            Mix.shell().info("AMEND 警告: #{old_id} - requirement 以外の entry です (#{type})")
+
+          %{status: status} ->
+            Mix.shell().info("AMEND 警告: #{old_id} - active ではありません (#{status})")
+        end
+      end)
+    end
+
+    reference
+  end
+
+  defp amend_response_body(content) do
+    content
+    |> pending_response_body()
+    |> then(&Regex.scan(~r/^AMEND (e\d+): (.+)$/m, &1))
+  end
+
+  defp pending_response_body(content) do
+    case String.split(content, @response_heading, parts: 2) do
+      [_before, after_heading] -> after_heading
+      [_all] -> ""
+    end
   end
 end
