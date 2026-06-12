@@ -1048,6 +1048,68 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert design_md =~ "設計判断(ARCH)"
   end
 
+  test "compute_gate_warnings includes mobilization warnings before human gate" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    File.mkdir_p!(Path.join(dir, "private"))
+
+    File.write!(
+      Path.join([dir, "private", "arch.md"]),
+      """
+      ## Frontend
+      React UI components styling flexbox grid layout
+
+      ## Quantum
+      quantum entanglement superposition particle physics relativity
+      """
+    )
+
+    File.write!(
+      Path.join(dir, "actors.json"),
+      Jason.encode!([
+        Map.put(llm_actor(), :private_doc, "arch.md"),
+        human_actor()
+      ])
+    )
+
+    File.write!(Path.join(dir, "state.json"), Jason.encode!(%{"stage" => "refine", "status" => "new"}))
+
+    {:ok, reference} =
+      Reference.start_link(
+        persist_path: Path.join(dir, "store.jsonl"),
+        embed_adapter: Tracefield.Embed.Mock
+      )
+
+    actors = Dev.load_actors!(dir)
+
+    Reference.absorb(
+      reference,
+      [
+        %{
+          type: :requirement,
+          text: "React UI components styling flexbox grid layout",
+          meta: %{round: 1}
+        }
+      ],
+      "ARCH"
+    )
+
+    {policy, policy_sources} = Tracefield.Policy.load_layers!(dir, %{}) |> Tracefield.Policy.resolve()
+
+    opts = [
+      policy: policy,
+      policy_sources: policy_sources,
+      embed_adapter: Tracefield.Embed.Mock
+    ]
+
+    pending_path = Path.join([dir, "pending", "HUMAN-refine.md"])
+
+    {warnings, _skipped} = Dev.compute_gate_warnings(reference, actors, opts, 3, pending_path)
+
+    assert Enum.any?(warnings, &String.contains?(&1, "⚠ 未動員領土:"))
+    assert Enum.any?(warnings, &String.contains?(&1, "score="))
+  end
+
   test "compute_gate_warnings does not mutate entries or state" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)

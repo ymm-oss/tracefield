@@ -33,8 +33,14 @@ defmodule Tracefield.PolicyTest do
     assert sources["git.branch_template"] == :default
     assert policy["warnings"]["unowned"]["enabled"] == true
     assert policy["warnings"]["stale"]["rounds"] == 2
+    assert policy["warnings"]["mobilization"]["enabled"] == true
+    assert policy["mobilization"]["similarity_threshold"] == 0.5
+    assert policy["mobilization"]["patrol"]["token_threshold"] == 100_000
     assert sources["warnings.unowned.enabled"] == :default
     assert sources["warnings.stale.rounds"] == :default
+    assert sources["warnings.mobilization.enabled"] == :default
+    assert sources["mobilization.similarity_threshold"] == :default
+    assert sources["mobilization.patrol.token_threshold"] == :default
   end
 
   test "sharing_mode defaults to shared and rejects invalid values" do

@@ -321,6 +321,78 @@ defmodule Tracefield.CoverageTest do
     assert Coverage.detect_stale_questions(entries, 5, 2) == {[], 1}
   end
 
+  test "mobilization_rate marks nearby entries as mobilized and distant ones as not" do
+    sections = [
+      %{title: "Frontend", body: "React UI components styling flexbox grid layout"},
+      %{title: "Quantum", body: "quantum entanglement superposition particle physics relativity"}
+    ]
+
+    entries = [
+      %{
+        id: "e1",
+        type: :requirement,
+        status: :active,
+        text: "React UI components styling flexbox grid layout"
+      }
+    ]
+
+    result =
+      Coverage.mobilization_rate(entries, sections,
+        embed_adapter: Embed.Mock,
+        threshold: 0.5
+      )
+
+    assert [%{title: "Frontend", mobilized: true}, %{title: "Quantum", mobilized: false}] =
+             result.details
+
+    assert result.rate == 0.5
+    assert hd(result.details).score >= 0.5
+    assert Enum.at(result.details, 1).score < 0.5
+  end
+
+  test "mobilization_rate threshold changes mobilized classification deterministically" do
+    sections = [%{title: "Frontend", body: "React UI components styling flexbox grid layout"}]
+
+    entries = [
+      %{
+        id: "e1",
+        type: :observation,
+        status: :active,
+        text: "frontend CSS flexbox grid layout components"
+      }
+    ]
+
+    strict =
+      Coverage.mobilization_rate(entries, sections,
+        embed_adapter: Embed.Mock,
+        threshold: 0.99
+      )
+
+    lenient =
+      Coverage.mobilization_rate(entries, sections,
+        embed_adapter: Embed.Mock,
+        threshold: 0.1
+      )
+
+    refute hd(strict.details).mobilized
+    assert hd(lenient.details).mobilized
+  end
+
+  test "mobilization_warning formats unmobilized sections with scores" do
+    warning =
+      Coverage.mobilization_warning("ARCH", %{
+        rate: 0.5,
+        details: [
+          %{title: "Frontend", score: 0.812, mobilized: true},
+          %{title: "Quantum", score: 0.143, mobilized: false}
+        ]
+      })
+
+    assert warning =~ "⚠ 未動員領土: ARCH 50.0%"
+    assert warning =~ "未動員節: Quantum(score=0.143)"
+    refute warning =~ "Frontend"
+  end
+
   test "detect_unowned_entries and detect_stale_questions have no IO side effects" do
     entries = [
       %{
