@@ -53,8 +53,12 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     actors = load_actors!(issue_dir)
     procedure_id = seed_reference!(reference, issue_dir, opts)
+    territory_contract_id = seed_territory_contract!(reference, actors)
     policy_id = seed_policy!(reference, policy, policy_sources, actors)
-    opts = Keyword.put(opts, :policy_id, policy_id)
+    opts =
+      opts
+      |> Keyword.put(:policy_id, policy_id)
+      |> Keyword.put(:territory_contract_id, territory_contract_id)
 
     cond do
       adopt_recruit = Keyword.get(opts, :adopt_recruit) ->
@@ -314,6 +318,65 @@ defmodule Mix.Tasks.Tracefield.Dev do
       )
 
     procedure.id
+  end
+
+  @doc false
+  def seed_territory_contract!(reference, actors) do
+    text = territory_contract_text(actors)
+
+    [entry] =
+      Reference.absorb_idempotent(
+        reference,
+        [
+          %{
+            type: :territory_contract,
+            text: text,
+            meta: %{kind: "territory_ledger"}
+          }
+        ],
+        "FACILITATOR"
+      )
+
+    supersede_stale_territory_contracts!(reference, entry.id)
+    entry.id
+  end
+
+  defp supersede_stale_territory_contracts!(reference, current_id) do
+    stale_ids =
+      reference
+      |> Reference.all()
+      |> Enum.filter(
+        &(&1.type == :territory_contract and &1.status == :active and &1.id != current_id)
+      )
+      |> Enum.map(& &1.id)
+
+    if stale_ids != [] do
+      Reference.quarantine(reference, stale_ids)
+    end
+  end
+
+  defp territory_contract_text(actors) do
+    portfolio =
+      actors
+      |> Enum.filter(&(&1.kind in [:llm, :cli]))
+      |> Enum.sort_by(& &1.id)
+      |> Enum.map_join("\n", fn actor ->
+        private =
+          case actor.private_doc_file do
+            nil -> ""
+            "" -> ""
+            file -> " private_doc=#{file}"
+          end
+
+        "- #{actor.id} domain=#{actor.domain} desc=#{actor.desc}#{private}"
+      end)
+
+    """
+    領土台帳（TERRITORY CONTRACT LEDGER）
+
+    #{portfolio}
+    """
+    |> String.trim()
   end
 
   defp refine_procedure_text(opts) do
@@ -1428,6 +1491,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       expected_types: expected_types
     ]
     |> Kernel.++(sharing_agent_opts(opts, actor, stage, actors))
+    |> Kernel.++(territory_agent_opts(actor, actors, opts))
   end
 
   @doc false
@@ -1436,6 +1500,28 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> Enum.filter(&(&1.kind in [:llm, :cli]))
     |> Enum.map(& &1.id)
     |> MapSet.new()
+  end
+
+  defp territory_agent_opts(actor, actors, opts) do
+    case Keyword.get(opts, :territory_contract_id) do
+      nil ->
+        []
+
+      territory_contract_id when actor.kind in [:llm, :cli] ->
+        machine_actors = Enum.filter(actors, &(&1.kind in [:llm, :cli]))
+        others = Enum.reject(machine_actors, &(&1.id == actor.id))
+
+        [
+          territory: %{
+            self: actor,
+            others: others,
+            territory_contract_id: territory_contract_id
+          }
+        ]
+
+      _other ->
+        []
+    end
   end
 
   defp sharing_agent_opts(opts, actor, stage, actors) do

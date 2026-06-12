@@ -36,6 +36,7 @@ defmodule Tracefield.Agent do
         serve_policy: [type: :any, default: :similar],
         entry_limit: [type: :integer, default: 2],
         expected_types: [type: :any, default: nil],
+        territory: [type: :any, default: nil],
         exclude_machine_authors: [type: :any, default: nil],
         sharing_stage: [type: :string, default: nil],
         last_round: [type: :integer, default: 0],
@@ -71,7 +72,7 @@ defmodule Tracefield.Agent do
         Tracefield.Reference.serve(reference, query_text,
           k: max(state.k_s, 0),
           exclude_author: state.id,
-          exclude_types: [:procedure],
+          exclude_types: [:procedure, :territory_contract],
           policy: state.serve_policy
         )
 
@@ -88,7 +89,9 @@ defmodule Tracefield.Agent do
         |> deliberate(state, round)
         |> Enum.take(state.entry_limit)
         |> Enum.map(
-          &sanitize_entry(&1, presented_ids, reference_doc_ids, state, round, procedure)
+          &sanitize_entry(&1, presented_ids, reference_doc_ids, state, round, procedure,
+            territory_contract_id: territory_contract_id(state)
+          )
         )
         |> Enum.reject(&(&1.text == ""))
 
@@ -327,6 +330,7 @@ defmodule Tracefield.Agent do
       PRESENTED ENTRIES:
       #{format_retrieved(retrieved)}
       #{format_procedure(procedure)}
+      #{format_territory_contract(state.territory)}
       #{format_note(note)}
       """
       |> String.trim()
@@ -433,6 +437,57 @@ defmodule Tracefield.Agent do
       "\n\nADOPTED PROCEDURE:\n#{procedure.text}"
     end
 
+    defp format_territory_contract(nil), do: ""
+
+    defp format_territory_contract(%{self: self, others: others, territory_contract_id: ledger_id}) do
+      self_body = format_self_territory(self)
+
+      portfolio =
+        others
+        |> Enum.sort_by(& &1.id)
+        |> Enum.map_join("\n", fn actor ->
+          "- #{actor.id} domain=#{actor.domain} desc=#{actor.desc}"
+        end)
+        |> case do
+          "" -> "(none)"
+          body -> body
+        end
+
+      """
+      \n\nTERRITORY CONTRACT:
+      Territory ledger entry: #{ledger_id}
+
+      YOUR TERRITORY:
+      #{self_body}
+
+      PORTFOLIO MAP:
+      #{portfolio}
+
+      ENGAGEMENT NORM:
+      境界は分担のためにあり、縄張りの防衛のためにあるのではない。他領土に接続する論点を恐れて避けるな。自領土の本質を出した上で、接続があれば述べよ
+      """
+      |> String.trim_leading()
+    end
+
+    defp format_self_territory(actor) do
+      base = "- id: #{actor.id}\n- domain: #{actor.domain}\n- desc: #{actor.desc}"
+
+      case Map.get(actor, :private_doc_file) do
+        nil ->
+          base
+
+        "" ->
+          base
+
+        file ->
+          base <>
+            "\n- private document: #{file} (あなたの PRIVATE DOCUMENT がこの領土の実体である)"
+      end
+    end
+
+    defp territory_contract_id(%{territory: %{territory_contract_id: id}}) when is_binary(id), do: id
+    defp territory_contract_id(_state), do: nil
+
     defp format_retrieved([]), do: "(none)"
 
     defp format_retrieved(entries) do
@@ -466,7 +521,9 @@ defmodule Tracefield.Agent do
 
     defp parse_entries(_content), do: []
 
-    defp sanitize_entry(entry, presented_ids, reference_doc_ids, state, round, procedure) do
+    defp sanitize_entry(entry, presented_ids, reference_doc_ids, state, round, procedure, opts) do
+      territory_contract_id = Keyword.get(opts, :territory_contract_id)
+
       %{
         type: Map.get(entry, "type", Map.get(entry, :type, "belief")),
         text: Map.get(entry, "text", Map.get(entry, :text, "")) |> to_string() |> String.trim(),
@@ -475,8 +532,17 @@ defmodule Tracefield.Agent do
           |> Map.get("citations", Map.get(entry, :citations, []))
           |> List.wrap()
           |> Enum.map(&to_string/1)
-          |> Enum.filter(&allowed_citation?(&1, presented_ids, reference_doc_ids, procedure))
+          |> Enum.filter(
+            &allowed_citation?(
+              &1,
+              presented_ids,
+              reference_doc_ids,
+              procedure,
+              territory_contract_id
+            )
+          )
           |> append_procedure_id(procedure, state.adapter)
+          |> append_territory_contract_id(territory_contract_id, state.adapter)
           |> append_recruit_id(state.recruit_id, state.adapter)
           |> Enum.uniq(),
         meta: %{domain: state.domain, round: round}
@@ -485,17 +551,26 @@ defmodule Tracefield.Agent do
 
     defp doc_id(doc), do: Map.get(doc, :id, Map.get(doc, "id"))
 
-    defp allowed_citation?(id, presented_ids, reference_doc_ids, nil) do
-      MapSet.member?(presented_ids, id) or MapSet.member?(reference_doc_ids, id)
-    end
-
-    defp allowed_citation?(id, presented_ids, reference_doc_ids, procedure) do
-      allowed_citation?(id, presented_ids, reference_doc_ids, nil) or id == procedure.id
+    defp allowed_citation?(id, presented_ids, reference_doc_ids, procedure, territory_contract_id) do
+      MapSet.member?(presented_ids, id) or MapSet.member?(reference_doc_ids, id) or
+        (not is_nil(procedure) and id == procedure.id) or
+        (not is_nil(territory_contract_id) and id == territory_contract_id)
     end
 
     defp append_procedure_id(citations, _procedure, Tracefield.LLM.Human), do: citations
     defp append_procedure_id(citations, nil, _adapter), do: citations
     defp append_procedure_id(citations, procedure, _adapter), do: citations ++ [procedure.id]
+
+    defp append_territory_contract_id(citations, _territory_contract_id, Tracefield.LLM.Human),
+      do: citations
+
+    defp append_territory_contract_id(citations, nil, _adapter), do: citations
+
+    defp append_territory_contract_id(citations, territory_contract_id, _adapter) do
+      if territory_contract_id in citations,
+        do: citations,
+        else: citations ++ [territory_contract_id]
+    end
 
     defp append_recruit_id(citations, _recruit_id, Tracefield.LLM.Human), do: citations
     defp append_recruit_id(citations, nil, _adapter), do: citations
@@ -559,6 +634,7 @@ defmodule Tracefield.Agent do
           serve_policy: Keyword.get(opts, :serve_policy, :similar),
           entry_limit: Keyword.get(opts, :entry_limit, 2),
           expected_types: normalize_expected_types(Keyword.get(opts, :expected_types)),
+          territory: Keyword.get(opts, :territory),
           exclude_machine_authors: Keyword.get(opts, :exclude_machine_authors),
           sharing_stage: Keyword.get(opts, :sharing_stage)
         }
