@@ -3,6 +3,7 @@ defmodule Mix.Tasks.Tracefield.DevTest do
 
   alias Mix.Tasks.Tracefield.Dev
   alias Tracefield.Reference
+  alias Tracefield.Reference.Entry
 
   test "refine build_agent opts include requirement and question expected types" do
     dir = tmp_issue_dir()
@@ -1647,6 +1648,171 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert again.state["stage"] == "design"
     assert again.state["status"] == "done"
     assert Jason.decode!(File.read!(Path.join(dir, "state.json")))["stage"] == "design"
+  end
+
+  describe "provenance chain backtracking" do
+    test "implement_provenance_chain backtracks past first decision without requirement" do
+      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "issue.md"})
+      requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
+      decision_bad = provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: [])
+      decision_good = provenance_entry(id: "e4", type: :decision, author: "ARCH", citations: ["e2"])
+
+      change =
+        provenance_entry(
+          id: "e5",
+          type: :change,
+          author: "ORGAN",
+          citations: ["e3", "e4"]
+        )
+
+      entries = [issue, requirement, decision_bad, decision_good, change]
+
+      assert Dev.implement_provenance_chain(entries, "ORGAN") ==
+               "e5 change -> e4 decision -> e2 requirement -> e1 issue chunk (issue.md)"
+    end
+
+    test "qa_provenance_chain backtracks past first change without decision" do
+      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "issue.md"})
+      requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
+      decision = provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: [])
+
+      change_bad =
+        provenance_entry(id: "e4", type: :change, author: "ORGAN", citations: [])
+
+      change_good =
+        provenance_entry(id: "e5", type: :change, author: "ORGAN", citations: ["e3"])
+
+      verdict =
+        provenance_entry(
+          id: "e6",
+          type: :verdict,
+          author: "QA",
+          citations: ["e4", "e5", "e2"]
+        )
+
+      entries = [issue, requirement, decision, change_bad, change_good, verdict]
+
+      assert Dev.qa_provenance_chain(entries, "ORGAN") ==
+               "e6 verdict -> e5 change -> e3 decision -> e2 requirement -> e1 issue chunk (issue.md)"
+    end
+
+    test "design_provenance_chain backtracks past first decision without requirement" do
+      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "issue.md"})
+      requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
+
+      decision_bad =
+        provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: [])
+
+      decision_good =
+        provenance_entry(id: "e4", type: :decision, author: "ARCH", citations: ["e2"])
+
+      entries = [issue, requirement, decision_bad, decision_good]
+
+      assert Dev.design_provenance_chain(entries, ["e3", "e4"]) ==
+               "e4 decision -> e2 requirement -> e1 issue chunk (issue.md)"
+    end
+
+    test "implement_provenance_chain returns unavailable when no complete chain exists" do
+      decision = provenance_entry(id: "e1", type: :decision, author: "ARCH", citations: [])
+      change = provenance_entry(id: "e2", type: :change, author: "ORGAN", citations: ["e1"])
+
+      assert Dev.implement_provenance_chain([decision, change], "ORGAN") ==
+               "change -> decision -> requirement -> issue chunk: unavailable"
+    end
+
+    test "qa_provenance_chain returns unavailable when no complete chain exists" do
+      change = provenance_entry(id: "e1", type: :change, author: "ORGAN", citations: [])
+      verdict = provenance_entry(id: "e2", type: :verdict, author: "QA", citations: ["e1"])
+
+      assert Dev.qa_provenance_chain([change, verdict], "ORGAN") ==
+               "verdict -> change -> decision -> requirement -> issue chunk: unavailable"
+    end
+
+    test "design_provenance_chain returns unavailable when no complete chain exists" do
+      decision = provenance_entry(id: "e1", type: :decision, author: "ARCH", citations: [])
+
+      assert Dev.design_provenance_chain([decision], ["e1"]) ==
+               "decision -> requirement -> issue chunk: unavailable"
+    end
+
+    test "implement_provenance_chain single-path regression" do
+      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "docs/issue.md"})
+      requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
+      decision = provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: ["e2"])
+      change = provenance_entry(id: "e4", type: :change, author: "ORGAN", citations: ["e3"])
+
+      entries = [issue, requirement, decision, change]
+
+      assert Dev.implement_provenance_chain(entries, "ORGAN") ==
+               "e4 change -> e3 decision -> e2 requirement -> e1 issue chunk (docs/issue.md)"
+    end
+
+    test "qa_provenance_chain single-path regression" do
+      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "issue.md"})
+      requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
+      decision = provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: [])
+      change = provenance_entry(id: "e4", type: :change, author: "ORGAN", citations: ["e3"])
+
+      verdict =
+        provenance_entry(id: "e5", type: :verdict, author: "QA", citations: ["e4", "e2"])
+
+      entries = [issue, requirement, decision, change, verdict]
+
+      assert Dev.qa_provenance_chain(entries, "ORGAN") ==
+               "e5 verdict -> e4 change -> e3 decision -> e2 requirement -> e1 issue chunk (issue.md)"
+    end
+
+    test "design_provenance_chain single-path regression" do
+      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "issue.md"})
+      requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
+      decision = provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: ["e2"])
+
+      entries = [issue, requirement, decision]
+
+      assert Dev.design_provenance_chain(entries, ["e3"]) ==
+               "e3 decision -> e2 requirement -> e1 issue chunk (issue.md)"
+    end
+
+    test "implement_provenance_chain picks first complete chain by enumeration order" do
+      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "issue.md"})
+      requirement_a = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
+      requirement_b = provenance_entry(id: "e3", type: :requirement, citations: ["e1"])
+      decision_a = provenance_entry(id: "e4", type: :decision, author: "ARCH", citations: ["e2"])
+      decision_b = provenance_entry(id: "e5", type: :decision, author: "ARCH", citations: ["e3"])
+
+      change =
+        provenance_entry(
+          id: "e6",
+          type: :change,
+          author: "ORGAN",
+          citations: ["e4", "e5"]
+        )
+
+      entries = [issue, requirement_a, requirement_b, decision_a, decision_b, change]
+
+      first =
+        Dev.implement_provenance_chain(entries, "ORGAN")
+
+      second =
+        Dev.implement_provenance_chain(entries, "ORGAN")
+
+      assert first == second
+      assert first == "e6 change -> e4 decision -> e2 requirement -> e1 issue chunk (issue.md)"
+    end
+  end
+
+  defp provenance_entry(opts) do
+    %Entry{
+      id: Keyword.fetch!(opts, :id),
+      type: Keyword.fetch!(opts, :type),
+      author: Keyword.get(opts, :author, "ORGAN"),
+      version: 1,
+      status: Keyword.get(opts, :status, :active),
+      text: Keyword.get(opts, :text, ""),
+      citations: Keyword.get(opts, :citations, []),
+      embedding: [],
+      meta: Keyword.get(opts, :meta, %{})
+    }
   end
 
   defp tmp_issue_dir do
