@@ -978,7 +978,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     llm_opts = [
       model: Keyword.get(opts, :model, "mock"),
-      temperature: Keyword.get(opts, :temperature, 0.4)
+      temperature: Keyword.get(opts, :temperature, 0.4),
+      cli: cli_config(opts)
     ]
 
     test_result = Workspace.run_tests!(ws)
