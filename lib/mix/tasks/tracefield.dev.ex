@@ -580,6 +580,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     pending_path = human_pending_path(issue_dir, human, "design")
     apply_amend_pre_pass(reference, pending_path, human.id)
+    apply_reject_lines(reference, pending_path, human.id, actors)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -664,6 +665,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     before_ids = entry_ids(reference)
     pending_path = human_pending_path(issue_dir, human, "implement")
     apply_amend_pre_pass(reference, pending_path, human.id)
+    apply_reject_lines(reference, pending_path, human.id, actors)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(reference, human, issue_dir, nil, round, implement_human_opts(reference, ws))
@@ -791,6 +793,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
     display_gate_warnings(compute_gate_warnings(reference, actors, opts, round, pending_path))
     apply_amend_pre_pass(reference, pending_path, human.id)
+    apply_reject_lines(reference, pending_path, human.id, actors)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(reference, human, issue_dir, nil, round, implement_human_opts(reference, ws))
@@ -1395,6 +1398,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     warn_uncited_decisions(reference, actors)
     display_gate_warnings(compute_gate_warnings(reference, actors, opts, round, pending_path))
     apply_amend_pre_pass(reference, pending_path, human.id)
+    apply_reject_lines(reference, pending_path, human.id, actors)
 
     {_agent, _absorbed, _perception} =
       run_human_turn(
@@ -2256,6 +2260,67 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
 
     reference
+  end
+
+  @doc false
+  def apply_reject_lines(reference, pending_path, human_actor, actors) do
+    if File.exists?(pending_path) do
+      pending_path
+      |> File.read!()
+      |> reject_response_body()
+      |> Enum.each(fn [_line, target_id, reason] ->
+        case Reference.get(reference, target_id) do
+          nil ->
+            Mix.shell().info("REJECT 警告: #{target_id} - entry が存在しません")
+
+          entry ->
+            cond do
+              entry.type != :decision ->
+                Mix.shell().info(
+                  "REJECT 警告: #{target_id} - decision 以外の entry です (#{entry.type})"
+                )
+
+              entry.status != :active ->
+                Mix.shell().info(
+                  "REJECT 警告: #{target_id} - active ではありません (#{entry.status})"
+                )
+
+              not rejectable_machine_decision?(reference, actors, target_id) ->
+                Mix.shell().info(
+                  "REJECT 警告: #{target_id} - 機械判断ではありません (#{entry.author})"
+                )
+
+              true ->
+                Reference.quarantine(reference, [target_id])
+
+                Reference.absorb(
+                  reference,
+                  %{
+                    type: :observation,
+                    text: "却下: #{reason}",
+                    citations: [target_id],
+                    meta: %{rejects: target_id}
+                  },
+                  human_actor
+                )
+
+                Mix.shell().info("判断却下: #{target_id}（#{reason}）")
+            end
+        end
+      end)
+    end
+
+    reference
+  end
+
+  defp rejectable_machine_decision?(reference, actors, id) do
+    id in machine_decision_ids(reference, actors)
+  end
+
+  defp reject_response_body(content) do
+    content
+    |> pending_response_body()
+    |> then(&Regex.scan(~r/^REJECT (e\d+): (.+)$/m, &1))
   end
 
   defp amend_response_body(content) do
