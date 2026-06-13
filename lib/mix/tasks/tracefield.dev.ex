@@ -1205,54 +1205,34 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info("provenance: #{qa_provenance_chain(entries, ws.organ_author)}")
   end
 
-  defp qa_provenance_chain(entries, organ_author) do
+  @doc false
+  def qa_provenance_chain(entries, organ_author) do
     by_id = Map.new(entries, &{&1.id, &1})
 
-    verdict_hop =
-      entries
-      |> Enum.filter(&(&1.type == :verdict and &1.status == :active and &1.author == "QA"))
-      |> Enum.find_value(fn verdict ->
-        requirement_id =
-          Enum.find(verdict.citations, fn id ->
-            case Map.get(by_id, id) do
-              %{type: :requirement} -> true
-              _other -> false
-            end
-          end)
+    roots =
+      Enum.filter(entries, &(&1.type == :verdict and &1.status == :active and &1.author == "QA"))
 
-        change_id =
-          Enum.find(verdict.citations, fn id ->
-            case Map.get(by_id, id) do
-              %{type: :change, author: ^organ_author} -> true
-              _other -> false
-            end
-          end)
+    stages = [
+      fn [verdict], by_id ->
+        cited_children(by_id, verdict, &(&1.type == :change and &1.author == organ_author))
+      end,
+      fn [_verdict, change], by_id ->
+        cited_children(by_id, change, &(&1.type == :decision))
+      end,
+      fn [verdict, _change, _decision], by_id ->
+        cited_children(by_id, verdict, &(&1.type == :requirement))
+      end,
+      fn [_verdict, _change, _decision, requirement], by_id ->
+        cited_children(by_id, requirement, &issue_chunk_entry?/1)
+      end
+    ]
 
-        if requirement_id && change_id do
-          {verdict, Map.fetch!(by_id, change_id), Map.fetch!(by_id, requirement_id)}
-        end
-      end)
+    case find_complete_chain(by_id, roots, stages) do
+      nil ->
+        "verdict -> change -> decision -> requirement -> issue chunk: unavailable"
 
-    with {verdict, change, requirement} <- verdict_hop,
-         decision_id when not is_nil(decision_id) <-
-           Enum.find(change.citations, fn id ->
-             case Map.get(by_id, id) do
-               %{type: :decision} -> true
-               _other -> false
-             end
-           end),
-         decision <- Map.fetch!(by_id, decision_id),
-         issue_id when not is_nil(issue_id) <-
-           Enum.find(requirement.citations, fn id ->
-             case Map.get(by_id, id) do
-               %{type: :chunk, author: "ISSUE"} -> true
-               _other -> false
-             end
-           end),
-         issue <- Map.fetch!(by_id, issue_id) do
-      "#{verdict.id} verdict -> #{change.id} change -> #{decision.id} decision -> #{requirement.id} requirement -> #{issue.id} issue chunk (#{Map.get(issue.meta, :file, "issue.md")})"
-    else
-      _missing -> "verdict -> change -> decision -> requirement -> issue chunk: unavailable"
+      path ->
+        format_provenance_chain([:verdict, :change, :decision, :requirement, :issue_chunk], path)
     end
   end
 
@@ -1276,47 +1256,31 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp print_pr_url(_state), do: :ok
 
-  defp implement_provenance_chain(entries, organ_author) do
+  @doc false
+  def implement_provenance_chain(entries, organ_author) do
     by_id = Map.new(entries, &{&1.id, &1})
 
-    change_hop =
-      entries
-      |> Enum.filter(&(&1.type == :change and &1.status == :active and &1.author == organ_author))
-      |> Enum.find_value(fn change ->
-        change.citations
-        |> Enum.find(fn id ->
-          case Map.get(by_id, id) do
-            %{type: :decision} -> true
-            _other -> false
-          end
-        end)
-        |> case do
-          nil -> nil
-          decision_id -> {change, Map.fetch!(by_id, decision_id)}
-        end
-      end)
+    roots =
+      Enum.filter(entries, &(&1.type == :change and &1.status == :active and &1.author == organ_author))
 
-    with {change, decision} <- change_hop,
-         requirement_id when not is_nil(requirement_id) <-
-           Enum.find(decision.citations, fn id ->
-             case Map.get(by_id, id) do
-               %{type: :requirement} -> true
-               _other -> false
-             end
-           end),
-         requirement <- Map.fetch!(by_id, requirement_id),
-         issue_id when not is_nil(issue_id) <-
-           Enum.find(requirement.citations, fn id ->
-             case Map.get(by_id, id) do
-               %{type: :chunk, author: "ISSUE"} -> true
-               _other -> false
-             end
-           end) do
-      issue = Map.fetch!(by_id, issue_id)
+    stages = [
+      fn [change], by_id ->
+        cited_children(by_id, change, &(&1.type == :decision))
+      end,
+      fn [_change, decision], by_id ->
+        cited_children(by_id, decision, &(&1.type == :requirement))
+      end,
+      fn [_change, _decision, requirement], by_id ->
+        cited_children(by_id, requirement, &issue_chunk_entry?/1)
+      end
+    ]
 
-      "#{change.id} change -> #{decision.id} decision -> #{requirement.id} requirement -> #{issue.id} issue chunk (#{Map.get(issue.meta, :file, "issue.md")})"
-    else
-      _missing -> "change -> decision -> requirement -> issue chunk: unavailable"
+    case find_complete_chain(by_id, roots, stages) do
+      nil ->
+        "change -> decision -> requirement -> issue chunk: unavailable"
+
+      path ->
+        format_provenance_chain([:change, :decision, :requirement, :issue_chunk], path)
     end
   end
 
@@ -2022,41 +1986,79 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Mix.shell().info("provenance: #{design_provenance_chain(entries, machine_ids)}")
   end
 
-  defp design_provenance_chain(entries, machine_ids) do
+  @doc false
+  def design_provenance_chain(entries, machine_ids) do
     by_id = Map.new(entries, &{&1.id, &1})
     machine_set = MapSet.new(machine_ids)
 
-    requirement_hop =
-      entries
-      |> Enum.filter(&MapSet.member?(machine_set, &1.id))
-      |> Enum.find_value(fn decision ->
-        decision.citations
-        |> Enum.find(fn id ->
-          case Map.get(by_id, id) do
-            %{type: :requirement} -> true
-            _other -> false
-          end
-        end)
-        |> case do
-          nil -> nil
-          requirement_id -> {decision, Map.fetch!(by_id, requirement_id)}
-        end
-      end)
+    roots = Enum.filter(entries, &MapSet.member?(machine_set, &1.id))
 
-    with {decision, requirement} <- requirement_hop,
-         issue_id when not is_nil(issue_id) <-
-           Enum.find(requirement.citations, fn id ->
-             case Map.get(by_id, id) do
-               %{type: :chunk, author: "ISSUE"} -> true
-               _other -> false
-             end
-           end) do
-      issue = Map.fetch!(by_id, issue_id)
+    stages = [
+      fn [decision], by_id ->
+        cited_children(by_id, decision, &(&1.type == :requirement))
+      end,
+      fn [_decision, requirement], by_id ->
+        cited_children(by_id, requirement, &issue_chunk_entry?/1)
+      end
+    ]
 
-      "#{decision.id} decision -> #{requirement.id} requirement -> #{issue.id} issue chunk (#{Map.get(issue.meta, :file, "issue.md")})"
-    else
-      _missing -> "decision -> requirement -> issue chunk: unavailable"
+    case find_complete_chain(by_id, roots, stages) do
+      nil ->
+        "decision -> requirement -> issue chunk: unavailable"
+
+      path ->
+        format_provenance_chain([:decision, :requirement, :issue_chunk], path)
     end
+  end
+
+  defp issue_chunk_entry?(%{type: :chunk, author: "ISSUE"}), do: true
+  defp issue_chunk_entry?(_entry), do: false
+
+  defp cited_children(by_id, parent, predicate) when is_function(predicate, 1) do
+    Enum.flat_map(parent.citations, fn id ->
+      case Map.get(by_id, id) do
+        entry when is_map(entry) ->
+          if predicate.(entry), do: [entry], else: []
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp find_complete_chain(by_id, roots, stage_fns) do
+    Enum.find_value(roots, &dfs_provenance_chain(by_id, [&1], stage_fns))
+  end
+
+  defp dfs_provenance_chain(_by_id, path, []) do
+    case List.last(path) do
+      entry when is_map(entry) ->
+        if issue_chunk_entry?(entry), do: path, else: nil
+
+      _ ->
+        nil
+    end
+  end
+
+  defp dfs_provenance_chain(by_id, path, [stage_fn | rest]) do
+    path
+    |> stage_fn.(by_id)
+    |> Enum.find_value(fn candidate ->
+      dfs_provenance_chain(by_id, path ++ [candidate], rest)
+    end)
+  end
+
+  defp format_provenance_chain(labels, path) do
+    labels
+    |> Enum.zip(path)
+    |> Enum.map(fn
+      {:issue_chunk, entry} ->
+        "#{entry.id} issue chunk (#{Map.get(entry.meta, :file, "issue.md")})"
+
+      {label, entry} ->
+        "#{entry.id} #{label}"
+    end)
+    |> Enum.join(" -> ")
   end
 
   defp provenance_chain(entries) do
