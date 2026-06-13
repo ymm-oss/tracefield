@@ -12,7 +12,8 @@ defmodule Tracefield.LLM.CLI do
 
   @impl true
   def complete(messages, opts) do
-    {cmd, base_args} = Keyword.get(opts, :cli, {"claude", ["-p"]})
+    {cmd, base_args} =
+      Keyword.get(opts, :cli, {"cursor-agent", ["-p", "--force", "--trust", "--model", "composer-2.5"]})
     model = Keyword.get(opts, :model)
     prompt = prompt_text(messages)
     args = maybe_append_model(cmd, base_args, model) ++ [prompt]

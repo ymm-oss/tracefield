@@ -1835,7 +1835,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp cli_config(opts) do
     case Keyword.get(opts, :cli_cmd) do
-      nil -> {"claude", ["-p"]}
+      nil -> {"cursor-agent", ["-p", "--force", "--trust", "--model", "composer-2.5"]}
       cmd -> {cmd, []}
     end
   end
