@@ -1362,6 +1362,204 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     refute old_req.id in verdict.citations
   end
 
+  test "REJECT supersedes machine decision without closure propagation" do
+    {:ok, reference} = Reference.start_link()
+    actors = sample_actors()
+
+    [req] =
+      Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+
+    [target] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "reject me", citations: [req.id]}],
+        "ARCH"
+      )
+
+    [citing] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "cites rejected decision", citations: [target.id]}],
+        "ARCH"
+      )
+
+    File.mkdir_p!(System.tmp_dir!())
+
+    pending =
+      Path.join(
+        System.tmp_dir!(),
+        "tracefield-reject-#{System.unique_integer([:positive])}.md"
+      )
+
+    File.write!(pending, """
+    ## RESPONSE（この下に回答を書いてください）
+    REJECT #{target.id}: 設計方針が不適切
+    """)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.apply_reject_lines(reference, pending, "HUMAN", actors)
+      end)
+
+    assert output =~ "判断却下: #{target.id}（設計方針が不適切）"
+    assert Reference.get(reference, target.id).status == :superseded
+    assert Reference.get(reference, citing.id).status == :active
+    refute target.id in Dev.gate_d_decision_ids(reference, actors)
+
+    observation =
+      reference
+      |> Reference.all()
+      |> Enum.find(&(&1.type == :observation and &1.meta[:rejects] == target.id))
+
+    assert observation.author == "HUMAN"
+    assert observation.text == "却下: 設計方針が不適切"
+    assert observation.citations == [target.id]
+  end
+
+  test "REJECT before APPROVE resolves approve_targets to remaining gate_d decisions" do
+    dir = tmp_issue_dir()
+    write_issue_files!(dir)
+    drive_to_design_awaiting!(dir)
+
+    {:ok, reference} =
+      Reference.start_link(
+        persist_path: Path.join(dir, "store.jsonl"),
+        embed_adapter: Tracefield.Embed.Mock
+      )
+
+    actors = Dev.load_actors!(dir)
+    gate_d_ids = Dev.gate_d_decision_ids(reference, actors)
+    assert length(gate_d_ids) >= 2
+
+    [reject_target, keep_target | _] = gate_d_ids
+    pending = Path.join([dir, "pending", "HUMAN-design.md"])
+
+    append_response!(
+      pending,
+      "REJECT #{reject_target}: 不採用\nAPPROVE\n"
+    )
+
+    design_done = Dev.run_dev(issue: dir, adapter: "mock", rounds: 1)
+
+    assert design_done.state["stage"] == "design"
+    assert design_done.state["status"] == "done"
+
+    machine_ids =
+      design_done.entries
+      |> Enum.filter(&(&1.type == :decision and &1.author == "ARCH" and &1.status == :active))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    human_decision =
+      design_done.entries
+      |> Enum.filter(&(&1.type == :decision and &1.author == "HUMAN"))
+      |> Enum.find(fn entry ->
+        Enum.any?(entry.citations, &MapSet.member?(machine_ids, &1))
+      end)
+
+    assert human_decision
+    assert keep_target in human_decision.citations
+    refute reject_target in human_decision.citations
+
+    rejected = Enum.find(design_done.entries, &(&1.id == reject_target))
+    assert rejected.status == :superseded
+  end
+
+  test "invalid REJECT lines are skipped with warnings and do not halt the run" do
+    {:ok, reference} = Reference.start_link()
+    actors = sample_actors()
+
+    [req] =
+      Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+
+    [belief] = Reference.absorb(reference, [%{type: :belief, text: "not a decision"}], "ARCH")
+
+    [superseded] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "old machine decision", citations: [req.id]}],
+        "ARCH"
+      )
+
+    Reference.quarantine(reference, [superseded.id])
+
+    [human_decision] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "human judgment", citations: [req.id]}],
+        "HUMAN"
+      )
+
+    entries_before = Reference.all(reference)
+
+    pending =
+      Path.join(
+        System.tmp_dir!(),
+        "tracefield-reject-invalid-#{System.unique_integer([:positive])}.md"
+      )
+
+    File.write!(pending, """
+    ## RESPONSE（この下に回答を書いてください）
+    REJECT e999: missing
+    REJECT #{belief.id}: wrong type
+    REJECT #{superseded.id}: already superseded
+    REJECT #{human_decision.id}: human author
+    """)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        assert Dev.apply_reject_lines(reference, pending, "HUMAN", actors) == reference
+      end)
+
+    assert output =~ "REJECT 警告: e999"
+    assert output =~ "REJECT 警告: #{belief.id}"
+    assert output =~ "REJECT 警告: #{superseded.id}"
+    assert output =~ "REJECT 警告: #{human_decision.id}"
+    refute output =~ "判断却下:"
+    assert Reference.all(reference) == entries_before
+  end
+
+  test "REJECT in implement supersedes machine decision without closure propagation" do
+    {:ok, reference} = Reference.start_link()
+    actors = sample_actors()
+
+    [req] =
+      Reference.absorb(reference, [%{type: :requirement, text: "approved requirement"}], "HUMAN")
+
+    [target] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "reject during implement", citations: [req.id]}],
+        "ARCH"
+      )
+
+    [citing] =
+      Reference.absorb(
+        reference,
+        [%{type: :decision, text: "cites rejected decision", citations: [target.id]}],
+        "ARCH"
+      )
+
+    dir = tmp_issue_dir()
+    File.mkdir_p!(Path.join(dir, "pending"))
+    pending = Path.join([dir, "pending", "HUMAN-implement.md"])
+
+    File.write!(pending, """
+    ## RESPONSE（この下に回答を書いてください）
+    REJECT #{target.id}: 実装段階で却下
+    """)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Dev.apply_reject_lines(reference, pending, "HUMAN", actors)
+      end)
+
+    assert output =~ "判断却下: #{target.id}（実装段階で却下）"
+    assert Reference.get(reference, target.id).status == :superseded
+    assert Reference.get(reference, citing.id).status == :active
+    refute target.id in Dev.gate_d_decision_ids(reference, actors)
+  end
+
   test "design stage starts after refine, iterates on comments, completes with design.md and 2-hop provenance" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
