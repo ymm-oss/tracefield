@@ -297,6 +297,19 @@ defmodule Tracefield.Agent do
       " Expected entry types this turn: #{Enum.join(types, ", ")}."
     end
 
+    defp situation_preamble(%{aware: true, serve_policy: :contrastive}) do
+      """
+      SITUATION: あなたは、異なる偏りを持つ複数の AI エージェントが共有ストアで協働する
+      「半溶解チーム」の一員である。他のエージェントはそれぞれ、あなたには見えない私的文書を持つ。
+      PRESENTED ENTRIES は彼らがその私的知識から外部化した状態であり、あなたがその情報に触れる唯一の窓である。
+      ただの文脈ではなく、あなたの知らない事実を含む証拠として扱え。あなたの entries も他のエージェントに読まれる。
+      自分の偏り（DOMAIN）を保ったまま、彼らの状態を自分の私的事実と突き合わせて活用せよ。
+      PRESENTED ENTRIES は、この課題に関連する「他メンバーの最も特徴的な寄与」の横断サンプルである。
+      あなたの価値はそれらの補集合にある。エコー（提示内容の言い換え）を書くな。
+      彼らが構造的に見落としている観点を、自分の偏りから提示せよ。
+      """
+    end
+
     defp situation_preamble(%{aware: true}) do
       """
       SITUATION: あなたは、異なる偏りを持つ複数の AI エージェントが共有ストアで協働する
@@ -461,7 +474,11 @@ defmodule Tracefield.Agent do
 
     defp format_territory_contract(nil), do: ""
 
-    defp format_territory_contract(%{self: self, others: others, territory_contract_id: ledger_id}) do
+    defp format_territory_contract(%{
+           self: self,
+           others: others,
+           territory_contract_id: ledger_id
+         }) do
       self_body = format_self_territory(self)
 
       portfolio =
@@ -507,7 +524,9 @@ defmodule Tracefield.Agent do
       end
     end
 
-    defp territory_contract_id(%{territory: %{territory_contract_id: id}}) when is_binary(id), do: id
+    defp territory_contract_id(%{territory: %{territory_contract_id: id}}) when is_binary(id),
+      do: id
+
     defp territory_contract_id(_state), do: nil
 
     defp format_retrieved([]), do: "(none)"

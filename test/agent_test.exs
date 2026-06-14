@@ -46,8 +46,8 @@ defmodule Tracefield.AgentTest do
         end
 
       entries =
-        if ledger_id &&
-             String.contains?(prompt, "TERRITORY CONTRACT:") and
+        if (ledger_id &&
+              String.contains?(prompt, "TERRITORY CONTRACT:")) and
              String.contains?(prompt, "private document: sec.md") and
              String.contains?(prompt, "ARCH domain=architecture desc=architect") and
              String.contains?(prompt, "YOUR TERRITORY:") and
@@ -252,7 +252,9 @@ defmodule Tracefield.AgentTest do
     assert_receive {:agent_messages, messages}
     prompt = Enum.at(messages, 1).content
 
-    assert prompt =~ "PRIVATE DOCUMENT (yours only):\nsmall private doc retention-90d-private-test stays verbatim"
+    assert prompt =~
+             "PRIVATE DOCUMENT (yours only):\nsmall private doc retention-90d-private-test stays verbatim"
+
     refute prompt =~ "SECTION INDEX (full territory map):"
     refute prompt =~ "SECTION CONTENT (patrol slice"
   end
@@ -455,7 +457,10 @@ defmodule Tracefield.AgentTest do
 
   test "human adapter prompt omits territory contract section" do
     {:ok, ref} = Reference.start_link()
-    pending_dir = System.tmp_dir!() |> Path.join("tracefield-human-#{System.unique_integer([:positive])}")
+
+    pending_dir =
+      System.tmp_dir!() |> Path.join("tracefield-human-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(pending_dir)
     on_exit(fn -> File.rm_rf(pending_dir) end)
 
@@ -605,6 +610,46 @@ defmodule Tracefield.AgentTest do
     unaware_system = hd(unaware_messages).content
     refute unaware_system =~ "半溶解チーム"
     refute unaware_system =~ "唯一の窓"
+  end
+
+  test "contrastive aware option adds complement preamble only when awareness is enabled" do
+    Process.register(self(), PromptCaptureMock)
+
+    {:ok, aware_ref} = Reference.start_link()
+
+    aware_agent =
+      Agent.new("SEC", "security", "security reviewer",
+        aware: true,
+        serve_policy: :contrastive,
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(aware_agent, aware_ref, 1)
+    assert_receive {:agent_messages, aware_messages}
+
+    aware_system = hd(aware_messages).content
+    assert aware_system =~ "他メンバーの最も特徴的な寄与"
+    assert aware_system =~ "あなたの価値はそれらの補集合にある"
+    assert aware_system =~ "エコー（提示内容の言い換え）を書くな"
+    assert aware_system =~ "自分の偏りから提示せよ"
+
+    {:ok, unaware_ref} = Reference.start_link()
+
+    unaware_agent =
+      Agent.new("SEC", "security", "security reviewer",
+        aware: false,
+        serve_policy: :contrastive,
+        adapter: PromptCaptureMock,
+        model: "mock"
+      )
+
+    Agent.run_turn(unaware_agent, unaware_ref, 1)
+    assert_receive {:agent_messages, unaware_messages}
+
+    unaware_system = hd(unaware_messages).content
+    refute unaware_system =~ "他メンバーの最も特徴的な寄与"
+    refute unaware_system =~ "あなたの価値はそれらの補集合にある"
   end
 
   test "document prompt stays full when estimated messages fit the context budget" do
