@@ -51,6 +51,10 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     # pass --judge-adapter ollama --judge-model gemma4:26b to keep the judge fast
     # and local (the primary metric disc_strict is judge-free anyway).
     judge_adapter = Keyword.get(opts, :judge_adapter) || adapter
+    # H5: optional synthesizer model (cursor-agent slug, e.g. claude-opus-4-8-medium).
+    # nil = no synthesizer pass.
+    synth_model = Keyword.get(opts, :synth_model)
+    synth_n = Keyword.get(opts, :synth_n, 1)
 
     scenario =
       Keyword.get_lazy(opts, :scenario, fn -> Scenario.load!("scenarios/enterprise-assistant") end)
@@ -93,6 +97,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           judge_adapter: judge_adapter,
           model: model,
           judge_model: judge_model,
+          synth_model: synth_model,
+          synth_n: synth_n,
           embed_model: embed_model,
           temperature: temperature
         )
@@ -131,6 +137,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           model: :string,
           judge_adapter: :string,
           judge_model: :string,
+          synth: :string,
+          synth_n: :integer,
           embed_model: :string,
           temperature: :float
         ],
@@ -153,6 +161,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       model: Keyword.get(opts, :model),
       judge_adapter: maybe_adapter_module(Keyword.get(opts, :judge_adapter)),
       judge_model: Keyword.get(opts, :judge_model),
+      synth_model: Keyword.get(opts, :synth),
+      synth_n: Keyword.get(opts, :synth_n),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
       temperature: Keyword.get(opts, :temperature, 0.4)
     ]
@@ -246,6 +256,11 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         seed: seed
       )
 
+    # H5: Generator-Verifier / synthesizer pass over the SAME deliberation. A
+    # strong model reads all absorbed entries and connects cross-domain facts that
+    # individual agents externalized but never joined into one entry (§12a).
+    disc_synth = synthesize(absorbed, Keyword.get(opts, :synth_model), Keyword.get(opts, :synth_n, 1))
+
     %{
       k: k_s,
       kp: k_p,
@@ -255,6 +270,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       substrate: substrate_name,
       seed: seed,
       disc_strict: disc_strict.count,
+      disc_strict_synth: synth_count(disc_synth),
       disc_judge: disc_judge.count,
       discovery_count: disc_strict.count,
       discovery: disc_strict.per_interaction,
@@ -526,6 +542,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       Mix.shell().info("substrate=#{name}: #{fmt(value)}")
     end)
 
+    print_synth_comparison(result.runs)
+
     Mix.shell().info("trend: diversity vs k is #{result.diversity_trend}")
     Mix.shell().info("saved: #{result.path}")
   end
@@ -668,6 +686,92 @@ defmodule Mix.Tasks.Tracefield.Hetero do
   defp organ_cli({_cmd, _args} = cli), do: cli
   defp organ_cli(_organ), do: nil
 
+  # H5 synthesizer pass (Generator-Verifier / Fusion-style). A strong model reads
+  # the team's externalized entries and connects cross-domain contradictions that
+  # individual agents left unjoined. Scored by the SAME deterministic strict
+  # scorer → disc_strict_synth (within-run A/B vs agents' disc_strict).
+  defp synthesize(_absorbed, nil, _n), do: nil
+
+  defp synthesize(absorbed, synth_model, n) when is_binary(synth_model) do
+    texts =
+      absorbed
+      |> Enum.reject(&(&1.type == :chunk))
+      |> Enum.map(& &1.text)
+      |> Enum.reject(&(&1 == ""))
+
+    cli = {"cursor-agent", ["-p", "--output-format", "text", "--model", synth_model]}
+    prompt = synth_prompt(texts)
+
+    # H5b best-of-N (Fusion-style ensemble): N independent synth samples, pooled.
+    # strict_score over the union = "did ANY sample connect each interaction",
+    # which averages out the single-call coin-flip variance H5 exposed.
+    entries =
+      1..max(n, 1)
+      |> Enum.flat_map(fn _i ->
+        case Tracefield.LLM.complete([%{role: "user", content: prompt}],
+               adapter: Tracefield.LLM.CLI,
+               cli: cli,
+               timeout: 300_000
+             ) do
+          {:ok, content} -> parse_synth_entries(content)
+          {:error, _reason} -> []
+        end
+      end)
+
+    Discovery.strict_score(entries)
+  end
+
+  defp synth_count(nil), do: nil
+  defp synth_count(%{count: count}), do: count
+
+  defp synth_prompt(texts) do
+    """
+    あなたは半溶解チームの統合器(synthesizer)である。以下はチーム各員が共有ストアに
+    外部化した懸念・事実のリストである。領域をまたぐ矛盾・相互作用 ── 異なる事実が
+    衝突する、または両方を同時に見て初めて問題になる組 ── をすべて見つけよ。
+    各矛盾について、元テキストにある【かっこ内のキーワードタグ】を両方とも逐語的に
+    含めて、1つの belief として明記せよ。
+    Return only JSON {"entries":[{"type":"belief","text":"..."}]}.
+
+    EXTERNALIZED CONCERNS:
+    #{texts |> Enum.with_index(1) |> Enum.map_join("\n", fn {t, i} -> "#{i}. #{t}" end)}
+    """
+    |> String.trim()
+  end
+
+  defp parse_synth_entries(content) when is_binary(content) do
+    case decode_object(content) do
+      {:ok, %{} = decoded} ->
+        decoded
+        |> Map.get("entries", [])
+        |> List.wrap()
+        |> Enum.filter(&is_map/1)
+        |> Enum.map(fn e -> %{text: to_string(Map.get(e, "text", ""))} end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp parse_synth_entries(_content), do: []
+
+  defp decode_object(content) do
+    case Jason.decode(content) do
+      {:ok, obj} ->
+        {:ok, obj}
+
+      {:error, _} ->
+        with {s, _} <- :binary.match(content, "{"),
+             {r, _} <- content |> String.reverse() |> :binary.match("}"),
+             e = byte_size(content) - r - 1,
+             true <- e >= s do
+          Jason.decode(binary_part(content, s, e - s + 1))
+        else
+          _ -> {:error, :no_json}
+        end
+    end
+  end
+
   defp parse_models(value) do
     value
     |> String.split(",", trim: true)
@@ -678,6 +782,32 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       end
     end)
   end
+
+  defp print_synth_comparison(runs) do
+    synth_runs = Enum.filter(runs, &(Map.get(&1, :disc_strict_synth) != nil))
+
+    if synth_runs != [] do
+      Mix.shell().info("")
+      Mix.shell().info("H5 synthesizer A/B (disc_strict: agents vs +synth)")
+
+      Enum.each(synth_runs, fn r ->
+        Mix.shell().info(
+          "  #{Map.get(r, :substrate)} seed=#{r.seed}: agents=#{r.disc_strict} synth=#{r.disc_strict_synth}"
+        )
+      end)
+
+      synth_runs
+      |> Enum.group_by(&Map.get(&1, :substrate))
+      |> Enum.each(fn {sub, rows} ->
+        a = mean_int(Enum.map(rows, & &1.disc_strict))
+        s = mean_int(Enum.map(rows, & &1.disc_strict_synth))
+        Mix.shell().info("  [#{sub}] mean agents=#{fmt(a)} synth=#{fmt(s)} Δ=#{fmt(s - a)}")
+      end)
+    end
+  end
+
+  defp mean_int([]), do: 0.0
+  defp mean_int(values), do: Enum.sum(values) / length(values)
 
   defp mean_sd(summary), do: "#{fmt(summary.mean)}±#{fmt(summary.sd)}"
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)
