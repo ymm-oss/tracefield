@@ -185,7 +185,7 @@ defmodule Tracefield.IdeateTest do
         rounds: 1,
         k_s: 7,
         temperature: 0.2,
-        serve_policy: :similar,
+        serve_policy: "contrastive",
         aware: 0,
         model: "mock",
         memory: false,
@@ -196,7 +196,7 @@ defmodule Tracefield.IdeateTest do
     assert overridden.config.rounds == 1
     assert overridden.config.k == 7
     assert overridden.config.temperature == 0.2
-    assert overridden.config.serve == :similar
+    assert overridden.config.serve == :contrastive
     assert overridden.config.aware == 0
   end
 

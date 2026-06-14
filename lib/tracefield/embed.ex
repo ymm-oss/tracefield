@@ -41,4 +41,28 @@ defmodule Tracefield.Embed do
       |> max(-1.0)
     end
   end
+
+  @spec centroid([[number()]]) :: [float()]
+  def centroid([]), do: []
+
+  def centroid(vectors) when is_list(vectors) do
+    dims = vectors |> hd() |> length()
+
+    vectors
+    |> Enum.reduce(List.duplicate(0.0, dims), fn vector, acc ->
+      Enum.zip_with(acc, vector, &(&1 + &2))
+    end)
+    |> Enum.map(&(&1 / length(vectors)))
+    |> normalize_vector()
+  end
+
+  defp normalize_vector(vector) do
+    norm =
+      vector
+      |> Enum.map(&(&1 * &1))
+      |> Enum.sum()
+      |> :math.sqrt()
+
+    if norm == 0.0, do: vector, else: Enum.map(vector, &(&1 / norm))
+  end
 end

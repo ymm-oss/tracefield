@@ -1219,7 +1219,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
 
   defp normalize_serve(:similar), do: :similar
   defp normalize_serve(:diverse), do: :diverse
+  defp normalize_serve(:contrastive), do: :contrastive
   defp normalize_serve("similar"), do: :similar
   defp normalize_serve("diverse"), do: :diverse
+  defp normalize_serve("contrastive"), do: :contrastive
   defp normalize_serve(other), do: Mix.raise("invalid serve value #{inspect(other)}")
 end
