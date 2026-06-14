@@ -514,7 +514,7 @@ defmodule Tracefield.AgentTest do
 
   @baseline_system_prompt_without_aware """
                                         TRACEFIELD_AGENT_TURN
-                                        Return only JSON {"entries":[{"type":"belief","text":"...","citations":["e1"]}]}. At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly.
+                                        Return only JSON {"entries":[{"type":"belief","text":"...","citations":[{"id":"e1","stance":"relies_on"}]}]}. At most 2 entries. Citations must use presented ids only. Each citation is an object {"id","stance"}; stance is relies_on (your claim depends on that entry being true), refutes (you argue against it), or context (mere reference). If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly.
                                         """
                                         |> String.trim()
 
