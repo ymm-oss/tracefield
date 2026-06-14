@@ -251,6 +251,69 @@ defmodule Tracefield.ReferenceTest do
     assert judgments[{claim.id, procedure.id}]
   end
 
+  test "H4: citations store flat ids while non-default stances ride in meta and round-trip" do
+    path = tmp_store_path()
+    {:ok, ref} = Reference.start_link(persist_path: path)
+    [a] = Reference.absorb(ref, [%{text: "source a"}], "A")
+    [b] = Reference.absorb(ref, [%{text: "source b"}], "B")
+
+    [claim] =
+      Reference.absorb(
+        ref,
+        [
+          %{
+            text: "claim",
+            citations: [%{id: a.id, stance: "relies_on"}, %{id: b.id, stance: "refutes"}]
+          }
+        ],
+        "C"
+      )
+
+    # stored citations stay a flat id list (every existing consumer is unaffected)
+    assert claim.citations == [a.id, b.id]
+    # only the non-default stance is recorded; relies_on is the implicit default
+    assert claim.meta[:citation_stances] == %{b.id => "refutes"}
+
+    GenServer.stop(ref)
+    {:ok, restored} = Reference.start_link(persist_path: path)
+    reloaded = Enum.find(Reference.all(restored), &(&1.id == claim.id))
+    assert reloaded.citations == [a.id, b.id]
+    assert reloaded.meta[:citation_stances] == %{b.id => "refutes"}
+  end
+
+  test "H4: bare-string citations normalize to relies_on with no citation_stances meta" do
+    {:ok, ref} = Reference.start_link()
+    [a] = Reference.absorb(ref, [%{text: "source"}], "A")
+    [claim] = Reference.absorb(ref, [%{text: "claim", citations: [a.id]}], "B")
+
+    assert claim.citations == [a.id]
+    refute Map.has_key?(claim.meta, :citation_stances)
+  end
+
+  test "H4: verify grounds stance-bearing citations by id (stance-independent)" do
+    {:ok, ref} = Reference.start_link()
+    [support] = Reference.absorb(ref, [%{text: "solar comfort finance support"}], "A")
+    [unrelated] = Reference.absorb(ref, [%{text: "zzzz yyyy xxxx"}], "B")
+
+    [claim] =
+      Reference.absorb(
+        ref,
+        [
+          %{
+            text: "solar comfort plan reduces budget risk",
+            citations: [%{id: support.id, stance: "relies_on"}, %{id: unrelated.id, stance: "refutes"}]
+          }
+        ],
+        "C"
+      )
+
+    assert claim.citations == [support.id, unrelated.id]
+
+    judgments = Reference.verify(ref, [claim], judge_adapter: Tracefield.LLM.Mock)
+    assert judgments[{claim.id, support.id}]
+    refute judgments[{claim.id, unrelated.id}]
+  end
+
   test "quarantine supersedes active ids and most_cited chooses active non-procedure by count" do
     {:ok, ref} = Reference.start_link()
 

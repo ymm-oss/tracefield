@@ -432,13 +432,22 @@ defmodule Tracefield.Reference do
   end
 
   defp normalize_entry(entry, author) do
+    raw_citations = entry_value(entry, :citations, [])
+    stances = extract_citation_stances(raw_citations)
+    meta = normalize_meta(entry_value(entry, :meta, %{}))
+
+    meta =
+      if map_size(stances) > 0,
+        do: Map.put(meta, :citation_stances, stances),
+        else: meta
+
     %{
       type: normalize_type(entry_value(entry, :type, :belief)),
       author: to_string(entry_author(entry) || author),
       status: normalize_status(entry_value(entry, :status, :active)),
       text: entry_value(entry, :text, "") |> to_string(),
-      citations: normalize_citations(entry_value(entry, :citations, [])),
-      meta: normalize_meta(entry_value(entry, :meta, %{}))
+      citations: normalize_citations(raw_citations),
+      meta: meta
     }
   end
 
@@ -597,11 +606,54 @@ defmodule Tracefield.Reference do
   defp normalize_citations(citations) do
     citations
     |> List.wrap()
-    |> Enum.filter(&(is_binary(&1) or is_atom(&1) or is_integer(&1)))
-    |> Enum.map(&to_string/1)
-    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&citation_id/1)
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
     |> Enum.uniq()
   end
+
+  # A citation may be a bare id (string/atom/int), a {id, stance} tuple, or a
+  # %{id, stance} map (string- or atom-keyed). The STORED citation is always the
+  # bare id string; stance is kept separately (meta.citation_stances). This keeps
+  # entry.citations a flat id list for all existing consumers.
+  defp citation_id(c) when is_binary(c), do: c
+  defp citation_id(c) when is_atom(c) or is_integer(c), do: to_string(c)
+  defp citation_id({id, _stance}), do: citation_id(id)
+
+  defp citation_id(%{} = c) do
+    case Map.get(c, :id, Map.get(c, "id")) do
+      nil -> nil
+      id -> citation_id(id)
+    end
+  end
+
+  defp citation_id(_), do: nil
+
+  # Builds %{id => stance} for citations carrying a NON-default stance
+  # ("refutes"/"context"). Bare-id and relies_on citations contribute nothing —
+  # the reader defaults any absent id to relies_on — so meta stays unchanged for
+  # all existing flat-citation entries (backward compatible).
+  defp extract_citation_stances(citations) do
+    citations
+    |> List.wrap()
+    |> Enum.reduce(%{}, fn c, acc ->
+      id = citation_id(c)
+      stance = citation_stance(c)
+
+      if is_binary(id) and id != "" and stance in ["refutes", "context"] do
+        Map.put(acc, id, stance)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp citation_stance({_id, stance}), do: normalize_stance(stance)
+  defp citation_stance(%{} = c), do: normalize_stance(Map.get(c, :stance, Map.get(c, "stance")))
+  defp citation_stance(_), do: "relies_on"
+
+  defp normalize_stance(s) when s in ["relies_on", "refutes", "context"], do: s
+  defp normalize_stance(s) when is_atom(s) and not is_nil(s), do: normalize_stance(to_string(s))
+  defp normalize_stance(_), do: "relies_on"
 
   defp normalize_meta(meta) when is_map(meta) do
     Map.new(meta, fn {key, value} ->
