@@ -74,6 +74,7 @@ EGI の**下り**機構。創発層の生の痕跡（trace bundle）を、PCE ga
 
 ### Frame Revision Trigger（フレーム改訂トリガ）
 EGI の**上り**機構。既存 frame（枠組み）では表現できない発見を governance layer へ突き上げる経路。これが出す提案が **Frame Revision Proposal**。形式的でなく実質的であること、および創発層が frame revision authority を勝手に行使しないことが評価される。
+- ⚠ **別概念との区別**: 開発パイプラインの「動的フレームギャップ検出」（無人論点・未回答の老化・動員率、`tracefield.dev`）とは別物。Frame Revision は**組織 frame（クラスタ編成/charter）の改訂**で、**C7 ablation では trace recall 不変（null）**（[`experiment-results.md`](./experiment-results.md) §1-2）。区別の詳細は [`frame-problem.md`](./frame-problem.md) §1。
 
 ### PCE gate
 candidate delta が **durable state / final recommendation / external execution candidate** に入る前に通過する評価ゲート。汚染影響の混入を防ぐ封じ込め点。
