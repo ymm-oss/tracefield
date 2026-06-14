@@ -30,6 +30,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     kps = Keyword.get(opts, :kps, [0])
     serves = Keyword.get(opts, :serves, [Keyword.get(opts, :serve, :similar)])
     awares = Keyword.get(opts, :awares, [Keyword.get(opts, :aware, 0)])
+    heteros = Keyword.get(opts, :heteros, [:grounded])
     temperature = Keyword.get(opts, :temperature, 0.4)
 
     model =
@@ -45,21 +46,35 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     scenario =
       Keyword.get_lazy(opts, :scenario, fn -> Scenario.load!("scenarios/enterprise-assistant") end)
 
-    private_docs =
+    grounded_docs =
       Keyword.get_lazy(opts, :private_docs, fn ->
         load_private_docs("scenarios/enterprise-assistant/private")
       end)
 
+    combined_docs = grounded_docs |> Map.values() |> Enum.join("\n\n")
+    homogeneous_docs = Map.new(Map.keys(grounded_docs), fn id -> {id, combined_docs} end)
+
+    docs_for = fn
+      :grounded -> grounded_docs
+      :homogeneous -> homogeneous_docs
+    end
+
     runs =
-      for k <- ks, kp <- kps, serve <- serves, aware <- awares, index <- 0..(seeds - 1) do
+      for k <- ks,
+          kp <- kps,
+          serve <- serves,
+          aware <- awares,
+          hetero <- heteros,
+          index <- 0..(seeds - 1) do
         seed = 2_000 + index
 
         run_one(scenario,
-          private_docs: private_docs,
+          private_docs: docs_for.(hetero),
           k_s: k,
           k_p: kp,
           serve: serve,
           aware: aware,
+          hetero: hetero,
           seed: seed,
           rounds: rounds,
           adapter: adapter,
@@ -77,7 +92,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       runs: runs,
       summary: summary,
       disc_strict_kp_trend: kp_trend(summary, ks, kps, :disc_strict),
-      disc_strict_serve_trend: serve_trend(summary, ks, kps, serves, awares, :disc_strict),
+      disc_strict_serve_trend:
+        serve_trend(summary, ks, kps, serves, awares, heteros, :disc_strict),
       disc_strict_aware_trend: aware_trend(summary, ks, kps, serves, awares, :disc_strict),
       diversity_trend: monotonic_trend(summary, ks, :diversity),
       path: path
@@ -95,6 +111,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           kp: :string,
           serve: :string,
           aware: :string,
+          hetero: :string,
           model: :string,
           judge_model: :string,
           embed_model: :string,
@@ -114,6 +131,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       kps: parse_kps(Keyword.get(opts, :kp, "0")),
       serves: parse_serves(Keyword.get(opts, :serve, "similar")),
       awares: parse_awares(Keyword.get(opts, :aware, "0")),
+      heteros: parse_heteros(Keyword.get(opts, :hetero, "grounded")),
       model: Keyword.get(opts, :model),
       judge_model: Keyword.get(opts, :judge_model),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
@@ -127,6 +145,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     k_p = Keyword.fetch!(opts, :k_p)
     serve = Keyword.fetch!(opts, :serve)
     aware = Keyword.fetch!(opts, :aware)
+    hetero = Keyword.fetch!(opts, :hetero)
     seed = Keyword.fetch!(opts, :seed)
     rounds = Keyword.fetch!(opts, :rounds)
     adapter = Keyword.fetch!(opts, :adapter)
@@ -206,6 +225,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       kp: k_p,
       serve: serve,
       aware: aware,
+      hetero: hetero,
       seed: seed,
       disc_strict: disc_strict.count,
       disc_judge: disc_judge.count,
@@ -261,13 +281,14 @@ defmodule Mix.Tasks.Tracefield.Hetero do
 
   defp summary_by_cell(runs) do
     runs
-    |> Enum.group_by(&{&1.k, &1.kp, &1.serve, &1.aware})
-    |> Enum.map(fn {{k, kp, serve, aware}, rows} ->
+    |> Enum.group_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero})
+    |> Enum.map(fn {{k, kp, serve, aware, hetero}, rows} ->
       %{
         k: k,
         kp: kp,
         serve: serve,
         aware: aware,
+        hetero: hetero,
         disc_strict: Metrics.summary(Enum.map(rows, &(&1.disc_strict * 1.0))),
         disc_judge: Metrics.summary(Enum.map(rows, &(&1.disc_judge * 1.0))),
         icc: Metrics.summary(Enum.map(rows, &(&1.icc * 1.0))),
@@ -276,7 +297,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         collapse_rate: Metrics.summary(Enum.map(rows, & &1.collapse_rate))
       }
     end)
-    |> Enum.sort_by(&{&1.k, &1.kp, &1.serve, &1.aware})
+    |> Enum.sort_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero})
   end
 
   defp monotonic_trend(summary, ks, metric) do
@@ -320,16 +341,19 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     end)
   end
 
-  defp serve_trend(summary, ks, kps, serves, awares, metric) do
-    for k <- ks, kp <- kps, aware <- awares, into: %{} do
+  defp serve_trend(summary, ks, kps, serves, awares, heteros, metric) do
+    for k <- ks, kp <- kps, aware <- awares, hetero <- heteros, into: %{} do
       values =
         Enum.map(serves, fn serve ->
           summary
-          |> Enum.find(&(&1.k == k and &1.kp == kp and &1.serve == serve and &1.aware == aware))
+          |> Enum.find(
+            &(&1.k == k and &1.kp == kp and &1.serve == serve and &1.aware == aware and
+                &1.hetero == hetero)
+          )
           |> summary_mean(metric)
         end)
 
-      {{k, kp, aware}, %{serves: serves, values: values, trend: trend(values)}}
+      {{k, kp, aware, hetero}, %{serves: serves, values: values, trend: trend(values)}}
     end
   end
 
@@ -389,24 +413,27 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     Mix.shell().info("runs:")
 
     Mix.shell().info(
-      "k kp serve aware seed disc_strict disc_judge icc coverage diversity collapse"
+      "k kp serve aware hetero seed disc_strict disc_judge icc coverage diversity collapse"
     )
 
     Enum.each(result.runs, fn row ->
       Mix.shell().info(
-        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.seed} #{row.disc_strict} #{row.disc_judge} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
+        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{row.seed} #{row.disc_strict} #{row.disc_judge} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
       )
     end)
 
     Mix.shell().info("")
     Mix.shell().info("aggregate mean±sd:")
-    Mix.shell().info("k kp serve aware disc_strict disc_judge icc coverage diversity collapse")
+
+    Mix.shell().info(
+      "k kp serve aware hetero disc_strict disc_judge icc coverage diversity collapse"
+    )
 
     result.summary
-    |> Enum.sort_by(&{&1.k, &1.kp, &1.serve, &1.aware})
+    |> Enum.sort_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero})
     |> Enum.each(fn row ->
       Mix.shell().info(
-        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{mean_sd(row.disc_strict)} #{mean_sd(row.disc_judge)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
+        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{mean_sd(row.disc_strict)} #{mean_sd(row.disc_judge)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
       )
     end)
 
@@ -426,13 +453,13 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     Mix.shell().info("trend: disc_strict across serve")
 
     result.disc_strict_serve_trend
-    |> Enum.sort_by(fn {{k, kp, aware}, _row} -> {k, kp, aware} end)
-    |> Enum.each(fn {{k, kp, aware}, row} ->
+    |> Enum.sort_by(fn {{k, kp, aware, hetero}, _row} -> {k, kp, aware, hetero} end)
+    |> Enum.each(fn {{k, kp, aware, hetero}, row} ->
       pairs =
         Enum.zip(row.serves, row.values)
         |> Enum.map_join(" ", fn {serve, value} -> "serve=#{serve}:#{fmt(value)}" end)
 
-      Mix.shell().info("k=#{k} kp=#{kp} aware=#{aware} #{pairs} #{row.trend}")
+      Mix.shell().info("k=#{k} kp=#{kp} aware=#{aware} hetero=#{hetero} #{pairs} #{row.trend}")
     end)
 
     Mix.shell().info("trend: disc_strict across aware")
@@ -501,6 +528,18 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         "diverse" -> :diverse
         "contrastive" -> :contrastive
         other -> Mix.raise("invalid serve value #{inspect(other)}")
+      end
+    end)
+  end
+
+  def parse_heteros(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.map(fn item ->
+      case String.trim(item) do
+        "grounded" -> :grounded
+        "homogeneous" -> :homogeneous
+        other -> Mix.raise("invalid hetero value #{inspect(other)}")
       end
     end)
   end
