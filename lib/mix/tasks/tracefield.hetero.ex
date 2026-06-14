@@ -43,6 +43,15 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     judge_model = Keyword.get(opts, :judge_model, model)
     embed_model = Keyword.get(opts, :embed_model, "nomic-embed-text")
 
+    # H1: substrate arms. Each arm = {name, model_map}; model_map overrides the
+    # global model per agent id (empty map = all agents on the global model).
+    # Default = single pass-through arm named after the global model (backward compatible).
+    substrates = Keyword.get(opts, :substrates) || [{model, %{}}]
+    # Judge defaults to the agent adapter (backward compatible). For CLI runs,
+    # pass --judge-adapter ollama --judge-model gemma4:26b to keep the judge fast
+    # and local (the primary metric disc_strict is judge-free anyway).
+    judge_adapter = Keyword.get(opts, :judge_adapter) || adapter
+
     scenario =
       Keyword.get_lazy(opts, :scenario, fn -> Scenario.load!("scenarios/enterprise-assistant") end)
 
@@ -65,6 +74,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           serve <- serves,
           aware <- awares,
           hetero <- heteros,
+          {substrate_name, substrate_models} <- substrates,
           index <- 0..(seeds - 1) do
         seed = 2_000 + index
 
@@ -75,9 +85,12 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           serve: serve,
           aware: aware,
           hetero: hetero,
+          substrate_name: substrate_name,
+          substrate_models: substrate_models,
           seed: seed,
           rounds: rounds,
           adapter: adapter,
+          judge_adapter: judge_adapter,
           model: model,
           judge_model: judge_model,
           embed_model: embed_model,
@@ -95,6 +108,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       disc_strict_serve_trend:
         serve_trend(summary, ks, kps, serves, awares, heteros, :disc_strict),
       disc_strict_aware_trend: aware_trend(summary, ks, kps, serves, awares, :disc_strict),
+      disc_strict_substrate_trend: substrate_trend(summary, substrates, :disc_strict),
       diversity_trend: monotonic_trend(summary, ks, :diversity),
       path: path
     }
@@ -112,7 +126,10 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           serve: :string,
           aware: :string,
           hetero: :string,
+          substrate: :string,
+          models: :string,
           model: :string,
+          judge_adapter: :string,
           judge_model: :string,
           embed_model: :string,
           temperature: :float
@@ -132,7 +149,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       serves: parse_serves(Keyword.get(opts, :serve, "similar")),
       awares: parse_awares(Keyword.get(opts, :aware, "0")),
       heteros: parse_heteros(Keyword.get(opts, :hetero, "grounded")),
+      substrates: build_substrates(Keyword.get(opts, :substrate), Keyword.get(opts, :models)),
       model: Keyword.get(opts, :model),
+      judge_adapter: maybe_adapter_module(Keyword.get(opts, :judge_adapter)),
       judge_model: Keyword.get(opts, :judge_model),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
       temperature: Keyword.get(opts, :temperature, 0.4)
@@ -152,6 +171,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     model = Keyword.fetch!(opts, :model)
     temperature = Keyword.fetch!(opts, :temperature)
     private_docs = Keyword.fetch!(opts, :private_docs)
+    substrate_models = Keyword.get(opts, :substrate_models, %{})
+    substrate_name = Keyword.get(opts, :substrate_name, model)
+    judge_adapter = Keyword.get(opts, :judge_adapter, adapter)
 
     {:ok, reference} =
       Tracefield.Reference.start_link(
@@ -177,12 +199,15 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       Dissolution.default_agents()
       |> Enum.with_index()
       |> Enum.map(fn {agent, index} ->
+        organ = Map.get(substrate_models, agent.id)
+
         Tracefield.Agent.new(agent.id, agent.domain, agent.desc,
           anchor: scenario.task,
           private_doc: Map.fetch!(private_docs, agent.id),
           k_s: k_s,
           adapter: adapter,
-          model: model,
+          model: organ_model(organ, model),
+          cli: organ_cli(organ),
           temperature: temperature,
           seed: seed + index,
           procedure_id: procedure_id,
@@ -202,6 +227,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     measure =
       Dissolution.measure_concerns(concerns_by_agent,
         adapter: adapter,
+        judge_adapter: judge_adapter,
         model: model,
         judge_model: Keyword.fetch!(opts, :judge_model),
         embed_model: Keyword.fetch!(opts, :embed_model),
@@ -214,7 +240,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
 
     disc_judge =
       Discovery.score(absorbed,
-        judge_adapter: adapter,
+        judge_adapter: judge_adapter,
         judge_model: Keyword.fetch!(opts, :judge_model),
         temperature: temperature,
         seed: seed
@@ -226,6 +252,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       serve: serve,
       aware: aware,
       hetero: hetero,
+      substrate: substrate_name,
       seed: seed,
       disc_strict: disc_strict.count,
       disc_judge: disc_judge.count,
@@ -281,14 +308,15 @@ defmodule Mix.Tasks.Tracefield.Hetero do
 
   defp summary_by_cell(runs) do
     runs
-    |> Enum.group_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero})
-    |> Enum.map(fn {{k, kp, serve, aware, hetero}, rows} ->
+    |> Enum.group_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero, Map.get(&1, :substrate)})
+    |> Enum.map(fn {{k, kp, serve, aware, hetero, substrate}, rows} ->
       %{
         k: k,
         kp: kp,
         serve: serve,
         aware: aware,
         hetero: hetero,
+        substrate: substrate,
         disc_strict: Metrics.summary(Enum.map(rows, &(&1.disc_strict * 1.0))),
         disc_judge: Metrics.summary(Enum.map(rows, &(&1.disc_judge * 1.0))),
         icc: Metrics.summary(Enum.map(rows, &(&1.icc * 1.0))),
@@ -297,7 +325,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         collapse_rate: Metrics.summary(Enum.map(rows, & &1.collapse_rate))
       }
     end)
-    |> Enum.sort_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero})
+    |> Enum.sort_by(&{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero), to_string(&1.substrate)})
   end
 
   defp monotonic_trend(summary, ks, metric) do
@@ -370,6 +398,21 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     end
   end
 
+  # H1 headline: mean metric per substrate arm (pooled over all other cells).
+  defp substrate_trend(summary, substrates, metric) do
+    Map.new(substrates, fn {name, _models} ->
+      rows = Enum.filter(summary, &(&1.substrate == name))
+
+      mean =
+        case rows do
+          [] -> 0.0
+          _ -> Enum.sum(Enum.map(rows, &(get_in(&1, [metric, :mean]) || 0.0))) / length(rows)
+        end
+
+      {name, mean}
+    end)
+  end
+
   defp summary_mean(nil, _metric), do: 0.0
   defp summary_mean(row, metric), do: get_in(row, [metric, :mean]) || 0.0
 
@@ -413,12 +456,12 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     Mix.shell().info("runs:")
 
     Mix.shell().info(
-      "k kp serve aware hetero seed disc_strict disc_judge icc coverage diversity collapse"
+      "k kp serve aware hetero substrate seed disc_strict disc_judge icc coverage diversity collapse"
     )
 
     Enum.each(result.runs, fn row ->
       Mix.shell().info(
-        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{row.seed} #{row.disc_strict} #{row.disc_judge} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
+        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{Map.get(row, :substrate)} #{row.seed} #{row.disc_strict} #{row.disc_judge} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
       )
     end)
 
@@ -426,14 +469,14 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     Mix.shell().info("aggregate mean±sd:")
 
     Mix.shell().info(
-      "k kp serve aware hetero disc_strict disc_judge icc coverage diversity collapse"
+      "k kp serve aware hetero substrate disc_strict disc_judge icc coverage diversity collapse"
     )
 
     result.summary
-    |> Enum.sort_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero})
+    |> Enum.sort_by(&{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero), to_string(Map.get(&1, :substrate))})
     |> Enum.each(fn row ->
       Mix.shell().info(
-        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{mean_sd(row.disc_strict)} #{mean_sd(row.disc_judge)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
+        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{Map.get(row, :substrate)} #{mean_sd(row.disc_strict)} #{mean_sd(row.disc_judge)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
       )
     end)
 
@@ -474,6 +517,15 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       Mix.shell().info("k=#{k} kp=#{kp} serve=#{serve} #{pairs} #{row.trend}")
     end)
 
+    Mix.shell().info("")
+    Mix.shell().info("H1 trend: disc_strict by substrate (mean over cells)")
+
+    result.disc_strict_substrate_trend
+    |> Enum.sort_by(fn {name, _value} -> to_string(name) end)
+    |> Enum.each(fn {name, value} ->
+      Mix.shell().info("substrate=#{name}: #{fmt(value)}")
+    end)
+
     Mix.shell().info("trend: diversity vs k is #{result.diversity_trend}")
     Mix.shell().info("saved: #{result.path}")
   end
@@ -495,7 +547,12 @@ defmodule Mix.Tasks.Tracefield.Hetero do
 
   defp adapter_module("mock"), do: Tracefield.LLM.Mock
   defp adapter_module("ollama"), do: Tracefield.LLM.Ollama
+  defp adapter_module("openrouter"), do: Tracefield.LLM.OpenRouter
+  defp adapter_module("cli"), do: Tracefield.LLM.CLI
   defp adapter_module(other), do: Mix.raise("unknown adapter #{inspect(other)}")
+
+  defp maybe_adapter_module(nil), do: nil
+  defp maybe_adapter_module(name), do: adapter_module(name)
 
   defp parse_ks(value) do
     value
@@ -551,6 +608,73 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       case Integer.parse(String.trim(item)) do
         {aware, ""} when aware in [0, 1] -> aware
         _ -> Mix.raise("invalid aware value #{inspect(item)}")
+      end
+    end)
+  end
+
+  # H1 substrate arms. Returns [{name, model_map}] or nil (let run_experiment default).
+  # --substrate takes precedence over --models. Presets target the default SEC/BIZ/UX agents.
+  defp build_substrates(nil, nil), do: nil
+
+  defp build_substrates(nil, models) when is_binary(models) do
+    [{"custom", parse_models(models)}]
+  end
+
+  defp build_substrates(substrate, _models) when is_binary(substrate) do
+    substrate
+    |> String.split(",", trim: true)
+    |> Enum.map(&substrate_preset(String.trim(&1)))
+  end
+
+  defp substrate_preset("homo12b"),
+    do: {"homo12b", %{"SEC" => "gemma4:12b", "BIZ" => "gemma4:12b", "UX" => "gemma4:12b"}}
+
+  defp substrate_preset("homo26b"),
+    do: {"homo26b", %{"SEC" => "gemma4:26b", "BIZ" => "gemma4:26b", "UX" => "gemma4:26b"}}
+
+  defp substrate_preset("hetero"),
+    do: {"hetero", %{"SEC" => "gemma4:12b", "BIZ" => "gemma4:26b", "UX" => "gemma4:12b"}}
+
+  # Cross-family organs via ONE uniform CLI: cursor-agent with different --model.
+  # Composer (Cursor) / Opus (Anthropic) / GPT (OpenAI) are genuinely different
+  # families, yet share one clean output path (-p --output-format text) and one
+  # safe profile (NO --force/--trust ⇒ reasoning only, never runs repo commands).
+  # No API key / no per-token cost — uses the Cursor subscription. Use --adapter cli.
+  defp substrate_preset("cur-composer"), do: {"cur-composer", all_cli(cursor_cli("composer-2.5"))}
+  defp substrate_preset("cur-opus"), do: {"cur-opus", all_cli(cursor_cli("claude-opus-4-8-medium"))}
+  defp substrate_preset("cur-gpt"), do: {"cur-gpt", all_cli(cursor_cli("gpt-5.5-medium"))}
+
+  defp substrate_preset("cur-hetero"),
+    do:
+      {"cur-hetero",
+       %{
+         "SEC" => cursor_cli("claude-opus-4-8-medium"),
+         "BIZ" => cursor_cli("gpt-5.5-medium"),
+         "UX" => cursor_cli("composer-2.5")
+       }}
+
+  defp substrate_preset(other), do: Mix.raise("invalid substrate value #{inspect(other)}")
+
+  defp all_cli(cli), do: %{"SEC" => cli, "BIZ" => cli, "UX" => cli}
+  defp cursor_cli(model), do: {"cursor-agent", ["-p", "--output-format", "text", "--model", model]}
+
+  # A substrate organ is either a model id (string → routed via the global
+  # adapter) or a {cmd, args} CLI tuple (→ Tracefield.LLM.CLI). nil = use the
+  # global model fallback.
+  defp organ_model({_cmd, _args}, fallback), do: fallback
+  defp organ_model(model, _fallback) when is_binary(model), do: model
+  defp organ_model(_organ, fallback), do: fallback
+
+  defp organ_cli({_cmd, _args} = cli), do: cli
+  defp organ_cli(_organ), do: nil
+
+  defp parse_models(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Map.new(fn pair ->
+      case String.split(String.trim(pair), "=", parts: 2) do
+        [id, model] when model != "" -> {String.trim(id), String.trim(model)}
+        _ -> Mix.raise("invalid models pair #{inspect(pair)} (expected ID=model)")
       end
     end)
   end
