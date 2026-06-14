@@ -32,6 +32,7 @@ defmodule Tracefield.Reference do
     :policy
   ]
   @statuses [:active, :retracted, :superseded]
+  @contrastive_lambda 1.0
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -840,6 +841,35 @@ defmodule Tracefield.Reference do
     |> Enum.sort_by(fn [entry | _rest] -> -entry_number(entry.id) end)
     |> round_robin()
     |> Enum.take(k)
+  end
+
+  defp serve_entries(entries, query_text, k, exclude_types, :contrastive, state) do
+    pool = filter_types(entries, :exclude_types, [:procedure | List.wrap(exclude_types)])
+
+    if k == 0 or pool == [] do
+      []
+    else
+      query_embedding = embed_one(query_text, state)
+      team_centroid = pool |> Enum.map(& &1.embedding) |> Tracefield.Embed.centroid()
+
+      pool
+      |> Enum.map(fn entry ->
+        score =
+          Tracefield.Embed.cosine(query_embedding, entry.embedding) -
+            @contrastive_lambda * Tracefield.Embed.cosine(team_centroid, entry.embedding)
+
+        {entry, score}
+      end)
+      |> Enum.group_by(fn {entry, _score} -> entry.author end)
+      |> Map.values()
+      |> Enum.map(fn scored_entries ->
+        Enum.sort_by(scored_entries, fn {entry, score} -> {-score, entry_number(entry.id)} end)
+      end)
+      |> Enum.sort_by(fn [{_entry, score} | _rest] -> -score end)
+      |> round_robin()
+      |> Enum.take(k)
+      |> Enum.map(fn {entry, _score} -> entry end)
+    end
   end
 
   defp serve_entries(_entries, _query_text, _k, _exclude_types, other, _state) do
