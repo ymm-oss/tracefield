@@ -843,6 +843,9 @@ defmodule Tracefield.Reference do
     |> Enum.take(k)
   end
 
+  # 検証結果(2026-06-14, seeds=6): この passive な対比 serve は grounded で diverse に劣る
+  # （genuine 発見 2.0→1.0 を surface 多様性とトレード＝diversity theater）。既定にしない。
+  # 詳細: docs/findings-contrastive-serve.md
   defp serve_entries(entries, query_text, k, exclude_types, :contrastive, state) do
     pool = filter_types(entries, :exclude_types, [:procedure | List.wrap(exclude_types)])
 
