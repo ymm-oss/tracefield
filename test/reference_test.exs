@@ -6,6 +6,15 @@ defmodule Tracefield.ReferenceTest do
   alias Tracefield.Meta
   alias Tracefield.Reference
 
+  defmodule QueryEmbedding do
+    @behaviour Tracefield.Embed
+
+    @impl true
+    def embed(texts, _opts) when is_list(texts) do
+      {:ok, Enum.map(texts, fn _text -> [1.0, 0.0] end)}
+    end
+  end
+
   test "absorb assigns ids, versions, and embeddings" do
     {:ok, ref} = Reference.start_link()
 
@@ -84,6 +93,101 @@ defmodule Tracefield.ReferenceTest do
     refute Enum.any?(served, &(&1.author == "REQ"))
   end
 
+  test "serve policy contrastive ranks distinctive entries above consensus cluster" do
+    {:ok, ref} = Reference.start_link(embed_adapter: QueryEmbedding)
+
+    [distinctive, b1, b2, c1, c2] =
+      import_with_embeddings(ref, [
+        %{id: "d1", author: "D", text: "distinctive D", embedding: [0.90, -0.4358898944]},
+        %{id: "b1", author: "B", text: "consensus B1", embedding: [0.95, 0.3122498999]},
+        %{id: "b2", author: "B", text: "consensus B2", embedding: [0.95, 0.3122498999]},
+        %{id: "c1", author: "C", text: "consensus C1", embedding: [0.95, 0.3122498999]},
+        %{id: "c2", author: "C", text: "consensus C2", embedding: [0.95, 0.3122498999]}
+      ])
+
+    contrastive =
+      Reference.serve(ref, "query",
+        k: 1,
+        policy: :contrastive
+      )
+
+    similar =
+      Reference.serve(ref, "query",
+        k: 1,
+        policy: :similar
+      )
+
+    diverse =
+      Reference.serve(ref, "query",
+        k: 1,
+        policy: :diverse
+      )
+
+    assert Enum.map(contrastive, & &1.id) == [distinctive.id]
+    assert Enum.map(similar, & &1.id) == [b1.id]
+    assert Enum.map(diverse, & &1.id) == [c2.id]
+
+    assert MapSet.new(Enum.map([b1, b2, c1, c2], & &1.id))
+           |> MapSet.member?(hd(similar).id)
+  end
+
+  test "serve policy contrastive returns empty for k zero and empty candidate pool" do
+    {:ok, ref} = Reference.start_link(embed_adapter: QueryEmbedding)
+    [_entry] = import_with_embeddings(ref, [%{id: "a1", author: "A", embedding: [1.0, 0.0]}])
+
+    assert Reference.serve(ref, "query", k: 0, policy: :contrastive) == []
+
+    {:ok, empty_ref} = Reference.start_link(embed_adapter: QueryEmbedding)
+    assert Reference.serve(empty_ref, "query", k: 3, policy: :contrastive) == []
+  end
+
+  test "serve policy contrastive author balances by score before taking k" do
+    {:ok, ref} = Reference.start_link(embed_adapter: QueryEmbedding)
+
+    import_with_embeddings(ref, [
+      %{id: "a1", author: "A", embedding: [1.0, 0.0]},
+      %{id: "a2", author: "A", embedding: [0.99, 0.1410673598]},
+      %{id: "a3", author: "A", embedding: [0.98, 0.1989974874]},
+      %{id: "b1", author: "B", embedding: [0.85, -0.5267826876]},
+      %{id: "c1", author: "C", embedding: [0.80, -0.60]}
+    ])
+
+    served = Reference.serve(ref, "query", k: 4, policy: :contrastive)
+
+    assert served |> Enum.take(3) |> Enum.map(& &1.author) |> MapSet.new() |> MapSet.size() == 3
+    assert Enum.map(served, & &1.author) != ["SRC/A", "SRC/A", "SRC/A", "SRC/B"]
+  end
+
+  test "serve policy contrastive is deterministic with entry number tie break" do
+    {:ok, ref} = Reference.start_link(embed_adapter: QueryEmbedding)
+
+    [first, second] =
+      import_with_embeddings(ref, [
+        %{id: "a1", author: "A", embedding: [0.8, 0.6]},
+        %{id: "a2", author: "A", embedding: [0.8, 0.6]}
+      ])
+
+    first_run = Reference.serve(ref, "query", k: 2, policy: :contrastive)
+    second_run = Reference.serve(ref, "query", k: 2, policy: :contrastive)
+
+    assert Enum.map(first_run, & &1.id) == [first.id, second.id]
+    assert Enum.map(second_run, & &1.id) == [first.id, second.id]
+  end
+
+  test "serve still raises for unknown policy" do
+    {:ok, ref} = Reference.start_link()
+    trap_exit = Process.flag(:trap_exit, true)
+
+    try do
+      assert {{%ArgumentError{message: "unknown serve policy :unknown"}, _stack}, _call} =
+               catch_exit(Reference.serve(ref, "query", k: 1, policy: :unknown))
+
+      assert_receive {:EXIT, ^ref, _reason}
+    after
+      Process.flag(:trap_exit, trap_exit)
+    end
+  end
+
   test "retract marks the target and returns active multi-hop reverse-citation closure" do
     {:ok, ref} = Reference.start_link()
 
@@ -100,6 +204,25 @@ defmodule Tracefield.ReferenceTest do
     assert MapSet.new(Enum.map(pure_closure, & &1.id)) == MapSet.new([e2.id, e3.id])
     assert MapSet.new(Enum.map(closure, & &1.id)) == MapSet.new([e2.id, e3.id])
     assert Reference.get(ref, e1.id).status == :retracted
+  end
+
+  defp import_with_embeddings(ref, entries) do
+    exported =
+      Enum.map(entries, fn entry ->
+        %{
+          id: Map.fetch!(entry, :id),
+          type: Map.get(entry, :type, :belief),
+          author: Map.fetch!(entry, :author),
+          version: 1,
+          status: Map.get(entry, :status, :active),
+          text: Map.get(entry, :text, Map.fetch!(entry, :id)),
+          citations: Map.get(entry, :citations, []),
+          embedding: Map.fetch!(entry, :embedding),
+          meta: %{}
+        }
+      end)
+
+    Reference.import(ref, exported, "SRC")
   end
 
   test "verify grounds citations with mock rules and always accepts procedure citations" do

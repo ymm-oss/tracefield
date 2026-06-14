@@ -499,6 +499,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       case String.trim(item) do
         "similar" -> :similar
         "diverse" -> :diverse
+        "contrastive" -> :contrastive
         other -> Mix.raise("invalid serve value #{inspect(other)}")
       end
     end)
