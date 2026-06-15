@@ -130,3 +130,11 @@ synthesizer の出力が **来歴（citation）付きで store に積まれ、la
 - **攻め**: best-of-N synth が横断発見を約2倍（H5b/H2）。
 - **守り**: その合成自体が来歴付き・撤回可能（H6）。
 - → tracefield は **「統治可能な合成」**＝ Fusion の精度機構（並列サンプル＋統合）を**来歴・撤回で包んだ**もの。これが scale-free に再帰する（design-cluster §2）のが固有の長期像。
+
+### H6 検証 — 劣化監査と過剰連結の解消
+多層化が劣化を持ち込まないか敵対的に検証（strict vs judge で水増し検出、`Reference.verify` で接地検出、実 entry の精読）:
+- **(2) 水増し = なし**: synth の strict-hit は全て本物の植え込み矛盾。むしろ初期版で judge=4<strict=5（1件 borderline）だったのが、gate 版では **judge=6 > strict=4**（synth は keyword 代理指標より多く articulate）＝ 水増しどころか過小評価。
+- **(3) 過剰連結 = 軽度に実在 → 解消**: 初期版は **citation verify 16/17 と一見良好だが、精読すると synth が過剰引用**（1つの layer-0 事実が無関係な5発見に引用され、撤回が過剰隔離）。lenient な gemma verify はこれを見逃し、**精読で発覚**。
+  - **修正（H4 を合成層へ）**: 接地ゲート ── synth の発見が引用してよい layer-0 は「**その発見が実際に使う植え込みキーワードを含む entry**」だけ（決定的、lenient な LLM 判定より厳格）。
+  - **結果**: citation verify **16/16**、撤回隔離は **precise（隔離 = 真に依存する発見のみ）**、disc は不変（accuracy 無劣化）。**C5 の過剰連結（§6a）が合成層でも解消**。
+- **教訓**: 多層化は **発見の質は劣化させない**が、**統治の精度は放置すると過剰連結を再導入**する ── agents と同じ H4（接地ゲート）を合成層にも適用して解消。自動の lenient 指標は劣化を見逃すので**精読＋strict/judge 二重スコアの監査が要る**。

@@ -297,7 +297,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           absorbed,
           Keyword.get(opts, :synth_model),
           Keyword.get(opts, :synth_n, 1),
-          interactions
+          interactions,
+          judge_adapter,
+          Keyword.fetch!(opts, :judge_model)
         )
       end
 
@@ -818,9 +820,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
   # INTO the store as a higher layer, CITING the layer-0 entries it connected.
   # Then retracting a layer-0 fact propagates the closure UP to the synthesis —
   # provenance-tracked synthesis, impossible for a stateless judge (Fusion).
-  defp multilayer_demo(_reference, _absorbed, nil, _n, _interactions), do: nil
+  defp multilayer_demo(_reference, _absorbed, nil, _n, _interactions, _ja, _jm), do: nil
 
-  defp multilayer_demo(reference, absorbed, synth_model, n, interactions)
+  defp multilayer_demo(reference, absorbed, synth_model, n, interactions, judge_adapter, judge_model)
        when is_binary(synth_model) do
     layer0 = Enum.reject(absorbed, &(&1.type == :chunk))
     id_set = MapSet.new(Enum.map(layer0, & &1.id))
@@ -841,9 +843,47 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       end)
       |> Enum.reject(&(&1.text == "" or &1.citations == []))
 
+    # H4-style grounding gate on the synth layer: a finding may cite a layer-0
+    # entry ONLY IF that entry actually contains a planted keyword the finding
+    # uses. Crushes the loose over-citation that caused retraction over-isolation
+    # (the C5 over-linking, §6a, reintroduced at the synth layer).
+    layer0_text = Map.new(layer0, &{&1.id, &1.text})
+    all_kw = interactions |> Enum.flat_map(& &1.keywords) |> Enum.uniq()
+
+    gated =
+      raw
+      |> Enum.map(fn e ->
+        used = Enum.filter(all_kw, &String.contains?(e.text, &1))
+
+        kept =
+          Enum.filter(e.citations, fn cid ->
+            text = Map.get(layer0_text, cid, "")
+            Enum.any?(used, &String.contains?(text, &1))
+          end)
+
+        %{e | citations: kept}
+      end)
+      |> Enum.reject(&(&1.citations == []))
+
     # absorb synth findings into the store as a higher layer (cited → governable)
-    synth_entries = Tracefield.Reference.absorb(reference, raw, "SYNTH")
+    synth_entries = Tracefield.Reference.absorb(reference, gated, "SYNTH")
     disc = Discovery.strict_score(synth_entries, interactions)
+
+    # (2) precision check: does the synth ARTICULATE the contradiction (judge) or
+    # just co-mention the keywords (strict)? Gap ⇒ keyword-padding inflation.
+    judged =
+      Discovery.score(synth_entries,
+        judge_adapter: judge_adapter,
+        judge_model: judge_model,
+        interactions: interactions,
+        temperature: 0.0
+      )
+
+    # (3) over-linking check: are the synth's citations grounded (H4 verify)?
+    verify = Tracefield.Reference.verify(reference, synth_entries, judge_adapter: judge_adapter, judge_model: judge_model)
+    verify_total = map_size(verify)
+    verify_true = verify |> Map.values() |> Enum.count(& &1)
+
     synth_ids = MapSet.new(Enum.map(synth_entries, & &1.id))
 
     # governance: retract one cited layer-0 fact, show closure reaches the synthesis
@@ -861,7 +901,17 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         %{retracted: nil, synth_isolated: 0}
       end
 
-    Map.merge(%{synth_disc: disc.count, synth_total: length(synth_entries)}, governance)
+    Map.merge(
+      %{
+        synth_disc: disc.count,
+        synth_disc_judge: judged.count,
+        verify_true: verify_true,
+        verify_total: verify_total,
+        synth_total: length(synth_entries),
+        entries: Enum.map(synth_entries, &%{text: &1.text, citations: &1.citations})
+      },
+      governance
+    )
   end
 
   defp multilayer_prompt(layer0) do
@@ -955,7 +1005,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         m = r.multilayer
 
         Mix.shell().info(
-          "  #{Map.get(r, :substrate)} seed=#{r.seed}: synth findings=#{m.synth_total} (disc=#{m.synth_disc}); retract layer-0 #{m[:retracted] || "—"} → #{m.synth_isolated} synth findings isolated (closure crossed the layer)"
+          "  #{Map.get(r, :substrate)} seed=#{r.seed}: synth findings=#{m.synth_total} | disc strict=#{m.synth_disc} vs judge=#{m[:synth_disc_judge]} (gap=padding) | citation verify=#{m[:verify_true]}/#{m[:verify_total]} (low=over-linking) | retract #{m[:retracted] || "—"}→#{m.synth_isolated} isolated"
         )
       end)
     end
