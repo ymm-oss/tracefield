@@ -106,3 +106,27 @@ synth は**外部化された事実しか繋げない**。entry_limit=2×2round 
 
 ### 含意（確定）
 **攻めの便益 = retrieval（事実の外部化）× expression（best-of-N synth による接続）。** substrate 異質性（H1/H1b ✗）でなく、この2段ファネルの各段を上げるのが効く。synth(expression)は約2倍の効果で確定。次は retrieval 段（rounds/serve）を上げて synth の上限を押し上げる、または synthesizer のクラスタ化＝統治可能な合成（design-cluster scale-free）。
+
+---
+
+## H6 — 多層化（統治可能な合成）: 撤回が合成層へ伝播することを実証
+
+H5b/H2 は「synth は精度で効く（約2倍）」を示した。H6 は **synthesizer を単発スコアでなく「来歴付きの上位層」にする** ── synth の発見を **layer-0 を citation して store に absorb** し、**layer-0 を撤回すると閉包が合成層まで遡る**か。これが Fusion（stateless）に不可能な tracefield 固有価値。実装: `--multilayer`（`multilayer_demo`：id 付きで serve→cited synth を absorb→layer-0 撤回→`Reference.retract` の閉包に synth が入るか）。
+
+**結果**（hi シナリオ・gemma 熟議×Opus synth・seeds=1）:
+- synthesizer は **9 件の cited 発見**（disc=4／10 を接続、layer-0 entry を引用）。synth 5 vs agents 3（best-of-N の上積みは H2 と一致）。
+- **統治: layer-0 `e3` を撤回 → 閉包が合成発見1件を隔離（層を越えた）。**
+
+### 判定 — 統治可能な合成を実証
+synthesizer の出力が **来歴（citation）付きで store に積まれ、layer-0 の事実を撤回すると `Reference.retract` の閉包が合成層まで伝播**して該当発見を隔離した。
+→ **多層化の固有価値＝「統治可能な合成」が機構として成立**。Fusion は良い合成を作るが追跡・撤回できない；tracefield は**合成しつつ来歴を辿って撤回できる**（攻めと守りが層を越えて再帰）。
+
+### 限界
+- n=1 の機構デモ（隔離は1件＝e3 を引いた合成が1件だったため。被引用の多い entry を撤回すれば複数隔離。**閉包が層を越える**ことの実証が要点）。
+- 単一 Reference（layer-0/1 同一ストア）での「層」＝ cited な上位 entry。完全な多層（別 Meta ストア・synthesizer をサブクラスタ化・越境撤回）は未（design-cluster の Meta/Field/Bridge で次段）。
+- 精度面で「クラスタ synth > best-of-N 単一」かは未検証（H1b の警告どおり、精度は best-of-N で十分の可能性；多層の主価値は統治）。
+
+### 含意 — 攻めと守りの統合
+- **攻め**: best-of-N synth が横断発見を約2倍（H5b/H2）。
+- **守り**: その合成自体が来歴付き・撤回可能（H6）。
+- → tracefield は **「統治可能な合成」**＝ Fusion の精度機構（並列サンプル＋統合）を**来歴・撤回で包んだ**もの。これが scale-free に再帰する（design-cluster §2）のが固有の長期像。
