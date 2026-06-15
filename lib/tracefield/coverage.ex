@@ -93,8 +93,7 @@ defmodule Tracefield.Coverage do
               sim < cutoff
             end)
 
-          {uncovered,
-           %{mode: :relative, cutoff: cutoff, median: median, mad: mad, k: k}}
+          {uncovered, %{mode: :relative, cutoff: cutoff, median: median, mad: mad, k: k}}
         end
     end
   end

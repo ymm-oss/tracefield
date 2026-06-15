@@ -301,7 +301,10 @@ defmodule Tracefield.ReferenceTest do
         [
           %{
             text: "solar comfort plan reduces budget risk",
-            citations: [%{id: support.id, stance: "relies_on"}, %{id: unrelated.id, stance: "refutes"}]
+            citations: [
+              %{id: support.id, stance: "relies_on"},
+              %{id: unrelated.id, stance: "refutes"}
+            ]
           }
         ],
         "C"

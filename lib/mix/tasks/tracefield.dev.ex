@@ -4,11 +4,21 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   require Logger
 
-  alias Tracefield.{Agent, Coverage, Policy, QA, Reference, Workspace}
+  alias Tracefield.{
+    Agent,
+    Coverage,
+    Policy,
+    ProcessInterpreter,
+    ProcessSpec,
+    QA,
+    Reference,
+    Workspace
+  }
+
   alias Tracefield.LLM.Human
+  alias Tracefield.ProcessSpec.{Edge, Gate, Stage}
 
   @response_heading "## RESPONSE（この下に回答を書いてください）"
-  @gate_entry_types ~w(requirement question decision observation)a
 
   @shortdoc "Run Tracefield dev pipeline"
   @refine_procedure """
@@ -25,9 +35,9 @@ defmodule Mix.Tasks.Tracefield.Dev do
                     |> String.trim()
 
   @combine_instruction """
-                         PRESENTED ENTRIES の中に自分の専門と接続する entry があれば、帰結を述べてその entry と根拠 DOC の両方を引用せよ
-                         """
-                         |> String.trim()
+                       PRESENTED ENTRIES の中に自分の専門と接続する entry があれば、帰結を述べてその entry と根拠 DOC の両方を引用せよ
+                       """
+                       |> String.trim()
 
   @impl true
   def run(args) do
@@ -47,6 +57,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     opts = Keyword.put(opts, :embed_adapter, embed_mod)
     status? = Keyword.get(opts, :status, false)
     state = load_state(issue_dir)
+    spec = dev_process_spec()
 
     {:ok, reference} =
       Reference.start_link(
@@ -55,55 +66,267 @@ defmodule Mix.Tasks.Tracefield.Dev do
       )
 
     actors = load_actors!(issue_dir)
-    procedure_id = seed_reference!(reference, issue_dir, opts)
+    procedure_id = seed_reference!(reference, issue_dir, opts, spec)
     territory_contract_id = seed_territory_contract!(reference, actors)
     policy_id = seed_policy!(reference, policy, policy_sources, actors)
+
     opts =
       opts
       |> Keyword.put(:policy_id, policy_id)
       |> Keyword.put(:territory_contract_id, territory_contract_id)
 
-    cond do
-      adopt_recruit = Keyword.get(opts, :adopt_recruit) ->
-        adopt_recruit!(reference, issue_dir, adopt_recruit)
-        %{state: state, entries: Reference.all(reference)}
+    route =
+      ProcessInterpreter.route(spec, state,
+        adopt_recruit: Keyword.get(opts, :adopt_recruit),
+        status?: status?,
+        can_enter?: &can_enter_stage?(issue_dir, &1),
+        block_reason: &blocked_stage_reason(issue_dir, &1)
+      )
 
-      status? ->
-        print_status(issue_dir, state, reference, actors, policy, policy_sources)
-        %{state: state, entries: Reference.all(reference)}
+    run_dev_route(
+      route,
+      reference,
+      actors,
+      issue_dir,
+      procedure_id,
+      state,
+      opts,
+      spec,
+      policy,
+      policy_sources
+    )
+  end
 
-      state["stage"] == "refine" and state["status"] == "done" ->
-        start_design(reference, actors, issue_dir, state, opts)
+  defp dev_process_spec do
+    %ProcessSpec{
+      name: "dev",
+      stages: [
+        %Stage{
+          id: "refine",
+          procedure: @refine_procedure,
+          produces: [:requirement, :question],
+          cites: [%Edge{type: :grounds, into: :reference_doc}],
+          gate: %Gate{review_types: [:requirement, :question], verdicts: [:approve, :amend]},
+          on_done: "design"
+        },
+        %Stage{
+          id: "design",
+          procedure: @design_procedure,
+          produces: [:decision],
+          cites: [
+            %Edge{type: :realizes, into: :requirement},
+            %Edge{type: :grounds, into: :reference_doc}
+          ],
+          gate: %Gate{review_types: [:decision, :observation], verdicts: [:approve, :reject]},
+          on_done: "implement"
+        },
+        %Stage{
+          id: "implement",
+          produces: [:change],
+          cites: [%Edge{type: :realizes, into: :decision}],
+          gate: %Gate{review_types: [], verdicts: [:approve, :amend, :reject]},
+          on_done: "qa"
+        },
+        %Stage{
+          id: "qa",
+          produces: [:verdict],
+          cites: [
+            %Edge{type: :verifies, into: :requirement},
+            %Edge{type: :verifies, into: :change}
+          ],
+          gate: %Gate{review_types: [], verdicts: [:pass, :fail]},
+          on_done: nil
+        }
+      ],
+      closure: %{
+        grounds: :invalidate,
+        realizes: :invalidate,
+        verifies: :reopen,
+        corroborates: :weaken,
+        contradicts: :flag,
+        supersedes: :replace
+      }
+    }
+  end
 
-      state["stage"] == "refine" and state["status"] == "awaiting_human" ->
-        resume_refine(reference, actors, issue_dir, procedure_id, state, opts)
+  defp can_enter_stage?(issue_dir, %Stage{id: "implement"}), do: Workspace.configured?(issue_dir)
+  defp can_enter_stage?(_issue_dir, %Stage{}), do: true
 
-      state["stage"] == "design" and state["status"] == "done" ->
-        if Workspace.configured?(issue_dir) do
-          start_implement(reference, actors, issue_dir, state, opts)
-        else
-          Mix.shell().info("design 完了。implement を開始するには workspace.json を置いてください")
-          print_design_done(reference, actors, issue_dir)
-          %{state: state, entries: Reference.all(reference)}
-        end
+  defp blocked_stage_reason(issue_dir, %Stage{id: "implement"}) do
+    if Workspace.configured?(issue_dir), do: :blocked, else: :missing_workspace
+  end
 
-      state["stage"] == "design" ->
-        resume_design(reference, actors, issue_dir, state, opts)
+  defp blocked_stage_reason(_issue_dir, %Stage{}), do: :blocked
 
-      state["stage"] == "implement" and state["status"] == "done" ->
-        start_qa(reference, actors, issue_dir, state, opts)
+  defp run_dev_route(
+         {:external, :adopt_recruit, adopt_recruit},
+         reference,
+         _actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         _opts,
+         _spec,
+         _policy,
+         _policy_sources
+       ) do
+    adopt_recruit!(reference, issue_dir, adopt_recruit)
+    %{state: state, entries: Reference.all(reference)}
+  end
 
-      state["stage"] == "qa" and state["status"] == "done" ->
-        Mix.shell().info("qa 完了。Issue 完遂（refine→design→implement→qa）")
-        print_qa_done_from_issue(reference, issue_dir, state, opts)
-        %{state: state, entries: Reference.all(reference)}
+  defp run_dev_route(
+         {:external, :status},
+         reference,
+         actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         _opts,
+         _spec,
+         policy,
+         policy_sources
+       ) do
+    print_status(issue_dir, state, reference, actors, policy, policy_sources)
+    %{state: state, entries: Reference.all(reference)}
+  end
 
-      state["stage"] == "implement" ->
-        resume_implement(reference, actors, issue_dir, state, opts)
+  defp run_dev_route(
+         {:start, %Stage{id: "refine"}},
+         reference,
+         actors,
+         issue_dir,
+         procedure_id,
+         _state,
+         opts,
+         spec,
+         _policy,
+         _policy_sources
+       ) do
+    start_refine(reference, actors, issue_dir, procedure_id, opts, spec)
+  end
 
-      true ->
-        start_refine(reference, actors, issue_dir, procedure_id, opts)
-    end
+  defp run_dev_route(
+         {:resume, %Stage{id: "refine"}},
+         reference,
+         actors,
+         issue_dir,
+         procedure_id,
+         state,
+         opts,
+         spec,
+         _policy,
+         _policy_sources
+       ) do
+    resume_refine(reference, actors, issue_dir, procedure_id, state, opts, spec)
+  end
+
+  defp run_dev_route(
+         {:start, %Stage{id: "design"}},
+         reference,
+         actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         opts,
+         spec,
+         _policy,
+         _policy_sources
+       ) do
+    start_design(reference, actors, issue_dir, state, opts, spec)
+  end
+
+  defp run_dev_route(
+         {:resume, %Stage{id: "design"}},
+         reference,
+         actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         opts,
+         spec,
+         _policy,
+         _policy_sources
+       ) do
+    resume_design(reference, actors, issue_dir, state, opts, spec)
+  end
+
+  defp run_dev_route(
+         {:blocked, %Stage{id: "design"}, %Stage{id: "implement"}, :missing_workspace},
+         reference,
+         actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         _opts,
+         _spec,
+         _policy,
+         _policy_sources
+       ) do
+    Mix.shell().info("design 完了。implement を開始するには workspace.json を置いてください")
+    print_design_done(reference, actors, issue_dir)
+    %{state: state, entries: Reference.all(reference)}
+  end
+
+  defp run_dev_route(
+         {:start, %Stage{id: "implement"}},
+         reference,
+         actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         opts,
+         _spec,
+         _policy,
+         _policy_sources
+       ) do
+    start_implement(reference, actors, issue_dir, state, opts)
+  end
+
+  defp run_dev_route(
+         {:resume, %Stage{id: "implement"}},
+         reference,
+         actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         opts,
+         _spec,
+         _policy,
+         _policy_sources
+       ) do
+    resume_implement(reference, actors, issue_dir, state, opts)
+  end
+
+  defp run_dev_route(
+         {:start, %Stage{id: "qa"}},
+         reference,
+         actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         opts,
+         _spec,
+         _policy,
+         _policy_sources
+       ) do
+    start_qa(reference, actors, issue_dir, state, opts)
+  end
+
+  defp run_dev_route(
+         {:complete, %Stage{id: "qa"}},
+         reference,
+         _actors,
+         issue_dir,
+         _procedure_id,
+         state,
+         opts,
+         _spec,
+         _policy,
+         _policy_sources
+       ) do
+    Mix.shell().info("qa 完了。Issue 完遂（refine→design→implement→qa）")
+    print_qa_done_from_issue(reference, issue_dir, state, opts)
+    %{state: state, entries: Reference.all(reference)}
   end
 
   def load_actors!(issue_dir) do
@@ -292,7 +515,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
 
   defp state_path(issue_dir), do: Path.join(issue_dir, "state.json")
 
-  defp seed_reference!(reference, issue_dir, opts) do
+  defp seed_reference!(reference, issue_dir, opts, spec) do
     issue_path = Path.join(issue_dir, "issue.md")
 
     seed_entries =
@@ -313,7 +536,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
         [
           %{
             type: :procedure,
-            text: refine_procedure_text(opts),
+            text: stage_procedure_text(spec, opts, "refine"),
             meta: %{stage: "refine"}
           }
         ],
@@ -382,18 +605,19 @@ defmodule Mix.Tasks.Tracefield.Dev do
     |> String.trim()
   end
 
-  defp refine_procedure_text(opts) do
-    case sharing_mode(opts, "refine") do
-      "combine" -> @refine_procedure <> "\n" <> @combine_instruction
-      _other -> @refine_procedure
+  defp stage_procedure_text(spec, opts, stage_id) do
+    procedure = ProcessSpec.stage!(spec, stage_id).procedure
+
+    case sharing_mode(opts, stage_id) do
+      "combine" -> procedure <> "\n" <> @combine_instruction
+      _other -> procedure
     end
   end
 
-  defp design_procedure_text(opts) do
-    case sharing_mode(opts, "design") do
-      "combine" -> @design_procedure <> "\n" <> @combine_instruction
-      _other -> @design_procedure
-    end
+  defp stage_expected_types(spec, stage_id) do
+    spec
+    |> ProcessSpec.produces(stage_id)
+    |> Enum.map(&Atom.to_string/1)
   end
 
   defp sharing_mode(opts, stage) do
@@ -466,7 +690,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp start_refine(reference, actors, issue_dir, procedure_id, opts) do
+  defp start_refine(reference, actors, issue_dir, procedure_id, opts, spec) do
     warn_uncovered_chunks!(reference, actors, opts)
     rounds = Keyword.get(opts, :rounds, 2)
 
@@ -478,7 +702,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       1..rounds,
       opts,
       nil,
-      ["requirement", "question"],
+      stage_expected_types(spec, "refine"),
       "refine"
     )
 
@@ -486,7 +710,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     %{state: state, entries: Reference.all(reference)}
   end
 
-  defp resume_refine(reference, actors, issue_dir, procedure_id, state, opts) do
+  defp resume_refine(reference, actors, issue_dir, procedure_id, state, opts, spec) do
     round = Map.get(state, "round", 2)
     iteration = Map.get(state, "iteration", 0)
     human = blocking_human!(actors)
@@ -536,7 +760,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
           [next_round],
           opts,
           nil,
-          ["requirement", "question"],
+          stage_expected_types(spec, "refine"),
           "refine"
         )
 
@@ -547,8 +771,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     end
   end
 
-  defp start_design(reference, actors, issue_dir, state, opts) do
-    procedure_id = seed_design_procedure!(reference, opts)
+  defp start_design(reference, actors, issue_dir, state, opts, spec) do
+    procedure_id = seed_design_procedure!(reference, opts, spec)
     base_round = Map.get(state, "round", 2)
     rounds = Keyword.get(opts, :rounds, 2)
     ref_docs = design_reference_docs(reference)
@@ -561,7 +785,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       (base_round + 1)..(base_round + rounds),
       opts,
       ref_docs,
-      ["decision"],
+      stage_expected_types(spec, "design"),
       "design"
     )
 
@@ -569,8 +793,8 @@ defmodule Mix.Tasks.Tracefield.Dev do
     %{state: state, entries: Reference.all(reference)}
   end
 
-  defp resume_design(reference, actors, issue_dir, state, opts) do
-    procedure_id = seed_design_procedure!(reference, opts)
+  defp resume_design(reference, actors, issue_dir, state, opts, spec) do
+    procedure_id = seed_design_procedure!(reference, opts, spec)
     round = Map.get(state, "round", 4)
     iteration = Map.get(state, "iteration", 0)
     human = blocking_human!(actors)
@@ -624,12 +848,20 @@ defmodule Mix.Tasks.Tracefield.Dev do
           [next_round],
           opts,
           design_reference_docs(reference),
-          ["decision"],
+          stage_expected_types(spec, "design"),
           "design"
         )
 
         state =
-          await_design(reference, actors, issue_dir, procedure_id, next_round, iteration + 1, opts)
+          await_design(
+            reference,
+            actors,
+            issue_dir,
+            procedure_id,
+            next_round,
+            iteration + 1,
+            opts
+          )
 
         %{state: state, entries: Reference.all(reference)}
     end
@@ -732,7 +964,16 @@ defmodule Mix.Tasks.Tracefield.Dev do
         )
 
         state =
-          await_implement(reference, actors, issue_dir, ws, next_round, iteration + 1, state, opts)
+          await_implement(
+            reference,
+            actors,
+            issue_dir,
+            ws,
+            next_round,
+            iteration + 1,
+            state,
+            opts
+          )
 
         %{state: state, entries: Reference.all(reference)}
     end
@@ -1261,7 +1502,10 @@ defmodule Mix.Tasks.Tracefield.Dev do
     by_id = Map.new(entries, &{&1.id, &1})
 
     roots =
-      Enum.filter(entries, &(&1.type == :change and &1.status == :active and &1.author == organ_author))
+      Enum.filter(
+        entries,
+        &(&1.type == :change and &1.status == :active and &1.author == organ_author)
+      )
 
     stages = [
       fn [change], by_id ->
@@ -1561,14 +1805,14 @@ defmodule Mix.Tasks.Tracefield.Dev do
     )
   end
 
-  defp seed_design_procedure!(reference, opts) do
+  defp seed_design_procedure!(reference, opts, spec) do
     [procedure] =
       Reference.absorb_idempotent(
         reference,
         [
           %{
             type: :procedure,
-            text: design_procedure_text(opts),
+            text: stage_procedure_text(spec, opts, "design"),
             meta: %{stage: "design"}
           }
         ],
@@ -2148,9 +2392,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
     Enum.each(warnings, fn warning -> Mix.shell().info(warning) end)
 
     if skipped > 0 do
-      Mix.shell().info(
-        "ℹ #{skipped} 件の質問は round メタデータ欠損のため老化判定を省略しました"
-      )
+      Mix.shell().info("ℹ #{skipped} 件の質問は round メタデータ欠損のため老化判定を省略しました")
     end
   end
 
@@ -2169,7 +2411,7 @@ defmodule Mix.Tasks.Tracefield.Dev do
       |> MapSet.new()
 
     Enum.filter(entries, fn entry ->
-      entry.status == :active and entry.type in @gate_entry_types and
+      entry.status == :active and entry.type in ProcessSpec.gate_target_types(dev_process_spec()) and
         MapSet.member?(machine_authors, entry.author)
     end)
   end
@@ -2283,14 +2525,10 @@ defmodule Mix.Tasks.Tracefield.Dev do
                 )
 
               entry.status != :active ->
-                Mix.shell().info(
-                  "REJECT 警告: #{target_id} - active ではありません (#{entry.status})"
-                )
+                Mix.shell().info("REJECT 警告: #{target_id} - active ではありません (#{entry.status})")
 
               not rejectable_machine_decision?(reference, actors, target_id) ->
-                Mix.shell().info(
-                  "REJECT 警告: #{target_id} - 機械判断ではありません (#{entry.author})"
-                )
+                Mix.shell().info("REJECT 警告: #{target_id} - 機械判断ではありません (#{entry.author})")
 
               true ->
                 Reference.quarantine(reference, [target_id])
