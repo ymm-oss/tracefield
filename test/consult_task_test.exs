@@ -11,7 +11,9 @@ defmodule Mix.Tasks.Tracefield.ConsultTest do
       adapter: Tracefield.LLM.Mock,
       embed_adapter: Tracefield.Embed.Mock,
       model: "mock",
-      rounds: 1
+      rounds: 1,
+      verify_adapter: Tracefield.LLM.Mock,
+      verify_model: "mock"
     ] ++ extra
   end
 

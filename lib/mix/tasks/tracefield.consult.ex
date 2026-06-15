@@ -126,11 +126,23 @@ defmodule Mix.Tasks.Tracefield.Consult do
   end
 
   defp synth_opts(opts) do
+    synth_model = Keyword.get(opts, :synth_model, @default_synth_model)
+
+    # Grounding verify needs a STRONG judge: local gemma is unreliable here (it
+    # keys verify JSON by citing_id, not the expected index → parse miss → all
+    # citations dropped; bigger gemma keys right but misjudges obvious grounding).
+    # Default the grounding judge to the same cursor-agent strong model as synth.
     [
       synth_n: Keyword.get(opts, :synth_n, @default_synth_n),
-      synth_model: Keyword.get(opts, :synth_model, @default_synth_model),
-      verify_adapter: Keyword.get(opts, :verify_adapter, Tracefield.LLM.Ollama),
-      verify_model: Keyword.get(opts, :verify_model, @default_model)
+      synth_model: synth_model,
+      verify_adapter: Keyword.get(opts, :verify_adapter, Tracefield.LLM.CLI),
+      verify_model: Keyword.get(opts, :verify_model, synth_model),
+      verify_cli:
+        Keyword.get(
+          opts,
+          :verify_cli,
+          {"cursor-agent", ["-p", "--output-format", "text", "--model", synth_model]}
+        )
     ]
     |> maybe_put(:synth_complete, Keyword.get(opts, :synth_complete))
   end

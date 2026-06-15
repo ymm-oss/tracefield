@@ -181,7 +181,11 @@ defmodule Tracefield.Synthesis do
       judge_adapter: Keyword.get(opts, :verify_adapter, Tracefield.LLM.Mock),
       judge_model: Keyword.get(opts, :verify_model, "mock")
     ]
+    |> maybe_put(:cli, Keyword.get(opts, :verify_cli))
   end
+
+  defp maybe_put(kw, _key, nil), do: kw
+  defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
 
   defp value(entry, key), do: Map.get(entry, key, Map.get(entry, to_string(key)))
 end
