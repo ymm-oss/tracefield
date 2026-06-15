@@ -55,6 +55,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     # nil = no synthesizer pass.
     synth_model = Keyword.get(opts, :synth_model)
     synth_n = Keyword.get(opts, :synth_n, 1)
+    multilayer = Keyword.get(opts, :multilayer, false)
 
     scenario_dir = Keyword.get(opts, :scenario_dir) || "scenarios/enterprise-assistant"
 
@@ -108,6 +109,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           judge_model: judge_model,
           synth_model: synth_model,
           synth_n: synth_n,
+          multilayer: multilayer,
           interactions: interactions,
           embed_model: embed_model,
           temperature: temperature
@@ -151,6 +153,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           judge_model: :string,
           synth: :string,
           synth_n: :integer,
+          multilayer: :boolean,
           embed_model: :string,
           temperature: :float
         ],
@@ -175,6 +178,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       judge_model: Keyword.get(opts, :judge_model),
       synth_model: Keyword.get(opts, :synth),
       synth_n: Keyword.get(opts, :synth_n),
+      multilayer: Keyword.get(opts, :multilayer),
       scenario_dir: Keyword.get(opts, :scenario_dir),
       interactions: Keyword.get(opts, :interactions),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
@@ -283,6 +287,20 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         interactions
       )
 
+    # H6: governable multi-layer synthesis (absorb cited synth + retraction demo).
+    # Runs AFTER all measurements above (which use the `absorbed` snapshot), so
+    # mutating the store here is safe.
+    multilayer_result =
+      if Keyword.get(opts, :multilayer, false) do
+        multilayer_demo(
+          reference,
+          absorbed,
+          Keyword.get(opts, :synth_model),
+          Keyword.get(opts, :synth_n, 1),
+          interactions
+        )
+      end
+
     %{
       k: k_s,
       kp: k_p,
@@ -293,6 +311,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       seed: seed,
       disc_strict: disc_strict.count,
       disc_strict_synth: synth_count(disc_synth),
+      multilayer: multilayer_result,
       disc_judge: disc_judge.count,
       discovery_count: disc_strict.count,
       discovery: disc_strict.per_interaction,
@@ -565,6 +584,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     end)
 
     print_synth_comparison(result.runs)
+    print_multilayer(result.runs)
 
     Mix.shell().info("trend: diversity vs k is #{result.diversity_trend}")
     Mix.shell().info("saved: #{result.path}")
@@ -794,6 +814,96 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     end
   end
 
+  # H6: governable multi-layer synthesis. The synthesizer absorbs its findings
+  # INTO the store as a higher layer, CITING the layer-0 entries it connected.
+  # Then retracting a layer-0 fact propagates the closure UP to the synthesis —
+  # provenance-tracked synthesis, impossible for a stateless judge (Fusion).
+  defp multilayer_demo(_reference, _absorbed, nil, _n, _interactions), do: nil
+
+  defp multilayer_demo(reference, absorbed, synth_model, n, interactions)
+       when is_binary(synth_model) do
+    layer0 = Enum.reject(absorbed, &(&1.type == :chunk))
+    id_set = MapSet.new(Enum.map(layer0, & &1.id))
+    cli = {"cursor-agent", ["-p", "--output-format", "text", "--model", synth_model]}
+    prompt = multilayer_prompt(layer0)
+
+    raw =
+      1..max(n, 1)
+      |> Enum.flat_map(fn _i ->
+        case Tracefield.LLM.complete([%{role: "user", content: prompt}],
+               adapter: Tracefield.LLM.CLI,
+               cli: cli,
+               timeout: 300_000
+             ) do
+          {:ok, content} -> parse_synth_cited(content, id_set)
+          {:error, _reason} -> []
+        end
+      end)
+      |> Enum.reject(&(&1.text == "" or &1.citations == []))
+
+    # absorb synth findings into the store as a higher layer (cited → governable)
+    synth_entries = Tracefield.Reference.absorb(reference, raw, "SYNTH")
+    disc = Discovery.strict_score(synth_entries, interactions)
+    synth_ids = MapSet.new(Enum.map(synth_entries, & &1.id))
+
+    # governance: retract one cited layer-0 fact, show closure reaches the synthesis
+    target =
+      synth_entries
+      |> Enum.flat_map(& &1.citations)
+      |> Enum.find(&MapSet.member?(id_set, &1))
+
+    governance =
+      if target do
+        closure = Tracefield.Reference.retract(reference, target)
+        isolated = closure |> Enum.map(& &1.id) |> Enum.count(&MapSet.member?(synth_ids, &1))
+        %{retracted: target, synth_isolated: isolated}
+      else
+        %{retracted: nil, synth_isolated: 0}
+      end
+
+    Map.merge(%{synth_disc: disc.count, synth_total: length(synth_entries)}, governance)
+  end
+
+  defp multilayer_prompt(layer0) do
+    """
+    あなたは半溶解チームの統合器(synthesizer)である。以下は各員が外部化した懸念・事実
+    （各行 [id] 付き）。領域をまたぐ矛盾・相互作用をすべて見つけ、各矛盾について
+    【元テキストのキーワードタグ】を両方とも逐語的に含めた1つの belief を書き、
+    その矛盾を構成した entry の [id] を citations に必ず列挙せよ。
+    Return only JSON {"entries":[{"type":"belief","text":"...","citations":["e3","e7"]}]}.
+
+    ENTRIES:
+    #{layer0 |> Enum.map_join("\n", fn e -> "[#{e.id}] #{e.text}" end)}
+    """
+    |> String.trim()
+  end
+
+  defp parse_synth_cited(content, id_set) do
+    case decode_object(content) do
+      {:ok, %{} = decoded} ->
+        decoded
+        |> Map.get("entries", [])
+        |> List.wrap()
+        |> Enum.filter(&is_map/1)
+        |> Enum.map(fn e ->
+          %{
+            type: :belief,
+            text: to_string(Map.get(e, "text", "")),
+            citations:
+              e
+              |> Map.get("citations", [])
+              |> List.wrap()
+              |> Enum.map(&to_string/1)
+              |> Enum.filter(&MapSet.member?(id_set, &1))
+              |> Enum.uniq()
+          }
+        end)
+
+      _ ->
+        []
+    end
+  end
+
   defp parse_models(value) do
     value
     |> String.split(",", trim: true)
@@ -830,6 +940,26 @@ defmodule Mix.Tasks.Tracefield.Hetero do
 
   defp mean_int([]), do: 0.0
   defp mean_int(values), do: Enum.sum(values) / length(values)
+
+  defp print_multilayer(runs) do
+    ml = Enum.filter(runs, &(Map.get(&1, :multilayer) != nil))
+
+    if ml != [] do
+      Mix.shell().info("")
+
+      Mix.shell().info(
+        "H6 multilayer — governable synthesis (synth absorbed WITH citations; retract layer-0 → closure reaches synthesis)"
+      )
+
+      Enum.each(ml, fn r ->
+        m = r.multilayer
+
+        Mix.shell().info(
+          "  #{Map.get(r, :substrate)} seed=#{r.seed}: synth findings=#{m.synth_total} (disc=#{m.synth_disc}); retract layer-0 #{m[:retracted] || "—"} → #{m.synth_isolated} synth findings isolated (closure crossed the layer)"
+        )
+      end)
+    end
+  end
 
   defp mean_sd(summary), do: "#{fmt(summary.mean)}±#{fmt(summary.sd)}"
   defp fmt(number), do: :erlang.float_to_binary(number * 1.0, decimals: 4)
