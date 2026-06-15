@@ -44,17 +44,17 @@ defmodule Tracefield.PolicyTest do
   end
 
   test "sharing_mode defaults to shared and rejects invalid values" do
-  assert Policy.sharing_mode(Policy.default_policy(), "refine") == "shared"
-  assert Policy.sharing_mode(Policy.default_policy(), "design") == "shared"
+    assert Policy.sharing_mode(Policy.default_policy(), "refine") == "shared"
+    assert Policy.sharing_mode(Policy.default_policy(), "design") == "shared"
 
-  policy = Map.put(Policy.default_policy(), "sharing", %{"refine" => "independent"})
+    policy = Map.put(Policy.default_policy(), "sharing", %{"refine" => "independent"})
 
-  assert Policy.sharing_mode(policy, "refine") == "independent"
-  assert Policy.sharing_mode(policy, "design") == "shared"
+    assert Policy.sharing_mode(policy, "refine") == "independent"
+    assert Policy.sharing_mode(policy, "design") == "shared"
 
-  assert_raise Mix.Error, ~r/invalid sharing\.refine "avoid"/, fn ->
-    Policy.validate_top_keys!(%{"sharing" => %{"refine" => "avoid"}})
-  end
+    assert_raise Mix.Error, ~r/invalid sharing\.refine "avoid"/, fn ->
+      Policy.validate_top_keys!(%{"sharing" => %{"refine" => "avoid"}})
+    end
   end
 
   test "sharing cascade resolves per stage with layer priority" do

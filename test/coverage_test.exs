@@ -218,7 +218,9 @@ defmodule Tracefield.CoverageTest do
         Dev.run_dev(issue: dir, adapter: "mock", coverage_mode: :relative)
       end)
 
-    assert output =~ "⚠ coverage-relative: insufficient samples (N=2), skipping relative detection"
+    assert output =~
+             "⚠ coverage-relative: insufficient samples (N=2), skipping relative detection"
+
     refute output =~ "⚠ uncovered chunk"
   end
 
@@ -471,7 +473,9 @@ defmodule Tracefield.CoverageTest do
   end
 
   defp tmp_issue_dir do
-    dir = Path.join(System.tmp_dir!(), "tracefield-coverage-#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(System.tmp_dir!(), "tracefield-coverage-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
     dir
@@ -481,7 +485,11 @@ defmodule Tracefield.CoverageTest do
     File.mkdir_p!(Path.join(dir, "docs"))
     File.write!(Path.join(dir, "issue.md"), "CLI駆動の詳細化パイプラインを実装する")
     File.write!(Path.join(dir, "actors.json"), Jason.encode!([llm_actor(), human_actor()]))
-    File.write!(Path.join(dir, "state.json"), Jason.encode!(%{"stage" => "refine", "status" => "new"}))
+
+    File.write!(
+      Path.join(dir, "state.json"),
+      Jason.encode!(%{"stage" => "refine", "status" => "new"})
+    )
   end
 
   defp write_uncovered_issue_files!(dir) do
@@ -537,7 +545,10 @@ defmodule Tracefield.CoverageTest do
       ])
     )
 
-    File.write!(Path.join(dir, "state.json"), Jason.encode!(%{"stage" => "refine", "status" => "new"}))
+    File.write!(
+      Path.join(dir, "state.json"),
+      Jason.encode!(%{"stage" => "refine", "status" => "new"})
+    )
   end
 
   defp write_covered_issue_files!(dir) do

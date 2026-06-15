@@ -152,7 +152,10 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     assert first_id == again_id
 
     [ledger] =
-      Enum.filter(Reference.all(reference), &(&1.type == :territory_contract and &1.status == :active))
+      Enum.filter(
+        Reference.all(reference),
+        &(&1.type == :territory_contract and &1.status == :active)
+      )
 
     assert ledger.author == "FACILITATOR"
     assert ledger.text =~ "ARCH domain=architecture desc=architect"
@@ -161,7 +164,13 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     changed_actors = [
       %{id: "ARCH", domain: "architecture", desc: "architect", kind: :llm, private_doc_file: nil},
       %{id: "SEC", domain: "security", desc: "security", kind: :llm, private_doc_file: "sec.md"},
-      %{id: "CLI", domain: "implementation", desc: "cli worker", kind: :cli, private_doc_file: nil}
+      %{
+        id: "CLI",
+        domain: "implementation",
+        desc: "cli worker",
+        kind: :cli,
+        private_doc_file: nil
+      }
     ]
 
     new_id = Dev.seed_territory_contract!(reference, changed_actors)
@@ -1073,7 +1082,10 @@ defmodule Mix.Tasks.Tracefield.DevTest do
       ])
     )
 
-    File.write!(Path.join(dir, "state.json"), Jason.encode!(%{"stage" => "refine", "status" => "new"}))
+    File.write!(
+      Path.join(dir, "state.json"),
+      Jason.encode!(%{"stage" => "refine", "status" => "new"})
+    )
 
     {:ok, reference} =
       Reference.start_link(
@@ -1095,7 +1107,8 @@ defmodule Mix.Tasks.Tracefield.DevTest do
       "ARCH"
     )
 
-    {policy, policy_sources} = Tracefield.Policy.load_layers!(dir, %{}) |> Tracefield.Policy.resolve()
+    {policy, policy_sources} =
+      Tracefield.Policy.load_layers!(dir, %{}) |> Tracefield.Policy.resolve()
 
     opts = [
       policy: policy,
@@ -1114,7 +1127,11 @@ defmodule Mix.Tasks.Tracefield.DevTest do
   test "compute_gate_warnings does not mutate entries or state" do
     dir = tmp_issue_dir()
     write_issue_files!(dir)
-    File.write!(Path.join(dir, "state.json"), Jason.encode!(%{"stage" => "refine", "status" => "new"}))
+
+    File.write!(
+      Path.join(dir, "state.json"),
+      Jason.encode!(%{"stage" => "refine", "status" => "new"})
+    )
 
     {:ok, reference} =
       Reference.start_link(
@@ -1136,7 +1153,8 @@ defmodule Mix.Tasks.Tracefield.DevTest do
       )
     end
 
-    {policy, policy_sources} = Tracefield.Policy.load_layers!(dir, %{}) |> Tracefield.Policy.resolve()
+    {policy, policy_sources} =
+      Tracefield.Policy.load_layers!(dir, %{}) |> Tracefield.Policy.resolve()
 
     opts = [
       policy: policy,
@@ -1655,7 +1673,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
       issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "issue.md"})
       requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
       decision_bad = provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: [])
-      decision_good = provenance_entry(id: "e4", type: :decision, author: "ARCH", citations: ["e2"])
+
+      decision_good =
+        provenance_entry(id: "e4", type: :decision, author: "ARCH", citations: ["e2"])
 
       change =
         provenance_entry(
@@ -1736,7 +1756,9 @@ defmodule Mix.Tasks.Tracefield.DevTest do
     end
 
     test "implement_provenance_chain single-path regression" do
-      issue = provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "docs/issue.md"})
+      issue =
+        provenance_entry(id: "e1", type: :chunk, author: "ISSUE", meta: %{file: "docs/issue.md"})
+
       requirement = provenance_entry(id: "e2", type: :requirement, citations: ["e1"])
       decision = provenance_entry(id: "e3", type: :decision, author: "ARCH", citations: ["e2"])
       change = provenance_entry(id: "e4", type: :change, author: "ORGAN", citations: ["e3"])
