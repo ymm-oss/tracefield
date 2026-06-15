@@ -33,9 +33,21 @@ defmodule Tracefield.Synthesis do
       cursor-agent CLI call with `:synth_model`)
     * `:verify_adapter` / `:verify_model` — grounding judge (default ollama/mock)
     * `:author` — store author tag for synth entries (default `"SYNTH"`)
+    * `:novelty_check` — when `true` and `:ground_truth` is a non-empty string,
+      run the novelty gate (default `false`)
+    * `:ground_truth` — corpus describing the target system's current state
+      (current code / CHANGELOG / docs); findings already covered by it are
+      classified `shipped`
+    * `:novelty_adapter` / `:novelty_model` / `:novelty_cli` — novelty judge
+      (defaults: CLI with `:synth_model`)
+    * `:novelty_complete` — `fun(prompt)` returning `{:ok, content}`
+      (dependency-injection seam for deterministic tests)
 
   Returns `%{findings: [...], synth_entry_ids: [...], dropped_citations: [...],
   sample_count: n}` where each finding is `%{id, text, citations, verified}`.
+  When the novelty gate ran, also returns `novelty_checked: true`,
+  `novel_findings: [id]`, `shipped_findings: [id]`, and each finding carries
+  `:novelty` (`%{shipped: bool, reason: String.t()}`).
   """
   @spec run(GenServer.server(), [map()], keyword()) :: map()
   def run(reference, layer0_entries, opts \\ []) do
@@ -69,12 +81,17 @@ defmodule Tracefield.Synthesis do
         %{id: e.id, text: e.text, citations: e.citations, verified: true}
       end)
 
-    %{
-      findings: findings,
-      synth_entry_ids: Enum.map(synth_entries, & &1.id),
-      dropped_citations: dropped,
-      sample_count: n
-    }
+    {findings, novelty_summary} = annotate_novelty(findings, opts)
+
+    Map.merge(
+      %{
+        findings: findings,
+        synth_entry_ids: Enum.map(synth_entries, & &1.id),
+        dropped_citations: dropped,
+        sample_count: n
+      },
+      novelty_summary
+    )
   end
 
   # --- ensemble sampling ---
@@ -160,6 +177,120 @@ defmodule Tracefield.Synthesis do
         end
     end
   end
+
+  # --- novelty gate ---
+  #
+  # The grounding gate only asks "does the cited entry support this finding?".
+  # It does NOT ask "is this finding already true / already shipped in the target
+  # system?". So a confident synthesizer can re-propose work that is already done
+  # (its citations still ground). The novelty gate runs AFTER grounding: it judges
+  # each surviving finding against a ground-truth corpus (current code, CHANGELOG,
+  # docs) and partitions findings into novel vs. already-shipped. Opt-in
+  # (`:novelty_check`) so experiments/tests are unaffected when off. Conservative:
+  # on any parse/judge failure a finding stays `novel` (we never silently drop a
+  # real finding).
+
+  defp annotate_novelty(findings, opts) do
+    ground_truth = Keyword.get(opts, :ground_truth)
+
+    if Keyword.get(opts, :novelty_check, false) and is_binary(ground_truth) and
+         ground_truth != "" and findings != [] do
+      verdicts = judge_novelty(findings, ground_truth, opts)
+
+      annotated =
+        Enum.map(findings, fn f ->
+          Map.put(f, :novelty, Map.get(verdicts, f.id, %{shipped: false, reason: ""}))
+        end)
+
+      {novel, shipped} = Enum.split_with(annotated, &(not &1.novelty.shipped))
+
+      {annotated,
+       %{
+         novelty_checked: true,
+         novel_findings: Enum.map(novel, & &1.id),
+         shipped_findings: Enum.map(shipped, & &1.id)
+       }}
+    else
+      {findings, %{}}
+    end
+  end
+
+  defp judge_novelty(findings, ground_truth, opts) do
+    numbered = Enum.map(findings, &%{"id" => &1.id, "text" => &1.text})
+    prompt = novelty_prompt(ground_truth, numbered)
+
+    content =
+      case novelty_complete(prompt, opts) do
+        {:ok, c} -> c
+        _ -> ""
+      end
+
+    parse_novelty(content)
+  end
+
+  defp novelty_complete(prompt, opts) do
+    case Keyword.get(opts, :novelty_complete) do
+      fun when is_function(fun, 1) ->
+        fun.(prompt)
+
+      _ ->
+        llm_opts =
+          [
+            adapter: Keyword.get(opts, :novelty_adapter, Tracefield.LLM.CLI),
+            model: Keyword.get(opts, :novelty_model, Keyword.get(opts, :synth_model)),
+            temperature: 0.0,
+            timeout: 300_000
+          ]
+          |> maybe_put(:cli, Keyword.get(opts, :novelty_cli))
+
+        Tracefield.LLM.complete([%{role: "user", content: prompt}], llm_opts)
+    end
+  end
+
+  defp novelty_prompt(ground_truth, numbered) do
+    """
+    あなたは厳格なレビュアである。GROUND_TRUTH は対象システムの現状（コード/変更履歴/設計）である。
+    以下の各 FINDING（改善提案）について、GROUND_TRUTH を根拠に「既に実装済・対応済か(shipped)」を判定せよ。
+    提案の主張する変更や機能が GROUND_TRUTH に既に存在する／既に対応されている場合のみ shipped=true。
+    現状に無く未対応なら shipped=false。判断に迷う場合は shipped=false（新規扱い）にせよ。
+    Return only JSON keyed by finding id, like {"e14":{"shipped":true,"reason":"..."}}.
+
+    GROUND_TRUTH:
+    #{ground_truth}
+
+    FINDINGS:
+    #{Jason.encode!(numbered)}
+    """
+    |> String.trim()
+  end
+
+  defp parse_novelty(content) do
+    case decode_object(content) do
+      {:ok, %{} = decoded} ->
+        decoded
+        |> Enum.flat_map(fn
+          {id, %{} = v} when is_binary(id) ->
+            [
+              {id,
+               %{
+                 shipped: truthy(Map.get(v, "shipped")),
+                 reason: to_string(Map.get(v, "reason", ""))
+               }}
+            ]
+
+          _ ->
+            []
+        end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp truthy(true), do: true
+  defp truthy("true"), do: true
+  defp truthy(_), do: false
 
   # --- grounding gate ---
 

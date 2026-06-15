@@ -79,4 +79,83 @@ defmodule Tracefield.SynthesisTest do
 
     assert synth_id in isolated
   end
+
+  # Novelty stub: reads finding ids out of the prompt and marks each shipped/not.
+  defp novelty_stub(shipped?) do
+    fn prompt ->
+      body =
+        ~r/"id":"(e\d+)"/
+        |> Regex.scan(prompt)
+        |> Enum.map(fn [_, id] -> {id, %{"shipped" => shipped?, "reason" => "stub"}} end)
+        |> Map.new()
+        |> Jason.encode!()
+
+      {:ok, body}
+    end
+  end
+
+  test "novelty gate is off by default (no novelty keys)" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result = Synthesis.run(ref, layer0, synth_n: 1, synth_complete: synth_stub([e1.id, e2.id]))
+
+    refute Map.has_key?(result, :novelty_checked)
+    refute Map.has_key?(hd(result.findings), :novelty)
+  end
+
+  test "novelty gate flags already-shipped findings when enabled" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        novelty_check: true,
+        ground_truth: "the system already handles deletion vs retention conflicts",
+        novelty_complete: novelty_stub(true)
+      )
+
+    assert result.novelty_checked
+    assert [finding] = result.findings
+    assert finding.novelty.shipped
+    assert finding.id in result.shipped_findings
+    assert result.novel_findings == []
+  end
+
+  test "novelty gate keeps findings judged novel" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        novelty_check: true,
+        ground_truth: "unrelated corpus with nothing about this",
+        novelty_complete: novelty_stub(false)
+      )
+
+    assert result.novelty_checked
+    assert [finding] = result.findings
+    refute finding.novelty.shipped
+    assert finding.id in result.novel_findings
+    assert result.shipped_findings == []
+  end
+
+  test "novelty gate stays off when enabled but ground_truth is empty" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        novelty_check: true,
+        ground_truth: ""
+      )
+
+    refute Map.has_key?(result, :novelty_checked)
+  end
 end
