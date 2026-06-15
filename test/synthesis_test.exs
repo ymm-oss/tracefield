@@ -29,6 +29,16 @@ defmodule Tracefield.SynthesisTest do
     fn _prompt -> {:ok, body} end
   end
 
+  defp multi_synth_stub(specs) do
+    entries =
+      Enum.map(specs, fn {text, cites} ->
+        %{type: "belief", text: text, citations: cites}
+      end)
+
+    body = Jason.encode!(%{entries: entries})
+    fn _prompt -> {:ok, body} end
+  end
+
   test "absorbs cited findings as a governable higher layer" do
     {ref, e1, e2, _e3} = seed_store()
     layer0 = Reference.all(ref)
@@ -142,6 +152,114 @@ defmodule Tracefield.SynthesisTest do
     refute finding.novelty.shipped
     assert finding.id in result.novel_findings
     assert result.shipped_findings == []
+  end
+
+  test "novelty gate flags a wholesale judge failure (distinguishable all-novel)" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        novelty_check: true,
+        ground_truth: "some ground truth",
+        novelty_complete: fn _ -> {:ok, "this is not json at all"} end
+      )
+
+    assert result.novelty_checked
+    assert Map.has_key?(result, :novelty_error)
+    # conservative: finding kept, but reason marks it as NOT a real verdict
+    assert [finding] = result.findings
+    refute finding.novelty.shipped
+    assert finding.novelty.reason == "judge-unparsed"
+    assert finding.id in result.novel_findings
+  end
+
+  test "novelty gate marks ids the judge omitted from a valid verdict map" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    # valid JSON, but keyed by an id that is not among the findings
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        novelty_check: true,
+        ground_truth: "some ground truth",
+        novelty_complete: fn _ ->
+          {:ok, Jason.encode!(%{"not-a-real-id" => %{"shipped" => true, "reason" => "x"}})}
+        end
+      )
+
+    assert result.novelty_checked
+    refute Map.has_key?(result, :novelty_error)
+    assert [finding] = result.findings
+    assert finding.novelty.reason == "judge-omitted"
+    refute finding.novelty.shipped
+    assert finding.id in result.novelty_omitted
+  end
+
+  test "dedupe is off by default (no cluster fields, no embedding leak)" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result = Synthesis.run(ref, layer0, synth_n: 1, synth_complete: synth_stub([e1.id, e2.id]))
+
+    refute Map.has_key?(result, :dedupe_clusters)
+    refute Map.has_key?(hd(result.findings), :cluster_size)
+    refute Map.has_key?(hd(result.findings), :embedding)
+  end
+
+  test "dedupe merges near-duplicate findings and unions their citations" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete:
+          multi_synth_stub([
+            {"deletion conflicts with retention policy", [e1.id]},
+            {"audit retention ninety logs window kept", [e2.id]}
+          ]),
+        # threshold -1.0: every non-empty embedding pair merges -> exactly 1 cluster
+        dedupe: true,
+        dedupe_threshold: -1.0
+      )
+
+    assert result.dedupe_input == 2
+    assert result.dedupe_clusters == 1
+    assert [finding] = result.findings
+    assert finding.cluster_size == 2
+    # representative is the longest text; citations are unioned across the cluster
+    assert finding.text == "deletion conflicts with retention policy"
+    assert Enum.sort(finding.citations) == Enum.sort([e1.id, e2.id])
+    # all entries remain in the store (governance unchanged)
+    assert length(result.synth_entry_ids) == 2
+    refute Map.has_key?(finding, :embedding)
+  end
+
+  test "dedupe keeps findings distinct when the threshold is unreachable" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete:
+          multi_synth_stub([
+            {"deletion conflicts with retention policy", [e1.id]},
+            {"audit retention ninety logs window kept", [e2.id]}
+          ]),
+        dedupe: true,
+        dedupe_threshold: 2.0
+      )
+
+    assert result.dedupe_input == 2
+    assert result.dedupe_clusters == 2
+    assert length(result.findings) == 2
+    assert Enum.all?(result.findings, &(&1.cluster_size == 1))
   end
 
   test "novelty gate stays off when enabled but ground_truth is empty" do

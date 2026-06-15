@@ -21,6 +21,11 @@ defmodule Mix.Tasks.Tracefield.Consult do
   findings already covered by it are tagged `[SHIPPED]`. This stops the synthesis
   layer from confidently re-proposing already-done work (the grounding gate only
   checks that citations support a claim, not that the claim is still open).
+
+  `--dedupe` (optional `--dedupe-threshold`, default 0.85) clusters
+  near-duplicate findings by embedding cosine and keeps one representative per
+  cluster (best-of-N pools paraphrases of the same idea). Merged findings show
+  `(×N merged)` and union their citations; all entries stay governable.
   """
   use Mix.Task
 
@@ -47,6 +52,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
           synth_n: :integer,
           novelty: :boolean,
           novelty_doc: :string,
+          dedupe: :boolean,
+          dedupe_threshold: :float,
           adapter: :string,
           model: :string
         ]
@@ -65,7 +72,9 @@ defmodule Mix.Tasks.Tracefield.Consult do
         synth_model: Keyword.get(opts, :synth_model, @default_synth_model),
         synth_n: Keyword.get(opts, :synth_n, @default_synth_n),
         novelty: Keyword.get(opts, :novelty, false),
-        novelty_doc: Keyword.get(opts, :novelty_doc)
+        novelty_doc: Keyword.get(opts, :novelty_doc),
+        dedupe: Keyword.get(opts, :dedupe, false),
+        dedupe_threshold: Keyword.get(opts, :dedupe_threshold)
       )
 
     print(result)
@@ -157,6 +166,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
     ]
     |> maybe_put(:synth_complete, Keyword.get(opts, :synth_complete))
     |> Keyword.merge(novelty_opts(opts, synth_model))
+    |> Keyword.put(:dedupe, Keyword.get(opts, :dedupe, false))
+    |> maybe_put(:dedupe_threshold, Keyword.get(opts, :dedupe_threshold))
   end
 
   # Novelty gate (opt-in): judge each grounded finding against a ground-truth
@@ -232,10 +243,35 @@ defmodule Mix.Tasks.Tracefield.Consult do
           "synth findings: #{length(synth.findings)} (samples=#{synth.sample_count})"
         )
 
+        case Map.get(synth, :dedupe_clusters) do
+          nil -> :ok
+          k -> Mix.shell().info("dedupe: #{synth.dedupe_input} findings → #{k} clusters")
+        end
+
         if Map.get(synth, :novelty_checked) do
           Mix.shell().info(
             "novelty: #{length(synth.novel_findings)} novel, #{length(synth.shipped_findings)} already-shipped"
           )
+
+          case Map.get(synth, :novelty_error) do
+            nil ->
+              :ok
+
+            reason ->
+              Mix.shell().info(
+                "  ⚠ novelty judge failed (#{inspect(reason)}) — all findings defaulted to novel"
+              )
+          end
+
+          case Map.get(synth, :novelty_omitted, []) do
+            [] ->
+              :ok
+
+            ids ->
+              Mix.shell().info(
+                "  ⚠ judge omitted #{length(ids)} finding(s) — defaulted to novel: #{inspect(ids)}"
+              )
+          end
         end
 
         Enum.each(synth.findings, fn f ->
@@ -245,7 +281,13 @@ defmodule Mix.Tasks.Tracefield.Consult do
               _ -> ""
             end
 
-          Mix.shell().info("- [#{f.id}]#{tag} cites=#{inspect(f.citations)}")
+          cluster =
+            case Map.get(f, :cluster_size) do
+              s when is_integer(s) and s > 1 -> " (×#{s} merged)"
+              _ -> ""
+            end
+
+          Mix.shell().info("- [#{f.id}]#{tag}#{cluster} cites=#{inspect(f.citations)}")
           Mix.shell().info("  #{f.text}")
         end)
 
@@ -269,7 +311,11 @@ defmodule Mix.Tasks.Tracefield.Consult do
             sample_count: result.synthesis.sample_count,
             novelty_checked: Map.get(result.synthesis, :novelty_checked, false),
             novel_findings: Map.get(result.synthesis, :novel_findings, []),
-            shipped_findings: Map.get(result.synthesis, :shipped_findings, [])
+            shipped_findings: Map.get(result.synthesis, :shipped_findings, []),
+            novelty_error: Map.get(result.synthesis, :novelty_error),
+            novelty_omitted: Map.get(result.synthesis, :novelty_omitted, []),
+            dedupe_input: Map.get(result.synthesis, :dedupe_input),
+            dedupe_clusters: Map.get(result.synthesis, :dedupe_clusters)
           },
       layer0_index: result.layer0_index
     }
