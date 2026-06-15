@@ -612,7 +612,10 @@ defmodule Tracefield.Agent do
     defp citation_with_stance(_), do: %{id: "", stance: "relies_on"}
 
     defp normalize_cite_stance(s) when s in ["relies_on", "refutes", "context"], do: s
-    defp normalize_cite_stance(s) when is_atom(s) and not is_nil(s), do: normalize_cite_stance(to_string(s))
+
+    defp normalize_cite_stance(s) when is_atom(s) and not is_nil(s),
+      do: normalize_cite_stance(to_string(s))
+
     defp normalize_cite_stance(_), do: "relies_on"
 
     # Auto-appended ids (procedure/territory/recruit) are references, not factual
