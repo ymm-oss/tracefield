@@ -384,7 +384,10 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         collapse_rate: Metrics.summary(Enum.map(rows, & &1.collapse_rate))
       }
     end)
-    |> Enum.sort_by(&{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero), to_string(&1.substrate)})
+    |> Enum.sort_by(
+      &{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero),
+       to_string(&1.substrate)}
+    )
   end
 
   defp monotonic_trend(summary, ks, metric) do
@@ -532,7 +535,10 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     )
 
     result.summary
-    |> Enum.sort_by(&{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero), to_string(Map.get(&1, :substrate))})
+    |> Enum.sort_by(
+      &{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero),
+       to_string(Map.get(&1, :substrate))}
+    )
     |> Enum.each(fn row ->
       Mix.shell().info(
         "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{Map.get(row, :substrate)} #{mean_sd(row.disc_strict)} #{mean_sd(row.disc_judge)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
@@ -703,7 +709,10 @@ defmodule Mix.Tasks.Tracefield.Hetero do
   # safe profile (NO --force/--trust ⇒ reasoning only, never runs repo commands).
   # No API key / no per-token cost — uses the Cursor subscription. Use --adapter cli.
   defp substrate_preset("cur-composer"), do: {"cur-composer", all_cli(cursor_cli("composer-2.5"))}
-  defp substrate_preset("cur-opus"), do: {"cur-opus", all_cli(cursor_cli("claude-opus-4-8-medium"))}
+
+  defp substrate_preset("cur-opus"),
+    do: {"cur-opus", all_cli(cursor_cli("claude-opus-4-8-medium"))}
+
   defp substrate_preset("cur-gpt"), do: {"cur-gpt", all_cli(cursor_cli("gpt-5.5-medium"))}
 
   defp substrate_preset("cur-hetero"),
@@ -718,7 +727,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
   defp substrate_preset(other), do: Mix.raise("invalid substrate value #{inspect(other)}")
 
   defp all_cli(cli), do: %{"SEC" => cli, "BIZ" => cli, "UX" => cli}
-  defp cursor_cli(model), do: {"cursor-agent", ["-p", "--output-format", "text", "--model", model]}
+
+  defp cursor_cli(model),
+    do: {"cursor-agent", ["-p", "--output-format", "text", "--model", model]}
 
   # A substrate organ is either a model id (string → routed via the global
   # adapter) or a {cmd, args} CLI tuple (→ Tracefield.LLM.CLI). nil = use the
@@ -822,7 +833,15 @@ defmodule Mix.Tasks.Tracefield.Hetero do
   # provenance-tracked synthesis, impossible for a stateless judge (Fusion).
   defp multilayer_demo(_reference, _absorbed, nil, _n, _interactions, _ja, _jm), do: nil
 
-  defp multilayer_demo(reference, absorbed, synth_model, n, interactions, judge_adapter, judge_model)
+  defp multilayer_demo(
+         reference,
+         absorbed,
+         synth_model,
+         n,
+         interactions,
+         judge_adapter,
+         judge_model
+       )
        when is_binary(synth_model) do
     layer0 = Enum.reject(absorbed, &(&1.type == :chunk))
     id_set = MapSet.new(Enum.map(layer0, & &1.id))
@@ -880,7 +899,12 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       )
 
     # (3) over-linking check: are the synth's citations grounded (H4 verify)?
-    verify = Tracefield.Reference.verify(reference, synth_entries, judge_adapter: judge_adapter, judge_model: judge_model)
+    verify =
+      Tracefield.Reference.verify(reference, synth_entries,
+        judge_adapter: judge_adapter,
+        judge_model: judge_model
+      )
+
     verify_total = map_size(verify)
     verify_true = verify |> Map.values() |> Enum.count(& &1)
 

@@ -224,8 +224,8 @@ defmodule Tracefield.RecruitTest do
     Reference.quarantine(ref, Enum.map(closure, & &1.id))
 
     assert Enum.all?(closure, fn entry ->
-      Reference.get(ref, entry.id).status == :superseded
-    end)
+             Reference.get(ref, entry.id).status == :superseded
+           end)
 
     assert Reference.get(ref, recruit.id).status == :retracted
   end
@@ -322,8 +322,8 @@ defmodule Tracefield.RecruitTest do
     assert Enum.any?(closure, &(&1.author == "LENS-UNRELATED"))
 
     assert Enum.all?(closure, fn entry ->
-      Reference.get(reference, entry.id).status == :superseded
-    end)
+             Reference.get(reference, entry.id).status == :superseded
+           end)
   end
 
   defp recruit_entry_from_dir(dir) do

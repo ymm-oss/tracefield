@@ -5,6 +5,8 @@ defmodule Tracefield.Reference do
 
   use GenServer
 
+  alias Tracefield.ProcessSpec
+
   defmodule Entry do
     @moduledoc "Reference entry with provenance and retrieval metadata."
 
@@ -29,7 +31,10 @@ defmodule Tracefield.Reference do
     :recruit,
     :genesis,
     :house_view,
-    :policy
+    :policy,
+    :claim,
+    :synthesis,
+    :audit
   ]
   @statuses [:active, :retracted, :superseded]
   @contrastive_lambda 1.0
@@ -60,6 +65,10 @@ defmodule Tracefield.Reference do
 
   def retract(ref, id) do
     GenServer.call(ref, {:retract, id})
+  end
+
+  def retract_typed(ref, id, %ProcessSpec{} = spec) do
+    GenServer.call(ref, {:retract_typed, id, spec})
   end
 
   def quarantine(ref, ids) do
@@ -145,6 +154,10 @@ defmodule Tracefield.Reference do
     id
     |> downstream_ids(reverse, active_ids)
     |> Enum.map(&Map.fetch!(by_id, &1))
+  end
+
+  def typed_closure(entries, id, %ProcessSpec{} = spec) do
+    typed_closure_effects(entries, id, spec)
   end
 
   @impl true
@@ -244,6 +257,41 @@ defmodule Tracefield.Reference do
     notify_status_changes(state, changed)
 
     {:reply, closure, state}
+  end
+
+  def handle_call({:retract_typed, id, spec}, _from, state) do
+    id = to_string(id)
+    existing = Enum.find(state.entries, &(&1.id == id))
+    effects = typed_closure_effects(state.entries, id, spec)
+    effects_by_id = Enum.group_by(effects, & &1.id)
+
+    entries =
+      Enum.map(state.entries, fn
+        %Entry{id: ^id, status: status} = entry when status != :retracted ->
+          %{entry | status: :retracted}
+
+        %Entry{id: entry_id} = entry ->
+          case Map.fetch(effects_by_id, entry_id) do
+            {:ok, entry_effects} -> apply_typed_effects(entry, entry_effects)
+            :error -> entry
+          end
+      end)
+
+    if existing && existing.status != :retracted do
+      persist_status!(state, id, :retracted)
+    end
+
+    changed = changed_entries(state.entries, entries)
+
+    changed
+    |> Enum.filter(&(&1.status == :superseded))
+    |> Enum.each(&persist_status!(state, &1.id, :superseded))
+
+    state = %{state | entries: entries}
+    notify_status_changes(state, changed)
+
+    result = typed_retraction_result(existing, effects, entries)
+    {:reply, result, state}
   end
 
   def handle_call({:quarantine, ids}, _from, state) do
@@ -628,8 +676,8 @@ defmodule Tracefield.Reference do
 
   defp citation_id(_), do: nil
 
-  # Builds %{id => stance} for citations carrying a NON-default stance
-  # ("refutes"/"context"). Bare-id and relies_on citations contribute nothing —
+  # Builds %{id => stance} for citations carrying a NON-default stance.
+  # Bare-id and relies_on citations contribute nothing —
   # the reader defaults any absent id to relies_on — so meta stays unchanged for
   # all existing flat-citation entries (backward compatible).
   defp extract_citation_stances(citations) do
@@ -639,7 +687,7 @@ defmodule Tracefield.Reference do
       id = citation_id(c)
       stance = citation_stance(c)
 
-      if is_binary(id) and id != "" and stance in ["refutes", "context"] do
+      if is_binary(id) and id != "" and stance != "relies_on" do
         Map.put(acc, id, stance)
       else
         acc
@@ -651,7 +699,21 @@ defmodule Tracefield.Reference do
   defp citation_stance(%{} = c), do: normalize_stance(Map.get(c, :stance, Map.get(c, "stance")))
   defp citation_stance(_), do: "relies_on"
 
-  defp normalize_stance(s) when s in ["relies_on", "refutes", "context"], do: s
+  defp normalize_stance(s)
+       when s in [
+              "relies_on",
+              "refutes",
+              "context",
+              "grounds",
+              "derives",
+              "realizes",
+              "verifies",
+              "corroborates",
+              "contradicts",
+              "supersedes"
+            ],
+       do: s
+
   defp normalize_stance(s) when is_atom(s) and not is_nil(s), do: normalize_stance(to_string(s))
   defp normalize_stance(_), do: "relies_on"
 
@@ -776,6 +838,121 @@ defmodule Tracefield.Reference do
     Enum.filter(new_entries, fn entry ->
       Map.get(old_statuses, entry.id) != entry.status
     end)
+  end
+
+  defp typed_closure_effects(entries, id, spec) do
+    by_id = Map.new(entries, &{entry_id(&1), &1})
+
+    active_ids =
+      MapSet.new(for entry <- entries, entry_status(entry) == :active, do: entry_id(entry))
+
+    reverse = reverse_citation_index(entries)
+    do_typed_closure([to_string(id)], reverse, active_ids, by_id, spec, MapSet.new(), [])
+  end
+
+  defp do_typed_closure([], _reverse, _active_ids, _by_id, _spec, _seen_edges, effects) do
+    Enum.reverse(effects)
+  end
+
+  defp do_typed_closure([from_id | rest], reverse, active_ids, by_id, spec, seen_edges, effects) do
+    {next_frontier, seen_edges, effects} =
+      reverse
+      |> Map.get(from_id, [])
+      |> Enum.filter(&MapSet.member?(active_ids, &1))
+      |> Enum.reduce({[], seen_edges, effects}, fn citing_id, {frontier, seen_edges, effects} ->
+        entry = Map.fetch!(by_id, citing_id)
+        stance = citation_stance_for(entry, from_id)
+        edge_key = {from_id, citing_id, stance}
+
+        cond do
+          MapSet.member?(seen_edges, edge_key) ->
+            {frontier, seen_edges, effects}
+
+          is_nil(ProcessSpec.closure_action(spec, stance)) ->
+            {frontier, MapSet.put(seen_edges, edge_key), effects}
+
+          true ->
+            action = ProcessSpec.closure_action(spec, stance)
+
+            effect = %{
+              id: citing_id,
+              from: from_id,
+              stance: normalize_effect_label(stance),
+              action: normalize_effect_label(action)
+            }
+
+            frontier =
+              if action == :invalidate do
+                [citing_id | frontier]
+              else
+                frontier
+              end
+
+            {frontier, MapSet.put(seen_edges, edge_key), [effect | effects]}
+        end
+      end)
+
+    do_typed_closure(
+      rest ++ Enum.reverse(next_frontier),
+      reverse,
+      active_ids,
+      by_id,
+      spec,
+      seen_edges,
+      effects
+    )
+  end
+
+  defp citation_stance_for(entry, cited_id) do
+    entry.meta
+    |> entry_value(:citation_stances, %{})
+    |> case do
+      %{} = stances -> Map.get(stances, cited_id, Map.get(stances, to_string(cited_id)))
+      _other -> nil
+    end
+    |> case do
+      nil -> "relies_on"
+      stance -> normalize_stance(stance)
+    end
+  end
+
+  defp apply_typed_effects(%Entry{} = entry, effects) do
+    status =
+      if Enum.any?(effects, &(&1.action == :invalidate)),
+        do: :superseded,
+        else: entry.status
+
+    %{entry | status: status, meta: append_typed_effects(entry.meta, effects)}
+  end
+
+  defp append_typed_effects(meta, effects) do
+    existing = entry_value(meta, :typed_closure, []) |> List.wrap()
+
+    meta
+    |> normalize_meta()
+    |> Map.put(:typed_closure, existing ++ effects)
+  end
+
+  defp normalize_effect_label(value) when is_atom(value), do: value
+  defp normalize_effect_label(value) when is_binary(value), do: value
+
+  defp typed_retraction_result(existing, effects, entries) do
+    by_id = Map.new(entries, &{&1.id, &1})
+
+    grouped =
+      effects
+      |> Enum.group_by(& &1.action, fn effect -> Map.fetch!(by_id, effect.id) end)
+      |> Map.new(fn {action, entries} -> {action, Enum.uniq_by(entries, & &1.id)} end)
+
+    %{
+      retracted: existing && Map.get(by_id, existing.id),
+      effects: effects,
+      isolated: Map.get(grouped, :invalidate, []),
+      reopened: Map.get(grouped, :reopen, []),
+      replaced: Map.get(grouped, :replace, []),
+      flagged: Map.get(grouped, :flag, []),
+      weakened: Map.get(grouped, :weaken, [])
+    }
   end
 
   defp notify_status_changes(_state, []), do: :ok
