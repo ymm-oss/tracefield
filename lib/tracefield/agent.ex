@@ -275,13 +275,13 @@ defmodule Tracefield.Agent do
       end
     end
 
-    @system_json_example ~S({"entries":[{"type":"belief","text":"...","citations":["e1"]}]})
+    @system_json_example ~S({"entries":[{"type":"belief","text":"...","citations":[{"id":"e1","stance":"relies_on"}]}]})
 
     defp system_prompt(state) do
       json_example = json_example_for(state.expected_types)
       types_hint = expected_types_hint(state.expected_types)
 
-      "TRACEFIELD_AGENT_TURN\n#{situation_preamble(state)}Return only JSON #{json_example}.#{types_hint} At most 2 entries. Citations must use presented ids only. If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
+      "TRACEFIELD_AGENT_TURN\n#{situation_preamble(state)}Return only JSON #{json_example}.#{types_hint} At most 2 entries. Citations must use presented ids only. Each citation is an object {\"id\",\"stance\"}; stance is relies_on (your claim depends on that entry being true), refutes (you argue against it), or context (mere reference). If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
     end
 
     defp json_example_for(nil), do: @system_json_example
@@ -572,20 +572,20 @@ defmodule Tracefield.Agent do
           entry
           |> Map.get("citations", Map.get(entry, :citations, []))
           |> List.wrap()
-          |> Enum.map(&to_string/1)
-          |> Enum.filter(
-            &allowed_citation?(
-              &1,
+          |> Enum.map(&citation_with_stance/1)
+          |> Enum.filter(fn c ->
+            allowed_citation?(
+              c.id,
               presented_ids,
               reference_doc_ids,
               procedure,
               territory_contract_id
             )
-          )
+          end)
           |> append_procedure_id(procedure, state.adapter)
           |> append_territory_contract_id(territory_contract_id, state.adapter)
           |> append_recruit_id(state.recruit_id, state.adapter)
-          |> Enum.uniq(),
+          |> Enum.uniq_by(& &1.id),
         meta: %{domain: state.domain, round: round}
       }
     end
@@ -598,9 +598,30 @@ defmodule Tracefield.Agent do
         (not is_nil(territory_contract_id) and id == territory_contract_id)
     end
 
+    # Normalize a raw model citation (bare id string or %{"id","stance"}) into a
+    # %{id, stance} map. Reference splits this back into a flat id + meta.stance.
+    defp citation_with_stance(c) when is_binary(c) or is_atom(c) or is_integer(c),
+      do: %{id: to_string(c), stance: "relies_on"}
+
+    defp citation_with_stance(%{} = c) do
+      id = c |> Map.get("id", Map.get(c, :id, "")) |> to_string()
+      stance = c |> Map.get("stance", Map.get(c, :stance, "relies_on")) |> normalize_cite_stance()
+      %{id: id, stance: stance}
+    end
+
+    defp citation_with_stance(_), do: %{id: "", stance: "relies_on"}
+
+    defp normalize_cite_stance(s) when s in ["relies_on", "refutes", "context"], do: s
+    defp normalize_cite_stance(s) when is_atom(s) and not is_nil(s), do: normalize_cite_stance(to_string(s))
+    defp normalize_cite_stance(_), do: "relies_on"
+
+    # Auto-appended ids (procedure/territory/recruit) are references, not factual
+    # dependencies, so they carry stance "context".
     defp append_procedure_id(citations, _procedure, Tracefield.LLM.Human), do: citations
     defp append_procedure_id(citations, nil, _adapter), do: citations
-    defp append_procedure_id(citations, procedure, _adapter), do: citations ++ [procedure.id]
+
+    defp append_procedure_id(citations, procedure, _adapter),
+      do: citations ++ [%{id: procedure.id, stance: "context"}]
 
     defp append_territory_contract_id(citations, _territory_contract_id, Tracefield.LLM.Human),
       do: citations
@@ -608,16 +629,18 @@ defmodule Tracefield.Agent do
     defp append_territory_contract_id(citations, nil, _adapter), do: citations
 
     defp append_territory_contract_id(citations, territory_contract_id, _adapter) do
-      if territory_contract_id in citations,
+      if Enum.any?(citations, &(&1.id == territory_contract_id)),
         do: citations,
-        else: citations ++ [territory_contract_id]
+        else: citations ++ [%{id: territory_contract_id, stance: "context"}]
     end
 
     defp append_recruit_id(citations, _recruit_id, Tracefield.LLM.Human), do: citations
     defp append_recruit_id(citations, nil, _adapter), do: citations
 
     defp append_recruit_id(citations, recruit_id, _adapter) do
-      if recruit_id in citations, do: citations, else: citations ++ [recruit_id]
+      if Enum.any?(citations, &(&1.id == recruit_id)),
+        do: citations,
+        else: citations ++ [%{id: recruit_id, stance: "context"}]
     end
 
     defp decode_json_object(content) do
