@@ -26,6 +26,11 @@ defmodule Mix.Tasks.Tracefield.Consult do
   near-duplicate findings by embedding cosine and keeps one representative per
   cluster (best-of-N pools paraphrases of the same idea). Merged findings show
   `(×N merged)` and union their citations; all entries stay governable.
+
+  `--serve-breadth N` (default 1) makes each deliberation turn issue N
+  diversified serve queries (base + cross-domain-gap + counterexample angles)
+  and union the retrieved entries — a retrieval-breadth lever against the
+  documented synthesis ceiling (synth only connects what was retrieved).
   """
   use Mix.Task
 
@@ -54,6 +59,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
           novelty_doc: :string,
           dedupe: :boolean,
           dedupe_threshold: :float,
+          serve_breadth: :integer,
           adapter: :string,
           model: :string
         ]
@@ -74,7 +80,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
         novelty: Keyword.get(opts, :novelty, false),
         novelty_doc: Keyword.get(opts, :novelty_doc),
         dedupe: Keyword.get(opts, :dedupe, false),
-        dedupe_threshold: Keyword.get(opts, :dedupe_threshold)
+        dedupe_threshold: Keyword.get(opts, :dedupe_threshold),
+        serve_breadth: Keyword.get(opts, :serve_breadth, 1)
       )
 
     print(result)
@@ -113,6 +120,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
           adapter: adapter,
           model: model,
           serve_policy: :diverse,
+          serve_breadth: Keyword.get(opts, :serve_breadth, 1),
           aware: true,
           seed: 2000 + index
         )

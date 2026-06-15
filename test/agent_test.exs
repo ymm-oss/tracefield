@@ -871,4 +871,46 @@ defmodule Tracefield.AgentTest do
       }
     }
   end
+
+  defmodule EmptyEntriesMock do
+    @behaviour Tracefield.LLM
+    @impl true
+    def complete(_messages, _opts), do: {:ok, Jason.encode!(%{entries: []})}
+  end
+
+  test "serve_breadth default 1 issues a single serve query (prose unchanged)" do
+    {:ok, ref} = Reference.start_link(embed_adapter: Tracefield.Embed.Mock)
+
+    agent =
+      Agent.new("SEC", "security", "sec",
+        anchor: "task anchor",
+        adapter: EmptyEntriesMock,
+        k_s: 2
+      )
+
+    {_agent, _absorbed, perception} = Agent.run_turn(agent, ref, 1)
+
+    assert perception.served_queries == ["task anchor\nsecurity"]
+  end
+
+  test "serve_breadth > 1 issues multiple diversified serve queries (prose multi-query)" do
+    {:ok, ref} = Reference.start_link(embed_adapter: Tracefield.Embed.Mock)
+    Reference.absorb(ref, [%{type: :belief, text: "peer fact about data retention"}], "OTHER")
+
+    agent =
+      Agent.new("SEC", "security", "sec",
+        anchor: "task anchor",
+        adapter: EmptyEntriesMock,
+        serve_policy: :diverse,
+        serve_breadth: 3,
+        k_s: 2
+      )
+
+    {_agent, _absorbed, perception} = Agent.run_turn(agent, ref, 1)
+
+    assert length(perception.served_queries) == 3
+    assert hd(perception.served_queries) == "task anchor\nsecurity"
+    assert Enum.any?(perception.served_queries, &String.contains?(&1, "他領域"))
+    assert Enum.any?(perception.served_queries, &String.contains?(&1, "反例"))
+  end
 end
