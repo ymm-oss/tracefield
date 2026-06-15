@@ -42,12 +42,23 @@ defmodule Tracefield.Synthesis do
       (defaults: CLI with `:synth_model`)
     * `:novelty_complete` — `fun(prompt)` returning `{:ok, content}`
       (dependency-injection seam for deterministic tests)
+    * `:dedupe` — when `true`, cluster near-duplicate findings by embedding
+      cosine and keep one representative per cluster (default `false`)
+    * `:dedupe_threshold` — cosine threshold for clustering (default `0.85`)
 
   Returns `%{findings: [...], synth_entry_ids: [...], dropped_citations: [...],
   sample_count: n}` where each finding is `%{id, text, citations, verified}`.
   When the novelty gate ran, also returns `novelty_checked: true`,
   `novel_findings: [id]`, `shipped_findings: [id]`, and each finding carries
-  `:novelty` (`%{shipped: bool, reason: String.t()}`).
+  `:novelty` (`%{shipped: bool, reason: String.t()}`). When `:dedupe` ran, also
+  returns `dedupe_input` / `dedupe_clusters` and each finding carries
+  `:cluster_size` and `:cluster_member_ids`. If the judge call/parse
+  failed wholesale, every finding is kept (conservative) with
+  `reason: "judge-unparsed"` and `novelty_error: reason` is set — so an
+  all-novel result caused by a judge failure is distinguishable from a genuine
+  all-novel verdict. If the judge returned a valid map but omitted some ids,
+  those carry `reason: "judge-omitted"` and their ids are listed in
+  `novelty_omitted`.
   """
   @spec run(GenServer.server(), [map()], keyword()) :: map()
   def run(reference, layer0_entries, opts \\ []) do
@@ -78,9 +89,13 @@ defmodule Tracefield.Synthesis do
 
     findings =
       Enum.map(synth_entries, fn e ->
-        %{id: e.id, text: e.text, citations: e.citations, verified: true}
+        %{id: e.id, text: e.text, citations: e.citations, verified: true, embedding: e.embedding}
       end)
 
+    # Dedup BEFORE novelty: best-of-N pools paraphrases of the same idea
+    # (uniq_by/text only collapses byte-identical text). Collapsing near-dupes
+    # first also means fewer novelty-judge inputs.
+    {findings, dedupe_summary} = maybe_dedupe(findings, opts)
     {findings, novelty_summary} = annotate_novelty(findings, opts)
 
     Map.merge(
@@ -90,8 +105,58 @@ defmodule Tracefield.Synthesis do
         dropped_citations: dropped,
         sample_count: n
       },
-      novelty_summary
+      Map.merge(dedupe_summary, novelty_summary)
     )
+  end
+
+  # --- semantic dedup / consensus ---
+  #
+  # best-of-N pools N samples; after byte-exact uniq the survivors still include
+  # paraphrases of the same finding. Cluster them by embedding cosine and keep one
+  # representative per cluster (the longest text), unioning the cluster's
+  # citations. Opt-in (`:dedupe`, default off). ALL synth entries stay in the
+  # store (synth_entry_ids is complete) so retraction governance is unchanged —
+  # dedup only shapes the served `findings` view. Degrades to a no-op when
+  # embeddings are absent (never merges on a missing/empty vector).
+
+  defp maybe_dedupe(findings, opts) do
+    if Keyword.get(opts, :dedupe, false) do
+      threshold = Keyword.get(opts, :dedupe_threshold, 0.85)
+      clusters = cluster_findings(findings, threshold)
+
+      {Enum.map(clusters, &merge_cluster/1),
+       %{dedupe_input: length(findings), dedupe_clusters: length(clusters)}}
+    else
+      {Enum.map(findings, &Map.delete(&1, :embedding)), %{}}
+    end
+  end
+
+  defp cluster_findings(findings, threshold) do
+    Enum.reduce(findings, [], fn f, clusters ->
+      case Enum.find_index(clusters, fn [rep | _] -> similar?(f, rep, threshold) end) do
+        nil -> clusters ++ [[f]]
+        idx -> List.update_at(clusters, idx, &(&1 ++ [f]))
+      end
+    end)
+  end
+
+  defp similar?(a, b, threshold) do
+    ea = Map.get(a, :embedding)
+    eb = Map.get(b, :embedding)
+
+    is_list(ea) and is_list(eb) and ea != [] and eb != [] and
+      Tracefield.Embed.cosine(ea, eb) >= threshold
+  end
+
+  defp merge_cluster(members) do
+    rep = Enum.max_by(members, &String.length(&1.text))
+    citations = members |> Enum.flat_map(& &1.citations) |> Enum.uniq()
+
+    rep
+    |> Map.put(:citations, citations)
+    |> Map.put(:cluster_size, length(members))
+    |> Map.put(:cluster_member_ids, Enum.map(members, & &1.id))
+    |> Map.delete(:embedding)
   end
 
   # --- ensemble sampling ---
@@ -195,37 +260,73 @@ defmodule Tracefield.Synthesis do
 
     if Keyword.get(opts, :novelty_check, false) and is_binary(ground_truth) and
          ground_truth != "" and findings != [] do
-      verdicts = judge_novelty(findings, ground_truth, opts)
+      case judge_novelty(findings, ground_truth, opts) do
+        {:ok, verdicts} ->
+          # Some ids may be missing from an otherwise-valid verdict map (the judge
+          # silently omitted them). Mark those distinctly so "novel because judged
+          # novel" is never confused with "novel because the judge skipped it".
+          {annotated, omitted} =
+            Enum.map_reduce(findings, [], fn f, omitted ->
+              case Map.fetch(verdicts, f.id) do
+                {:ok, v} ->
+                  {Map.put(f, :novelty, v), omitted}
 
-      annotated =
-        Enum.map(findings, fn f ->
-          Map.put(f, :novelty, Map.get(verdicts, f.id, %{shipped: false, reason: ""}))
-        end)
+                :error ->
+                  {Map.put(f, :novelty, %{shipped: false, reason: "judge-omitted"}),
+                   [f.id | omitted]}
+              end
+            end)
 
-      {novel, shipped} = Enum.split_with(annotated, &(not &1.novelty.shipped))
+          {novel, shipped} = Enum.split_with(annotated, &(not &1.novelty.shipped))
 
-      {annotated,
-       %{
-         novelty_checked: true,
-         novel_findings: Enum.map(novel, & &1.id),
-         shipped_findings: Enum.map(shipped, & &1.id)
-       }}
+          summary =
+            %{
+              novelty_checked: true,
+              novel_findings: Enum.map(novel, & &1.id),
+              shipped_findings: Enum.map(shipped, & &1.id)
+            }
+            |> maybe_put_summary(:novelty_omitted, Enum.reverse(omitted))
+
+          {annotated, summary}
+
+        {:error, reason} ->
+          # The judge call/parse failed wholesale. Keep every finding (conservative)
+          # but flag it so the caller can tell this is NOT a real all-novel verdict.
+          annotated =
+            Enum.map(
+              findings,
+              &Map.put(&1, :novelty, %{shipped: false, reason: "judge-unparsed"})
+            )
+
+          {annotated,
+           %{
+             novelty_checked: true,
+             novel_findings: Enum.map(annotated, & &1.id),
+             shipped_findings: [],
+             novelty_error: reason
+           }}
+      end
     else
       {findings, %{}}
     end
   end
 
+  defp maybe_put_summary(summary, _key, []), do: summary
+  defp maybe_put_summary(summary, key, value), do: Map.put(summary, key, value)
+
   defp judge_novelty(findings, ground_truth, opts) do
     numbered = Enum.map(findings, &%{"id" => &1.id, "text" => &1.text})
     prompt = novelty_prompt(ground_truth, numbered)
 
-    content =
-      case novelty_complete(prompt, opts) do
-        {:ok, c} -> c
-        _ -> ""
-      end
-
-    parse_novelty(content)
+    with {:ok, content} <- novelty_complete(prompt, opts),
+         true <- is_binary(content) and content != "",
+         {:ok, %{} = decoded} <- decode_object(content) do
+      {:ok, parse_verdicts(decoded)}
+    else
+      false -> {:error, :empty}
+      {:error, _} = err -> err
+      _ -> {:error, :unparsed}
+    end
   end
 
   defp novelty_complete(prompt, opts) do
@@ -264,28 +365,22 @@ defmodule Tracefield.Synthesis do
     |> String.trim()
   end
 
-  defp parse_novelty(content) do
-    case decode_object(content) do
-      {:ok, %{} = decoded} ->
-        decoded
-        |> Enum.flat_map(fn
-          {id, %{} = v} when is_binary(id) ->
-            [
-              {id,
-               %{
-                 shipped: truthy(Map.get(v, "shipped")),
-                 reason: to_string(Map.get(v, "reason", ""))
-               }}
-            ]
-
-          _ ->
-            []
-        end)
-        |> Map.new()
+  defp parse_verdicts(decoded) do
+    decoded
+    |> Enum.flat_map(fn
+      {id, %{} = v} when is_binary(id) ->
+        [
+          {id,
+           %{
+             shipped: truthy(Map.get(v, "shipped")),
+             reason: to_string(Map.get(v, "reason", ""))
+           }}
+        ]
 
       _ ->
-        %{}
-    end
+        []
+    end)
+    |> Map.new()
   end
 
   defp truthy(true), do: true
