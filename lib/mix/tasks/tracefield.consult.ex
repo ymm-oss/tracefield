@@ -12,8 +12,15 @@ defmodule Mix.Tasks.Tracefield.Consult do
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi --no-synth
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi --synth-n 5 --synth-model claude-opus-4-8-medium
+      mix tracefield.consult --scenario-dir scenarios/fsl-brushup --novelty --novelty-doc ../fsl/CHANGELOG.md
 
   best-of-N synth calls a strong model N times (cost/latency scales with N).
+
+  `--novelty` (with `--novelty-doc <path>`) adds the novelty gate: after the
+  grounding gate, each finding is judged against the ground-truth doc and
+  findings already covered by it are tagged `[SHIPPED]`. This stops the synthesis
+  layer from confidently re-proposing already-done work (the grounding gate only
+  checks that citations support a claim, not that the claim is still open).
   """
   use Mix.Task
 
@@ -38,6 +45,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
           synth: :boolean,
           synth_model: :string,
           synth_n: :integer,
+          novelty: :boolean,
+          novelty_doc: :string,
           adapter: :string,
           model: :string
         ]
@@ -54,7 +63,9 @@ defmodule Mix.Tasks.Tracefield.Consult do
         rounds: Keyword.get(opts, :rounds, @default_rounds),
         synth: Keyword.get(opts, :synth, true),
         synth_model: Keyword.get(opts, :synth_model, @default_synth_model),
-        synth_n: Keyword.get(opts, :synth_n, @default_synth_n)
+        synth_n: Keyword.get(opts, :synth_n, @default_synth_n),
+        novelty: Keyword.get(opts, :novelty, false),
+        novelty_doc: Keyword.get(opts, :novelty_doc)
       )
 
     print(result)
@@ -145,6 +156,56 @@ defmodule Mix.Tasks.Tracefield.Consult do
         )
     ]
     |> maybe_put(:synth_complete, Keyword.get(opts, :synth_complete))
+    |> Keyword.merge(novelty_opts(opts, synth_model))
+  end
+
+  # Novelty gate (opt-in): judge each grounded finding against a ground-truth
+  # corpus so the synthesis layer does not re-propose already-shipped work. Uses
+  # the same strong cursor-agent model as synth/verify for the judge.
+  defp novelty_opts(opts, synth_model) do
+    if Keyword.get(opts, :novelty, false) do
+      ground_truth =
+        case Keyword.get(opts, :ground_truth) do
+          gt when is_binary(gt) -> gt
+          _ -> read_novelty_doc(Keyword.get(opts, :novelty_doc))
+        end
+
+      base = [novelty_check: true, ground_truth: ground_truth]
+
+      base
+      |> maybe_put(:novelty_complete, Keyword.get(opts, :novelty_complete))
+      |> then(fn kw ->
+        if Keyword.has_key?(kw, :novelty_complete) do
+          kw
+        else
+          kw
+          |> Keyword.put(
+            :novelty_adapter,
+            Keyword.get(opts, :novelty_adapter, Tracefield.LLM.CLI)
+          )
+          |> Keyword.put(:novelty_model, Keyword.get(opts, :novelty_model, synth_model))
+          |> Keyword.put(
+            :novelty_cli,
+            Keyword.get(
+              opts,
+              :novelty_cli,
+              {"cursor-agent", ["-p", "--output-format", "text", "--model", synth_model]}
+            )
+          )
+        end
+      end)
+    else
+      []
+    end
+  end
+
+  defp read_novelty_doc(nil), do: ""
+
+  defp read_novelty_doc(path) when is_binary(path) do
+    case File.read(path) do
+      {:ok, content} -> content
+      {:error, _} -> Mix.raise("--novelty-doc not readable: #{path}")
+    end
   end
 
   defp maybe_put(kw, _key, nil), do: kw
@@ -171,8 +232,20 @@ defmodule Mix.Tasks.Tracefield.Consult do
           "synth findings: #{length(synth.findings)} (samples=#{synth.sample_count})"
         )
 
+        if Map.get(synth, :novelty_checked) do
+          Mix.shell().info(
+            "novelty: #{length(synth.novel_findings)} novel, #{length(synth.shipped_findings)} already-shipped"
+          )
+        end
+
         Enum.each(synth.findings, fn f ->
-          Mix.shell().info("- [#{f.id}] cites=#{inspect(f.citations)}")
+          tag =
+            case Map.get(f, :novelty) do
+              %{shipped: true} -> " [SHIPPED]"
+              _ -> ""
+            end
+
+          Mix.shell().info("- [#{f.id}]#{tag} cites=#{inspect(f.citations)}")
           Mix.shell().info("  #{f.text}")
         end)
 
@@ -193,7 +266,10 @@ defmodule Mix.Tasks.Tracefield.Consult do
           %{
             findings: result.synthesis.findings,
             dropped_citations: result.synthesis.dropped_citations,
-            sample_count: result.synthesis.sample_count
+            sample_count: result.synthesis.sample_count,
+            novelty_checked: Map.get(result.synthesis, :novelty_checked, false),
+            novel_findings: Map.get(result.synthesis, :novel_findings, []),
+            shipped_findings: Map.get(result.synthesis, :shipped_findings, [])
           },
       layer0_index: result.layer0_index
     }
