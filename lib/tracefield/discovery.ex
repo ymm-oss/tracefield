@@ -24,13 +24,30 @@ defmodule Tracefield.Discovery do
     }
   ]
 
-  def interactions, do: @interactions
+  # H2 higher-ceiling set: the original 3 + 7 more cross-agent contradiction
+  # pairs (10 total), to measure best-of-N synth's true effect above the 3-item
+  # ceiling that saturated H5b. Each pair's two keywords live in DIFFERENT agents'
+  # private docs (scenarios/enterprise-hi), so discovery requires connecting them.
+  @interactions_hi @interactions ++
+                     [
+                       %{id: "I4", fact_a: "MFA/SSO を強制する", fact_b: "採用促進のため摩擦ゼロのログインにする", keywords: ["mfa-required", "frictionless-login"]},
+                       %{id: "I5", fact_a: "保存時 AES-256 で暗号化する", fact_b: "高速化のため平文でキャッシュする", keywords: ["encrypt-at-rest", "plaintext-cache"]},
+                       %{id: "I6", fact_a: "推薦には根拠表示が必須", fact_b: "即時性優先で根拠生成を省略する", keywords: ["source-required", "instant-no-source"]},
+                       %{id: "I7", fact_a: "WCAG 2.2 AA に準拠する", fact_b: "Q4 死守でアクセシビリティは後回し", keywords: ["wcag-aa", "a11y-later"]},
+                       %{id: "I8", fact_a: "明示的オプトインを取る", fact_b: "全社員を自動でオンボーディングする", keywords: ["consent-optin", "auto-enroll"]},
+                       %{id: "I9", fact_a: "データ最小化を徹底する", fact_b: "学び最大化のため全ログを収集する", keywords: ["data-minimize", "collect-all"]},
+                       %{id: "I10", fact_a: "重要判断は人間がレビューする", fact_b: "高速化のため推薦を自動実行する", keywords: ["human-review", "auto-act"]}
+                     ]
 
-  def strict_score(entries) do
+  def interactions, do: @interactions
+  def interactions(:default), do: @interactions
+  def interactions(:hi), do: @interactions_hi
+
+  def strict_score(entries, interactions \\ @interactions) do
     entries = List.wrap(entries)
 
     per_interaction =
-      @interactions
+      interactions
       |> Map.new(fn interaction ->
         {interaction.id, strict_discovered?(entries, interaction.keywords)}
       end)
@@ -50,15 +67,16 @@ defmodule Tracefield.Discovery do
 
   def score(entries, opts \\ []) do
     entries = List.wrap(entries)
+    interactions = Keyword.get(opts, :interactions, @interactions)
 
     judgments =
       case entries do
         [] -> %{}
-        _ -> judge(entries, opts)
+        _ -> judge(entries, interactions, opts)
       end
 
     per_interaction =
-      @interactions
+      interactions
       |> Enum.with_index(1)
       |> Map.new(fn {interaction, index} ->
         value = discovered?(judgments, interaction.id, index)
@@ -85,7 +103,7 @@ defmodule Tracefield.Discovery do
     end)
   end
 
-  defp judge(entries, opts) do
+  defp judge(entries, interactions, opts) do
     adapter =
       Keyword.get(opts, :judge_adapter, Keyword.get(opts, :adapter, Tracefield.LLM.Mock))
 
@@ -103,7 +121,7 @@ defmodule Tracefield.Discovery do
           Enum.join(
             [
               "INTERACTIONS:",
-              format_interactions(),
+              format_interactions(interactions),
               "",
               "ENTRIES:",
               format_entries(entries)
@@ -126,8 +144,8 @@ defmodule Tracefield.Discovery do
     end
   end
 
-  defp format_interactions do
-    @interactions
+  defp format_interactions(interactions) do
+    interactions
     |> Enum.with_index(1)
     |> Enum.map_join("\n", fn {interaction, index} ->
       [kw_a, kw_b] = interaction.keywords
