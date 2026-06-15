@@ -34,6 +34,7 @@ defmodule Tracefield.Agent do
         recruit_id: [type: :string, default: nil],
         aware: [type: :boolean, default: false],
         serve_policy: [type: :any, default: :similar],
+        serve_breadth: [type: :integer, default: 1],
         entry_limit: [type: :integer, default: 2],
         expected_types: [type: :any, default: nil],
         territory: [type: :any, default: nil],
@@ -78,15 +79,25 @@ defmodule Tracefield.Agent do
     end
 
     defp run_prose(reference, round, state, note) do
-      query_text = query(state)
+      queries = serve_queries(state)
+      query_text = hd(queries)
 
+      # Multi-query serve (serve_breadth > 1): the documented retrieval ceiling
+      # (H2 synth ~5-6/10) is upstream of synthesis — synth only connects facts
+      # that surfaced. A single serve per turn under-retrieves; issuing several
+      # diversified queries and unioning (dedup by id) raises retrieval breadth.
+      # serve_breadth defaults to 1 → byte-identical to the prior single serve.
       served =
-        Tracefield.Reference.serve(reference, query_text,
-          k: max(state.k_s, 0),
-          exclude_author: state.id,
-          exclude_types: [:procedure, :territory_contract],
-          policy: state.serve_policy
-        )
+        queries
+        |> Enum.flat_map(fn q ->
+          Tracefield.Reference.serve(reference, q,
+            k: max(state.k_s, 0),
+            exclude_author: state.id,
+            exclude_types: [:procedure, :territory_contract],
+            policy: state.serve_policy
+          )
+        end)
+        |> Enum.uniq_by(& &1.id)
 
       {retrieved, sharing_meta} = apply_sharing_filter(served, state, round)
 
@@ -94,7 +105,13 @@ defmodule Tracefield.Agent do
       presented_ids = MapSet.new(Enum.map(retrieved, & &1.id))
       reference_doc_ids = MapSet.new(Enum.map(state.reference_docs, &doc_id/1))
       prompt = build_prompt(reference, state, round, retrieved, procedure, note, query_text)
-      perception = perception_log(query_text, retrieved, prompt, sharing_meta)
+
+      # Record served_queries in prose too (was tool-mode only) so serve↔finding
+      # retrieval provenance is preserved (brushup③ prerequisite).
+      perception =
+        query_text
+        |> perception_log(retrieved, prompt, sharing_meta)
+        |> Map.put(:served_queries, queries)
 
       entries =
         prompt.messages
@@ -167,6 +184,22 @@ defmodule Tracefield.Agent do
     end
 
     defp query(state), do: Enum.join([state.anchor, state.domain], "\n")
+
+    # Diversified serve queries for multi-query retrieval. breadth 1 = the single
+    # base query (unchanged). Higher breadth adds generic cross-domain / gap
+    # angles (no peer knowledge needed) to surface counterpart facts a single
+    # similarity query misses — the §14 "fill the complement" framing as retrieval.
+    defp serve_queries(state) do
+      breadth = max(state.serve_breadth || 1, 1)
+      base = query(state)
+
+      [
+        base,
+        Enum.join([state.anchor, "他領域との矛盾・依存・境界・未カバーの相互作用"], "\n"),
+        Enum.join([state.domain, "反例・トレードオフ・見落とされやすい観点"], "\n")
+      ]
+      |> Enum.take(breadth)
+    end
 
     defp active_reference_docs(reference, fallback_docs) do
       entries = Tracefield.Reference.all(reference)
@@ -954,6 +987,7 @@ defmodule Tracefield.Agent do
           recruit_id: Keyword.get(opts, :recruit_id),
           aware: Keyword.get(opts, :aware, false),
           serve_policy: Keyword.get(opts, :serve_policy, :similar),
+          serve_breadth: Keyword.get(opts, :serve_breadth, 1),
           entry_limit: Keyword.get(opts, :entry_limit, 2),
           expected_types: normalize_expected_types(Keyword.get(opts, :expected_types)),
           territory: Keyword.get(opts, :territory),
