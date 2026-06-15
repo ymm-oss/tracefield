@@ -138,3 +138,30 @@ synthesizer の出力が **来歴（citation）付きで store に積まれ、la
   - **修正（H4 を合成層へ）**: 接地ゲート ── synth の発見が引用してよい layer-0 は「**その発見が実際に使う植え込みキーワードを含む entry**」だけ（決定的、lenient な LLM 判定より厳格）。
   - **結果**: citation verify **16/16**、撤回隔離は **precise（隔離 = 真に依存する発見のみ）**、disc は不変（accuracy 無劣化）。**C5 の過剰連結（§6a）が合成層でも解消**。
 - **教訓**: 多層化は **発見の質は劣化させない**が、**統治の精度は放置すると過剰連結を再導入**する ── agents と同じ H4（接地ゲート）を合成層にも適用して解消。自動の lenient 指標は劣化を見逃すので**精読＋strict/judge 二重スコアの監査が要る**。
+
+---
+
+## 外部検証 — OpenRouter 公開記事「Fusion beats Frontier」(2026-06)
+
+本セッションは Fusion を**分析（self-fusion +6.7 の含意）**から tracefield に移植したが、その後 OpenRouter が DRACO ベンチの**実数を公開**（<https://openrouter.ai/blog/announcements/fusion-beats-frontier/>）→ 我々が前提に置いた数字が公開データで裏づけられた。
+
+**DRACO Deep Research（100タスク・10ドメイン・~39加重基準、judge=Gemini 3.1 Pro Preview）**:
+| 構成 | スコア | 種別 |
+| --- | --- | --- |
+| Fable 5 + GPT-5.5 | **69.0** | hetero panel（最高）|
+| Opus 4.8 + GPT-5.5 + Gemini 3.1 Pro | 68.3 | hetero 3-way |
+| **Opus 4.8 ＋ Opus 4.8（self-fusion）** | **65.5** | **homo（diversity ゼロ）** |
+| Fable 5（solo） | 65.3 | solo |
+| 予算パネル（Gemini 3 Flash + Kimi K2.6 + DeepSeek V4 Pro）| 64.7 | hetero（Fable 並・コスト 50%）|
+| DeepSeek V4 Pro / GPT-5.5 / Opus 4.8（solo）| 60.3 / 60.0 / 58.8 | solo |
+
+### 我々の読みとの一致 — かつ記事が出せていない対照を tracefield が埋めた
+- **self-fusion = +6.7（58.8→65.5、Opus を二重化＋judge＋synth、diversity ゼロ）** ＝ 我々が前提に置いた数字と**完全一致**。記事中で**最大級の単独ジャンプが「混ぜない」構成から出ている**。
+- 一方、記事の散文は "model diversity yields superior results" と**異質性**を主因に挙げる。だが**綺麗な統制比較は self-fusion だけ**で、**異質性の純増分は分離されていない**（hetero 最高 69.0 は base が強い Fable 起点＝ Fable solo 65.3 比 +3.7 だが、これは異質性とベースモデル強度が交絡。Fable+Fable の self-fusion 値が無く diversity 単独効果は測れない）。
+- → **tracefield の H1/H1b はこの欠けた対照そのもの**: 構造を揃えて homo vs hetero を単離 → **異質性の純増分 ≈ 0/負**。記事と矛盾せず、**記事が出していない統制実験を供給**して「効くのは構造（並列サンプル＋統合）であって異質性ではない」を確定させる。
+
+### 記事に無く tracefield に在るもの（守り・統治）
+記事は **panel→judge→synth の精度**のみ。**来歴・citation・撤回・接地・多層/再帰は一切記述なし**（stateless 合成）。tracefield の H4（接地）・H6（統治可能な合成・越境撤回）は **Fusion の上に乗る純粋な追加価値**＝ reinvention でない。
+
+### 結論（更新なし・補強）
+セッション総括「混ぜる✗ ／ 1回統合△ ／ 並列サンプル＋統合◯」は**公開実数で追認**。tracefield の立ち位置＝ **Fusion の精度機構（並列サンプル＋統合）を、Fusion が持たない来歴・撤回・多層で包んだもの**、が一段固くなった。
