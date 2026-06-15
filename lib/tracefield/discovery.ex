@@ -67,15 +67,16 @@ defmodule Tracefield.Discovery do
 
   def score(entries, opts \\ []) do
     entries = List.wrap(entries)
+    interactions = Keyword.get(opts, :interactions, @interactions)
 
     judgments =
       case entries do
         [] -> %{}
-        _ -> judge(entries, opts)
+        _ -> judge(entries, interactions, opts)
       end
 
     per_interaction =
-      @interactions
+      interactions
       |> Enum.with_index(1)
       |> Map.new(fn {interaction, index} ->
         value = discovered?(judgments, interaction.id, index)
@@ -102,7 +103,7 @@ defmodule Tracefield.Discovery do
     end)
   end
 
-  defp judge(entries, opts) do
+  defp judge(entries, interactions, opts) do
     adapter =
       Keyword.get(opts, :judge_adapter, Keyword.get(opts, :adapter, Tracefield.LLM.Mock))
 
@@ -120,7 +121,7 @@ defmodule Tracefield.Discovery do
           Enum.join(
             [
               "INTERACTIONS:",
-              format_interactions(),
+              format_interactions(interactions),
               "",
               "ENTRIES:",
               format_entries(entries)
@@ -143,8 +144,8 @@ defmodule Tracefield.Discovery do
     end
   end
 
-  defp format_interactions do
-    @interactions
+  defp format_interactions(interactions) do
+    interactions
     |> Enum.with_index(1)
     |> Enum.map_join("\n", fn {interaction, index} ->
       [kw_a, kw_b] = interaction.keywords
