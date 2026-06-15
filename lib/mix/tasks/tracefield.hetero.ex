@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
   @moduledoc "Run the Tracefield heterogeneous private-document dose-response experiment."
   use Mix.Task
 
-  alias Tracefield.{Discovery, Dissolution, GroundTruth, Metrics, Scenario}
+  alias Tracefield.{CitationGrounding, Discovery, Dissolution, GroundTruth, Metrics, Scenario}
 
   @shortdoc "Run Tracefield private-document heterogeneity experiment"
   @contrast_procedure_text "対比手続き v1: PRESENTED ENTRIES の各項目を、あなたの PRIVATE DOCUMENT の\n各事実と突き合わせよ。矛盾・衝突する組があれば、必ず【両方の事実をかっこ内キーワードごと明記】し、\nその entry を引用して belief として書け。エコー（提示内容の言い換え）は書くな。"
@@ -56,6 +56,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     synth_model = Keyword.get(opts, :synth_model)
     synth_n = Keyword.get(opts, :synth_n, 1)
     multilayer = Keyword.get(opts, :multilayer, false)
+    deliberation = Keyword.get(opts, :deliberation, "prose")
+    tool_max_rounds = Keyword.get(opts, :tool_max_rounds, 4)
 
     scenario_dir = Keyword.get(opts, :scenario_dir) || "scenarios/enterprise-assistant"
 
@@ -112,7 +114,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           multilayer: multilayer,
           interactions: interactions,
           embed_model: embed_model,
-          temperature: temperature
+          temperature: temperature,
+          deliberation: deliberation,
+          tool_max_rounds: tool_max_rounds
         )
       end
 
@@ -154,6 +158,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           synth: :string,
           synth_n: :integer,
           multilayer: :boolean,
+          deliberation: :string,
+          tool_max_rounds: :integer,
           embed_model: :string,
           temperature: :float
         ],
@@ -179,6 +185,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       synth_model: Keyword.get(opts, :synth),
       synth_n: Keyword.get(opts, :synth_n),
       multilayer: Keyword.get(opts, :multilayer),
+      deliberation: Keyword.get(opts, :deliberation, "prose"),
+      tool_max_rounds: Keyword.get(opts, :tool_max_rounds, 4),
       scenario_dir: Keyword.get(opts, :scenario_dir),
       interactions: Keyword.get(opts, :interactions),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
@@ -202,6 +210,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     substrate_models = Keyword.get(opts, :substrate_models, %{})
     substrate_name = Keyword.get(opts, :substrate_name, model)
     judge_adapter = Keyword.get(opts, :judge_adapter, adapter)
+    deliberation = opts |> Keyword.get(:deliberation, "prose") |> normalize_deliberation()
+    tool_max_rounds = Keyword.get(opts, :tool_max_rounds, 4)
 
     {:ok, reference} =
       Tracefield.Reference.start_link(
@@ -240,7 +250,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           seed: seed + index,
           procedure_id: procedure_id,
           serve_policy: serve,
-          aware: aware == 1
+          aware: aware == 1,
+          deliberation: deliberation,
+          tool_max_rounds: tool_max_rounds
         )
       end)
 
@@ -267,6 +279,16 @@ defmodule Mix.Tasks.Tracefield.Hetero do
 
     disc_strict =
       Discovery.strict_score(absorbed, interactions)
+
+    citation_grounding =
+      absorbed
+      |> CitationGrounding.score(interactions)
+      |> CitationGrounding.to_plain()
+
+    tool_perception =
+      if deliberation == :tools do
+        tool_perception_stats(perception)
+      end
 
     disc_judge =
       Discovery.score(absorbed,
@@ -311,8 +333,13 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       hetero: hetero,
       substrate: substrate_name,
       seed: seed,
+      deliberation: deliberation,
       disc_strict: disc_strict.count,
       disc_strict_synth: synth_count(disc_synth),
+      citation_grounding_rate: citation_grounding.grounding_rate,
+      citation_grounding: citation_grounding,
+      tool_rounds_distribution: tool_perception && tool_perception.tool_rounds_distribution,
+      served_queries_count: tool_perception && tool_perception.served_queries_count,
       multilayer: multilayer_result,
       disc_judge: disc_judge.count,
       discovery_count: disc_strict.count,
@@ -367,8 +394,11 @@ defmodule Mix.Tasks.Tracefield.Hetero do
 
   defp summary_by_cell(runs) do
     runs
-    |> Enum.group_by(&{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero, Map.get(&1, :substrate)})
-    |> Enum.map(fn {{k, kp, serve, aware, hetero, substrate}, rows} ->
+    |> Enum.group_by(
+      &{&1.k, &1.kp, &1.serve, &1.aware, &1.hetero, Map.get(&1, :substrate),
+       Map.get(&1, :deliberation, :prose)}
+    )
+    |> Enum.map(fn {{k, kp, serve, aware, hetero, substrate, deliberation}, rows} ->
       %{
         k: k,
         kp: kp,
@@ -376,8 +406,11 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         aware: aware,
         hetero: hetero,
         substrate: substrate,
+        deliberation: deliberation,
         disc_strict: Metrics.summary(Enum.map(rows, &(&1.disc_strict * 1.0))),
         disc_judge: Metrics.summary(Enum.map(rows, &(&1.disc_judge * 1.0))),
+        citation_grounding_rate:
+          Metrics.summary(Enum.map(rows, &(&1.citation_grounding_rate * 1.0))),
         icc: Metrics.summary(Enum.map(rows, &(&1.icc * 1.0))),
         coverage: Metrics.summary(Enum.map(rows, &(&1.coverage * 1.0))),
         diversity: Metrics.summary(Enum.map(rows, & &1.diversity)),
@@ -386,7 +419,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     end)
     |> Enum.sort_by(
       &{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero),
-       to_string(&1.substrate)}
+       to_string(&1.substrate), to_string(&1.deliberation)}
     )
   end
 
@@ -494,6 +527,47 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     }
   end
 
+  defp normalize_deliberation(value) when is_atom(value) do
+    value
+    |> Atom.to_string()
+    |> String.to_atom()
+  end
+
+  defp normalize_deliberation(value) do
+    value
+    |> to_string()
+    |> String.to_atom()
+  end
+
+  defp tool_perception_stats(perception) do
+    records = Enum.filter(List.wrap(perception), &is_map/1)
+
+    tool_rounds =
+      records
+      |> Enum.map(&Map.get(&1, :tool_rounds))
+      |> Enum.reject(&is_nil/1)
+
+    served_queries_count =
+      records
+      |> Enum.map(&Map.get(&1, :served_queries, []))
+      |> Enum.map(&length(List.wrap(&1)))
+      |> Enum.sum()
+
+    %{
+      tool_rounds_distribution: %{
+        values: tool_rounds,
+        counts: frequencies(tool_rounds)
+      },
+      served_queries_count: served_queries_count
+    }
+  end
+
+  defp frequencies(values) do
+    values
+    |> Enum.frequencies()
+    |> Map.new(fn {key, count} -> {to_string(key), count} end)
+  end
+
   defp persist(result, adapter_name) do
     File.mkdir_p!("runs")
 
@@ -518,12 +592,12 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     Mix.shell().info("runs:")
 
     Mix.shell().info(
-      "k kp serve aware hetero substrate seed disc_strict disc_judge icc coverage diversity collapse"
+      "k kp serve aware hetero substrate deliberation seed disc_strict disc_judge citation_grounding icc coverage diversity collapse"
     )
 
     Enum.each(result.runs, fn row ->
       Mix.shell().info(
-        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{Map.get(row, :substrate)} #{row.seed} #{row.disc_strict} #{row.disc_judge} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
+        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{Map.get(row, :substrate)} #{Map.get(row, :deliberation, :prose)} #{row.seed} #{row.disc_strict} #{row.disc_judge} #{fmt(row.citation_grounding_rate)} #{row.icc} #{row.coverage} #{fmt(row.diversity)} #{fmt(row.collapse_rate)}"
       )
     end)
 
@@ -531,17 +605,17 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     Mix.shell().info("aggregate mean±sd:")
 
     Mix.shell().info(
-      "k kp serve aware hetero substrate disc_strict disc_judge icc coverage diversity collapse"
+      "k kp serve aware hetero substrate deliberation disc_strict disc_judge citation_grounding icc coverage diversity collapse"
     )
 
     result.summary
     |> Enum.sort_by(
       &{&1.k, &1.kp, to_string(&1.serve), to_string(&1.aware), to_string(&1.hetero),
-       to_string(Map.get(&1, :substrate))}
+       to_string(Map.get(&1, :substrate)), to_string(Map.get(&1, :deliberation, :prose))}
     )
     |> Enum.each(fn row ->
       Mix.shell().info(
-        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{Map.get(row, :substrate)} #{mean_sd(row.disc_strict)} #{mean_sd(row.disc_judge)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
+        "#{row.k} #{row.kp} #{row.serve} #{row.aware} #{row.hetero} #{Map.get(row, :substrate)} #{Map.get(row, :deliberation, :prose)} #{mean_sd(row.disc_strict)} #{mean_sd(row.disc_judge)} #{mean_sd(row.citation_grounding_rate)} #{mean_sd(row.icc)} #{mean_sd(row.coverage)} #{mean_sd(row.diversity)} #{mean_sd(row.collapse_rate)}"
       )
     end)
 
