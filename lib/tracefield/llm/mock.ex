@@ -45,6 +45,9 @@ defmodule Tracefield.LLM.Mock do
     prompt = Enum.map_join(messages, "\n", &Map.get(&1, :content, Map.get(&1, "content", "")))
 
     cond do
+      Keyword.has_key?(opts, :tools) ->
+        complete_tools(messages, opts)
+
       String.contains?(prompt, "TRACEFIELD_DISTILL") ->
         {:ok, "mock蒸留: #{distill_head(prompt)}"}
 
@@ -92,6 +95,50 @@ defmodule Tracefield.LLM.Mock do
         {:ok, render_review(prompt, Keyword.get(opts, :seed, 0))}
     end
   end
+
+  defp complete_tools(messages, opts) do
+    script = Keyword.get(opts, :tool_script, [])
+    index = Enum.count(messages, &(message_role(&1) == "assistant"))
+    response = Enum.at(script, index, %{content: "", tool_calls: []})
+    {:ok, normalize_tool_response(response)}
+  end
+
+  defp normalize_tool_response(tool_calls) when is_list(tool_calls) do
+    %{content: "", tool_calls: Enum.map(tool_calls, &normalize_tool_call/1)}
+  end
+
+  defp normalize_tool_response(%{} = response) do
+    %{
+      content: Map.get(response, :content, Map.get(response, "content", "")),
+      tool_calls:
+        response
+        |> Map.get(:tool_calls, Map.get(response, "tool_calls", []))
+        |> List.wrap()
+        |> Enum.map(&normalize_tool_call/1)
+    }
+  end
+
+  defp normalize_tool_response(_response), do: %{content: "", tool_calls: []}
+
+  defp normalize_tool_call(%{name: name, arguments: arguments}) do
+    %{name: to_string(name), arguments: arguments}
+  end
+
+  defp normalize_tool_call(%{"name" => name, "arguments" => arguments}) do
+    %{name: to_string(name), arguments: arguments}
+  end
+
+  defp normalize_tool_call(%{function: %{name: name, arguments: arguments}}) do
+    %{name: to_string(name), arguments: arguments}
+  end
+
+  defp normalize_tool_call(%{"function" => %{"name" => name, "arguments" => arguments}}) do
+    %{name: to_string(name), arguments: arguments}
+  end
+
+  defp normalize_tool_call(_call), do: %{name: "", arguments: %{}}
+
+  defp message_role(message), do: Map.get(message, :role, Map.get(message, "role", ""))
 
   def signal_claim_ids, do: [@consent_topic]
   def consent_topic, do: @consent_topic
