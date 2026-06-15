@@ -40,6 +40,9 @@ defmodule Tracefield.Agent do
         exclude_machine_authors: [type: :any, default: nil],
         sharing_stage: [type: :string, default: nil],
         patrol: [type: :any, default: %{enabled: true, token_threshold: 100_000}],
+        deliberation: [type: :atom, default: :prose],
+        tool_max_rounds: [type: :integer, default: 4],
+        tool_script: [type: :any, default: nil],
         last_round: [type: :integer, default: 0],
         absorbed_count: [type: :integer, default: 0],
         last_absorbed: [type: :any, default: []],
@@ -67,6 +70,14 @@ defmodule Tracefield.Agent do
     def run(%{reference: reference, round: round} = params, %{state: state}) do
       state = %{state | reference_docs: active_reference_docs(reference, state.reference_docs)}
       note = Map.get(params, :note, "")
+
+      case Map.get(state, :deliberation, :prose) do
+        :tools -> run_tools(reference, round, state, note)
+        _prose -> run_prose(reference, round, state, note)
+      end
+    end
+
+    defp run_prose(reference, round, state, note) do
       query_text = query(state)
 
       served =
@@ -97,6 +108,53 @@ defmodule Tracefield.Agent do
         |> Enum.reject(&(&1.text == ""))
 
       absorbed = Tracefield.Reference.absorb(reference, entries, state.id)
+
+      {:ok,
+       %{
+         last_round: round,
+         absorbed_count: state.absorbed_count + length(absorbed),
+         last_absorbed: absorbed,
+         last_perception: perception,
+         perception_log: state.perception_log ++ [perception]
+       }}
+    end
+
+    defp run_tools(reference, round, state, note) do
+      query_text = query(state)
+      procedure = procedure_entry(reference, state.procedure_id)
+      reference_doc_ids = MapSet.new(Enum.map(state.reference_docs, &doc_id/1))
+      prompt = build_tool_prompt(state, round, procedure, note)
+      tool_result = deliberate_with_tools(reference, state, prompt.messages)
+      presented_ids = MapSet.new(Enum.flat_map(tool_result.served, &Map.get(&1, :ids, [])))
+
+      entries =
+        tool_result.entries
+        |> Enum.take(state.entry_limit)
+        |> Enum.map(
+          &sanitize_entry(&1, presented_ids, reference_doc_ids, state, round, procedure,
+            territory_contract_id: territory_contract_id(state)
+          )
+        )
+        |> Enum.reject(&(&1.text == ""))
+
+      absorbed = Tracefield.Reference.absorb(reference, entries, state.id)
+
+      served =
+        tool_result.served
+        |> Enum.flat_map(&Map.get(&1, :entries, []))
+        |> Enum.uniq_by(& &1.id)
+        |> Enum.map(&%{id: &1.id, author: &1.author})
+
+      perception = %{
+        query: query_text,
+        served: served,
+        prompt_tokens_est: prompt.prompt_tokens_est,
+        doc_mode: prompt.doc_mode,
+        docs_full_ids: prompt.docs_full_ids,
+        over_budget: prompt.over_budget,
+        served_queries: tool_result.served_queries,
+        tool_rounds: tool_result.rounds
+      }
 
       {:ok,
        %{
@@ -236,6 +294,21 @@ defmodule Tracefield.Agent do
       end
     end
 
+    defp build_tool_prompt(state, round, procedure, note) do
+      messages =
+        tool_messages(state, round, procedure, note, format_reference_docs(state.reference_docs))
+
+      estimate = Tracefield.Tokens.estimate_messages(messages)
+
+      %{
+        messages: messages,
+        prompt_tokens_est: estimate,
+        doc_mode: :full,
+        docs_full_ids: Enum.map(state.reference_docs, &doc_id/1),
+        over_budget: estimate > context_budget(state)
+      }
+    end
+
     defp context_budget(state) do
       state.num_ctx - @num_predict - @budget_margin
     end
@@ -253,6 +326,19 @@ defmodule Tracefield.Agent do
       ]
 
       messages
+    end
+
+    defp tool_messages(state, round, procedure, note, reference_section) do
+      [
+        %{
+          role: "system",
+          content: tool_system_prompt(state)
+        },
+        %{
+          role: "user",
+          content: prompt(state, round, [], procedure, note, reference_section)
+        }
+      ]
     end
 
     defp deliberate(messages, state, round) do
@@ -275,6 +361,169 @@ defmodule Tracefield.Agent do
       end
     end
 
+    defp deliberate_with_tools(reference, state, messages) do
+      tools = tool_actions()
+
+      loop = %{
+        messages: messages,
+        entries: [],
+        served: [],
+        served_queries: [],
+        rounds: 0
+      }
+
+      do_tool_loop(reference, state, tools, loop)
+    end
+
+    defp do_tool_loop(reference, state, tools, loop) do
+      if loop.rounds >= state.tool_max_rounds or length(loop.entries) >= state.entry_limit do
+        loop
+      else
+        continue_tool_loop(reference, state, tools, loop)
+      end
+    end
+
+    defp continue_tool_loop(reference, state, tools, loop) do
+      opts =
+        [
+          adapter: state.adapter,
+          model: state.model,
+          temperature: 0.0,
+          seed: 0,
+          max_tokens: @num_predict,
+          num_ctx: state.num_ctx,
+          cli: state.cli,
+          tools: Enum.map(Map.values(tools), &ollama_tool_definition/1),
+          tool_script: state.tool_script
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+      case Tracefield.LLM.complete(loop.messages, opts) do
+        {:ok, %{content: content, tool_calls: tool_calls}} when is_list(tool_calls) ->
+          next_loop =
+            loop
+            |> Map.update!(:rounds, &(&1 + 1))
+            |> append_assistant_tool_call_message(content, tool_calls)
+            |> execute_tool_calls(reference, state, tools, tool_calls)
+
+          if tool_calls == [] do
+            next_loop
+          else
+            do_tool_loop(reference, state, tools, next_loop)
+          end
+
+        _other ->
+          loop
+      end
+    end
+
+    defp append_assistant_tool_call_message(loop, content, tool_calls) do
+      message = %{
+        role: "assistant",
+        content: to_string(content || ""),
+        tool_calls: tool_calls
+      }
+
+      Map.update!(loop, :messages, &(&1 ++ [message]))
+    end
+
+    defp execute_tool_calls(loop, reference, state, tools, tool_calls) do
+      context = %{reference: reference, state: state, k: state.k_s}
+
+      Enum.reduce(tool_calls, loop, fn call, acc ->
+        name = tool_call_name(call)
+
+        case Map.get(tools, name) do
+          nil -> append_tool_message(acc, name, Jason.encode!(%{error: "unknown tool"}))
+          tool -> execute_tool_call(acc, tool, call, context)
+        end
+      end)
+    end
+
+    defp execute_tool_call(loop, tool, call, context) do
+      name = Map.fetch!(tool, :name)
+      arguments = Map.get(call, :arguments, Map.get(call, "arguments", %{}))
+      function = Map.fetch!(tool, :function)
+
+      case function.(arguments, context) do
+        {:ok, json} ->
+          loop
+          |> record_tool_result(name, arguments, json)
+          |> append_tool_message(name, json)
+
+        {:error, json} ->
+          append_tool_message(loop, name, json)
+      end
+    end
+
+    defp record_tool_result(loop, "serve", arguments, json) do
+      decoded = decode_tool_json(json)
+      entries = decoded |> Map.get("entries", []) |> Enum.map(&normalize_tool_served_entry/1)
+
+      query =
+        Map.get(decoded, "query", Map.get(arguments, "query", Map.get(arguments, :query, "")))
+
+      served = %{
+        query: query,
+        ids: Enum.map(entries, & &1.id),
+        entries: entries
+      }
+
+      loop
+      |> Map.update!(:served, &(&1 ++ [served]))
+      |> Map.update!(:served_queries, &(&1 ++ [query]))
+    end
+
+    defp record_tool_result(loop, "absorb", _arguments, json) do
+      entry = decode_tool_json(json) |> Map.get("entry", %{})
+      Map.update!(loop, :entries, &(&1 ++ [entry]))
+    end
+
+    defp record_tool_result(loop, _name, _arguments, _json), do: loop
+
+    defp append_tool_message(loop, name, content) do
+      message = %{role: "tool", name: name, content: content}
+      Map.update!(loop, :messages, &(&1 ++ [message]))
+    end
+
+    defp decode_tool_json(json) when is_binary(json) do
+      case Jason.decode(json) do
+        {:ok, decoded} when is_map(decoded) -> decoded
+        _other -> %{}
+      end
+    end
+
+    defp decode_tool_json(_json), do: %{}
+
+    defp normalize_tool_served_entry(%{} = entry) do
+      %{
+        id: Map.get(entry, "id", Map.get(entry, :id, "")),
+        author: Map.get(entry, "author", Map.get(entry, :author, "")),
+        text: Map.get(entry, "text", Map.get(entry, :text, ""))
+      }
+    end
+
+    defp tool_call_name(%{name: name}), do: to_string(name)
+    defp tool_call_name(%{"name" => name}), do: to_string(name)
+    defp tool_call_name(_call), do: ""
+
+    defp tool_actions do
+      [Tracefield.Agent.Tools.Serve, Tracefield.Agent.Tools.Absorb]
+      |> Enum.map(&Jido.Action.Tool.to_tool/1)
+      |> Map.new(fn tool -> {Map.fetch!(tool, :name), tool} end)
+    end
+
+    defp ollama_tool_definition(tool) do
+      %{
+        type: "function",
+        function: %{
+          name: Map.fetch!(tool, :name),
+          description: Map.fetch!(tool, :description),
+          parameters: Map.fetch!(tool, :parameters_schema)
+        }
+      }
+    end
+
     @system_json_example ~S({"entries":[{"type":"belief","text":"...","citations":[{"id":"e1","stance":"relies_on"}]}]})
 
     defp system_prompt(state) do
@@ -282,6 +531,12 @@ defmodule Tracefield.Agent do
       types_hint = expected_types_hint(state.expected_types)
 
       "TRACEFIELD_AGENT_TURN\n#{situation_preamble(state)}Return only JSON #{json_example}.#{types_hint} At most 2 entries. Citations must use presented ids only. Each citation is an object {\"id\",\"stance\"}; stance is relies_on (your claim depends on that entry being true), refutes (you argue against it), or context (mere reference). If facts in PRIVATE DOCUMENT (yours only) contradict or interact with PRESENTED ENTRIES, point out the contradiction/interaction and cite both facts explicitly."
+    end
+
+    defp tool_system_prompt(state) do
+      types_hint = expected_types_hint(state.expected_types)
+
+      "TRACEFIELD_AGENT_TURN\n#{situation_preamble(state)}Use tools instead of prose. Call serve to retrieve relevant shared entries, then call absorb for each entry you want to write.#{types_hint} At most #{state.entry_limit} entries. Absorb citations must use ids returned by serve or ids from reference documents; stance is relies_on, refutes, or context."
     end
 
     defp json_example_for(nil), do: @system_json_example
@@ -704,7 +959,10 @@ defmodule Tracefield.Agent do
           territory: Keyword.get(opts, :territory),
           exclude_machine_authors: Keyword.get(opts, :exclude_machine_authors),
           sharing_stage: Keyword.get(opts, :sharing_stage),
-          patrol: Keyword.get(opts, :patrol, %{enabled: true, token_threshold: 100_000})
+          patrol: Keyword.get(opts, :patrol, %{enabled: true, token_threshold: 100_000}),
+          deliberation: Keyword.get(opts, :deliberation, :prose),
+          tool_max_rounds: Keyword.get(opts, :tool_max_rounds, 4),
+          tool_script: Keyword.get(opts, :tool_script)
         }
       )
 
