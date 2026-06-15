@@ -56,12 +56,21 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     synth_model = Keyword.get(opts, :synth_model)
     synth_n = Keyword.get(opts, :synth_n, 1)
 
+    scenario_dir = Keyword.get(opts, :scenario_dir) || "scenarios/enterprise-assistant"
+
+    # H2: interaction set ("hi" = 10-pair higher-ceiling, else default 3).
+    interactions =
+      case Keyword.get(opts, :interactions) do
+        "hi" -> Discovery.interactions(:hi)
+        _ -> Discovery.interactions(:default)
+      end
+
     scenario =
-      Keyword.get_lazy(opts, :scenario, fn -> Scenario.load!("scenarios/enterprise-assistant") end)
+      Keyword.get_lazy(opts, :scenario, fn -> Scenario.load!(scenario_dir) end)
 
     grounded_docs =
       Keyword.get_lazy(opts, :private_docs, fn ->
-        load_private_docs("scenarios/enterprise-assistant/private")
+        load_private_docs(Path.join(scenario_dir, "private"))
       end)
 
     combined_docs = grounded_docs |> Map.values() |> Enum.join("\n\n")
@@ -99,6 +108,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
           judge_model: judge_model,
           synth_model: synth_model,
           synth_n: synth_n,
+          interactions: interactions,
           embed_model: embed_model,
           temperature: temperature
         )
@@ -125,6 +135,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       OptionParser.parse(args,
         strict: [
           adapter: :string,
+          scenario_dir: :string,
+          interactions: :string,
           seeds: :integer,
           rounds: :integer,
           ks: :string,
@@ -163,6 +175,8 @@ defmodule Mix.Tasks.Tracefield.Hetero do
       judge_model: Keyword.get(opts, :judge_model),
       synth_model: Keyword.get(opts, :synth),
       synth_n: Keyword.get(opts, :synth_n),
+      scenario_dir: Keyword.get(opts, :scenario_dir),
+      interactions: Keyword.get(opts, :interactions),
       embed_model: Keyword.get(opts, :embed_model, "nomic-embed-text"),
       temperature: Keyword.get(opts, :temperature, 0.4)
     ]
@@ -245,8 +259,10 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         seed: seed
       )
 
+    interactions = Keyword.get(opts, :interactions, Discovery.interactions(:default))
+
     disc_strict =
-      Discovery.strict_score(absorbed)
+      Discovery.strict_score(absorbed, interactions)
 
     disc_judge =
       Discovery.score(absorbed,
@@ -259,7 +275,13 @@ defmodule Mix.Tasks.Tracefield.Hetero do
     # H5: Generator-Verifier / synthesizer pass over the SAME deliberation. A
     # strong model reads all absorbed entries and connects cross-domain facts that
     # individual agents externalized but never joined into one entry (§12a).
-    disc_synth = synthesize(absorbed, Keyword.get(opts, :synth_model), Keyword.get(opts, :synth_n, 1))
+    disc_synth =
+      synthesize(
+        absorbed,
+        Keyword.get(opts, :synth_model),
+        Keyword.get(opts, :synth_n, 1),
+        interactions
+      )
 
     %{
       k: k_s,
@@ -690,9 +712,9 @@ defmodule Mix.Tasks.Tracefield.Hetero do
   # the team's externalized entries and connects cross-domain contradictions that
   # individual agents left unjoined. Scored by the SAME deterministic strict
   # scorer → disc_strict_synth (within-run A/B vs agents' disc_strict).
-  defp synthesize(_absorbed, nil, _n), do: nil
+  defp synthesize(_absorbed, nil, _n, _interactions), do: nil
 
-  defp synthesize(absorbed, synth_model, n) when is_binary(synth_model) do
+  defp synthesize(absorbed, synth_model, n, interactions) when is_binary(synth_model) do
     texts =
       absorbed
       |> Enum.reject(&(&1.type == :chunk))
@@ -718,7 +740,7 @@ defmodule Mix.Tasks.Tracefield.Hetero do
         end
       end)
 
-    Discovery.strict_score(entries)
+    Discovery.strict_score(entries, interactions)
   end
 
   defp synth_count(nil), do: nil
