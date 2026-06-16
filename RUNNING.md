@@ -34,6 +34,23 @@ ollama pull gemma4:12b
   --model gemma4:12b
 ```
 
+## CLI-Backed Models
+
+The CLI adapter defaults to `cursor-agent`. Set `TRACEFIELD_CLI_COMMAND` to use
+Claude Code or Codex CLI:
+
+```sh
+TRACEFIELD_CLI_COMMAND=claude tracefield consult \
+  --scenario-dir scenarios/generic-smoke \
+  --adapter cli \
+  --model sonnet
+
+TRACEFIELD_CLI_COMMAND=codex tracefield consult \
+  --scenario-dir scenarios/generic-smoke \
+  --adapter cli \
+  --model gpt-5.4
+```
+
 ## Persist And Retract
 
 ```sh

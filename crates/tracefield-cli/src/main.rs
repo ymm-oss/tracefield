@@ -269,13 +269,16 @@ async fn print_doctor() {
             "OPENROUTER_API_KEY not set"
         }
     );
+    let cli_tools = ["cursor-agent", "claude", "codex"]
+        .into_iter()
+        .filter(|tool| find_on_path(tool))
+        .collect::<Vec<_>>();
     println!(
         "- cli: {}",
-        match (find_on_path("cursor-agent"), find_on_path("claude")) {
-            (true, true) => "cursor-agent, claude found",
-            (true, false) => "cursor-agent found",
-            (false, true) => "claude found",
-            (false, false) => "cursor-agent/claude not found on PATH",
+        if cli_tools.is_empty() {
+            "cursor-agent/claude/codex not found on PATH".to_string()
+        } else {
+            format!("{} found", cli_tools.join(", "))
         }
     );
 }

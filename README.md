@@ -81,6 +81,8 @@ tracefield doctor
 tracefield new my-review
 tracefield consult --scenario-dir scenarios/my-review --adapter mock
 tracefield consult --scenario-dir scenarios/my-review --adapter ollama --model gemma4:12b
+TRACEFIELD_CLI_COMMAND=claude tracefield consult --scenario-dir scenarios/my-review --adapter cli --model sonnet
+TRACEFIELD_CLI_COMMAND=codex tracefield consult --scenario-dir scenarios/my-review --adapter cli --model gpt-5.4
 tracefield consult --scenario-dir scenarios/my-review --adapter mock --persist runs/reference.jsonl
 tracefield retract --store runs/reference.jsonl --entry e3
 ```

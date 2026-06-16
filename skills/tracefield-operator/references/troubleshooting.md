@@ -53,14 +53,19 @@ openrouter`.
 
 ## CLI Adapter Fails
 
-The CLI adapter looks for `cursor-agent` by default and also reports `claude`
-availability in `doctor`.
+The CLI adapter uses `cursor-agent` by default and reports `cursor-agent`,
+`claude`, and `codex` availability in `doctor`.
 
 Set the command explicitly if needed:
 
 ```sh
 TRACEFIELD_CLI_COMMAND=claude tracefield consult --scenario-dir scenarios/<name> --adapter cli --model <model>
+TRACEFIELD_CLI_COMMAND=codex tracefield consult --scenario-dir scenarios/<name> --adapter cli --model <model>
 ```
+
+`TRACEFIELD_CLI_COMMAND=claude-code` is accepted as an alias for the `claude`
+binary. Codex runs through `codex exec` and reads the final answer from
+`--output-last-message`.
 
 ## Empty Or Weak Consult Output
 

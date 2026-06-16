@@ -204,11 +204,21 @@ CLI adapter を使う場合:
 tracefield consult --scenario-dir scenarios/my-review --adapter cli --model <model>
 ```
 
-`cursor-agent` ではなく `claude` を使いたい場合:
+CLI adapter のデフォルトは `cursor-agent` です。Claude Code を使う場合:
 
 ```sh
 TRACEFIELD_CLI_COMMAND=claude tracefield consult --scenario-dir scenarios/my-review --adapter cli --model <model>
 ```
+
+`claude-code` も alias として受け付け、実行時には `claude` binary を呼びます。
+
+Codex CLI を使う場合:
+
+```sh
+TRACEFIELD_CLI_COMMAND=codex tracefield consult --scenario-dir scenarios/my-review --adapter cli --model <model>
+```
+
+Codex は `codex exec` で起動し、`--output-last-message` に書かれた最終応答を Tracefield が読みます。
 
 OpenRouter を使う場合:
 
@@ -296,7 +306,7 @@ consult output が弱い、または generic な場合は、live model の前に
 - `task.md`: 判断対象や調査対象を具体化する
 - `agents.json`: `domain` と `desc` の差を明確にする
 - `private/*.md`: 事実、制約、観測、既知の tradeoff を足す
-- `skills/*.md`: agent に適用したい手順を短く明確に書く
+- `skills/<id>/SKILL.md`: agent に適用したい手順を短く明確に書く
 
 ## 現在の制約
 
