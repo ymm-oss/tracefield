@@ -93,10 +93,20 @@ See [`RUNNING.md`](./RUNNING.md) for more run notes.
 
 ## Mix tasks
 
-The harness is driven through `mix tracefield.*` tasks. A few entry points:
+The harness is driven through `mix tracefield.*` tasks. Start here:
+
+```sh
+mise exec -- mix tracefield          # categorized overview of every task
+mise exec -- mix tracefield.doctor   # check toolchain, Ollama, API keys, CLI adapters
+```
+
+A few entry points:
 
 | Task | Purpose |
 | --- | --- |
+| `mix tracefield` | Categorized overview of all tasks |
+| `mix tracefield.doctor` | Diagnose toolchain / adapters (mock, ollama, openrouter, cli) |
+| `mix tracefield.new <name>` | Scaffold a new consult scenario, ready to run |
 | `mix tracefield.consult` | Consult the team; return a governed best-of-N synthesis |
 | `mix tracefield.phase0` / `.phase1` | Core experiment phases |
 | `mix tracefield.governance_vs_fusion` | Compare provenance-closure governance vs post-hoc fusion containment |
@@ -104,7 +114,24 @@ The harness is driven through `mix tracefield.*` tasks. A few entry points:
 | `mix tracefield.retract` | Retract an entry in a persisted store and show isolated synthesis |
 | `mix tracefield.genesis` | Attractor detection and cluster scaffolding |
 
+`consult` defaults to `--adapter cli` (a strong model via `cursor-agent` /
+`claude`) and prints a readable report; add `--json` for raw JSON on stdout or
+`--out <file>` to write it. Use `--adapter mock` for a model-free run
+(deliberation only), or `ollama` / `openrouter` for other backends.
+
 Run `mise exec -- mix help` to see the full list.
+
+### Author your own scenario
+
+```sh
+mise exec -- mix tracefield.new my-review
+# edit scenarios/my-review/task.md and private/*.md
+mise exec -- mix tracefield.consult --scenario-dir scenarios/my-review --adapter mock
+```
+
+A scenario is a `task.md` (the shared task) plus an `agents.json` manifest and
+one `private/<doc>.md` per agent (each agent's private lens). See
+[`scenarios/_template`](./scenarios/_template).
 
 ## Repository layout
 

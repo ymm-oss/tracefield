@@ -109,14 +109,17 @@ printf '\n%s✓ tracefield is ready.%s\n\n' "$GREEN$BOLD" "$RESET"
 cat <<EOF
 Next steps:
 
+  # see every task, grouped by purpose
+  $MIX tracefield
+
+  # check your environment (toolchain, Ollama, API keys, CLI adapters)
+  $MIX tracefield.doctor
+
   # consult the team on a scenario (mock adapter, no model)
   $MIX tracefield.consult --scenario-dir scenarios/enterprise-hi --adapter mock
 
-  # run a core experiment phase
-  $MIX tracefield.phase1 --adapter mock --n 8
-
-  # see every available task
-  $MIX help
+  # scaffold your own scenario
+  $MIX tracefield.new my-review
 
 For live runs with a local model, start Ollama and pull a model first
 (see README.md / RUNNING.md). The default flow above needs no model at all.
