@@ -33,7 +33,7 @@
 
 | # | 項目 | 内容 | 完了条件 |
 | --- | --- | --- | --- |
-| 1-0 ✅ | 保全 | リモート repo 作成・push（the remote） | 完了 |
+| 1-0 ✅ | 保全 | リモート repo 作成・push | 完了 |
 | 1-1 ✅ | モードプリセット | 発散/収束/レビュー（brief-14） | `--mode` 実装・テスト済 |
 | 1-2 ✅ | verify 実装 | `Reference.verify`（実在/active/接地判定、✓✗注記、verification_rate） | 実走 0.84 |
 | 1-3 ✅ | 訂正デモ | `--correct auto`: most_cited 撤回→閉包隔離→note付き修復ラウンド | **実走済**（e20撤回→5案隔離→代替8案） |

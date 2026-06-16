@@ -1,6 +1,6 @@
 # 実験設計ブリーフ — H9: governance vs Fusion 直接対決（moat 決断）
 
-> 由来: tracefield 自己分析 consult の依存連鎖⑤（tracefield #7、findings `e38`×3 / `e50`×3 / `e81`×3）。①CLI熟議・②クリーン入力API・③findings 永続化・④verify 格上げ(quorum+stance-fidelity) が実装済になった上で走らせる「最後のリンク」。
+> 由来: tracefield 自己分析 consult の依存連鎖⑤（issue #7、findings `e38`×3 / `e50`×3 / `e81`×3）。①CLI熟議・②クリーン入力API・③findings 永続化・④verify 格上げ(quorum+stance-fidelity) が実装済になった上で走らせる「最後のリンク」。
 > 目的: **「synthesize AND retract with provenance」(GOV) が、stateless ensemble (Fusion) に防げない post-serving harm を防ぐ**ことを、自然汚染・n≥6・複数ドメインで実証し、**governance を default にするか `--governance` opt-in にするか**を内的妥当性ある根拠で決める。
 
 ## 中心仮説 H9
