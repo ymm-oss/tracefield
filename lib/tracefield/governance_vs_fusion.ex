@@ -25,16 +25,62 @@ defmodule Tracefield.GovernanceVsFusion do
 
   @doc """
   GOV containment: served findings (entries authored `:synth_author`, default
-  `"SYNTH"`) in the retraction closure of `premise_id`. Pure / read-only — uses
-  `Reference.closure/2`, does not mutate the store.
+  `"SYNTH"`) affected by retracting `premise_id`. Pure / read-only.
+
+  `:mode`:
+    * `:reachable` (default) — the full transitive retraction closure
+      (`Reference.closure/2`). High recall, but FLOODS when the premise is
+      central (every finding transitively cites it → precision collapses; H9 F1).
+    * `:direct` — only findings that cite `premise_id` directly. A stance-free
+      precision lever: a finding two hops away (cites a layer-0 concern that
+      cites P) is not counted. (A stance/typed-weighted closure that propagates
+      only `relies_on` edges and stops at `refutes` would be stronger, but needs
+      stances recorded on prose citations — the #3 remainder.)
   """
   def gov_affected(entries, premise_id, opts \\ []) do
     author = Keyword.get(opts, :synth_author, "SYNTH")
+    pid = to_string(premise_id)
 
-    entries
-    |> Reference.closure(to_string(premise_id))
-    |> Enum.filter(&(field(&1, :author) == author))
-    |> Enum.map(&field(&1, :id))
+    case Keyword.get(opts, :mode, :reachable) do
+      :direct ->
+        entries
+        |> Enum.filter(fn e ->
+          field(e, :author) == author and pid in (field(e, :citations) || [])
+        end)
+        |> Enum.map(&field(&1, :id))
+
+      _ ->
+        entries
+        |> Reference.closure(pid)
+        |> Enum.filter(&(field(&1, :author) == author))
+        |> Enum.map(&field(&1, :id))
+    end
+  end
+
+  @doc """
+  Semantic ground truth (H9 F2): for each finding, judge — given the premise is
+  now FALSE — whether it is `"invalidated"` (depended on the premise being true,
+  now breaks), `"reinforced"` (argued AGAINST the premise, now stronger), or
+  `"unrelated"`. Returns `%{id => label}`. Containment should target only the
+  `invalidated` set (see `invalidated/1`). Replaces the keyword proxy, which
+  conflated "mentions the premise" with "invalidated if false". `:label_complete`
+  (`fun(prompt) -> {:ok, content}`) is the test seam; else cursor-agent CLI.
+  """
+  def semantic_labels(findings, premise, correction, opts \\ []) do
+    numbered = Enum.map(findings, &%{"id" => field(&1, :id), "text" => field(&1, :text)})
+
+    content =
+      case label_complete(label_prompt(premise, correction, numbered), opts) do
+        {:ok, c} -> c
+        _ -> ""
+      end
+
+    parse_labels(content)
+  end
+
+  @doc "Ids labeled `\"invalidated\"` in a `semantic_labels/4` result."
+  def invalidated(labels) do
+    for {id, "invalidated"} <- labels, do: id
   end
 
   @doc """
@@ -114,6 +160,63 @@ defmodule Tracefield.GovernanceVsFusion do
           ]
 
         Tracefield.LLM.complete([%{role: "user", content: prompt}], llm_opts)
+    end
+  end
+
+  defp label_complete(prompt, opts) do
+    case Keyword.get(opts, :label_complete) do
+      fun when is_function(fun, 1) ->
+        fun.(prompt)
+
+      _ ->
+        model =
+          Keyword.get(
+            opts,
+            :label_model,
+            Keyword.get(opts, :posthoc_model, "claude-opus-4-8-medium")
+          )
+
+        Tracefield.LLM.complete([%{role: "user", content: prompt}],
+          adapter: Tracefield.LLM.CLI,
+          model: model,
+          temperature: 0.0,
+          timeout: 300_000,
+          cli:
+            Keyword.get(
+              opts,
+              :label_cli,
+              {"cursor-agent", ["-p", "--output-format", "text", "--model", model]}
+            )
+        )
+    end
+  end
+
+  defp label_prompt(premise, correction, numbered) do
+    """
+    前提 P は偽と判明した。各 FINDING について、P が偽になったときの帰結を分類せよ。
+    - "invalidated": P が真であることに依拠しており、P が偽なら成り立たなくなる。
+    - "reinforced": P への依存を批判・否定しており、P が偽ならむしろ補強される。
+    - "unrelated": P の真偽と無関係。
+    Return only JSON keyed by finding id, like {"e15":{"label":"invalidated"}}.
+
+    PREMISE P: #{premise}
+    CORRECTION: #{correction}
+
+    FINDINGS:
+    #{Jason.encode!(numbered)}
+    """
+    |> String.trim()
+  end
+
+  defp parse_labels(content) do
+    case decode_object(content) do
+      {:ok, %{} = decoded} ->
+        for {id, %{} = v} <- decoded, is_binary(id), into: %{} do
+          {id, to_string(Map.get(v, "label", "unrelated"))}
+        end
+
+      _ ->
+        %{}
     end
   end
 
