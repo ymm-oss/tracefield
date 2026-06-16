@@ -337,6 +337,7 @@ defmodule Mix.Tasks.Tracefield.Ideate do
       OptionParser.parse(args,
         strict: [
           scenario: :string,
+          scenario_dir: :string,
           adapter: :string,
           rounds: :integer,
           serve: :string,
@@ -365,7 +366,9 @@ defmodule Mix.Tasks.Tracefield.Ideate do
     preset = mode_preset(mode)
 
     [
-      scenario: Keyword.get(opts, :scenario, "scenarios/housing-service"),
+      scenario:
+        Keyword.get(opts, :scenario) || Keyword.get(opts, :scenario_dir) ||
+          "scenarios/housing-service",
       mode: mode,
       adapter_name: adapter_name,
       adapter_module: adapter_module(adapter_name),

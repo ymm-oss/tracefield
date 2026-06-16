@@ -10,6 +10,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
   point: performance), whereas the harness keeps it opt-in for clean A/B.
 
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi
+      mix tracefield.consult --scenario scenarios/enterprise-hi --json   # raw JSON to stdout
+      mix tracefield.consult --scenario-dir scenarios/enterprise-hi --out result.json
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi --no-synth
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi --synth-n 5 --synth-model claude-opus-4-8-medium
       mix tracefield.consult --scenario-dir scenarios/fsl-brushup --novelty --novelty-doc ../fsl/CHANGELOG.md
@@ -58,8 +60,11 @@ defmodule Mix.Tasks.Tracefield.Consult do
   * **Research harness** — no `agents.json` → falls back to `Scenario.load!`
     (requires contaminant/correction files) with the fixed SEC/BIZ/UX agents.
 
-  Run deliberation on a strong model with `--adapter cli --model <slug>`
-  (e.g. `claude-opus-4-8-medium`); the cursor-agent command is built from the
+  By default `consult` uses `--adapter cli` (deliberation model
+  `claude-opus-4-8-medium` via cursor-agent, synth on). Use `--adapter mock` for
+  a model-free run (deliberation only), or `ollama` / `openrouter` for those
+  backends. Run deliberation on a specific strong model with
+  `--adapter cli --model <slug>`; the cursor-agent command is built from the
   slug. Other adapters use plain completion.
   """
   use Mix.Task
@@ -69,6 +74,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
   @shortdoc "Consult the team; return a governed best-of-N synthesis"
 
   @default_model "gemma4:12b-it-qat"
+  @default_cli_model "claude-opus-4-8-medium"
   @default_synth_model "claude-opus-4-8-medium"
   @default_synth_n 3
   @default_rounds 2
@@ -81,6 +87,9 @@ defmodule Mix.Tasks.Tracefield.Consult do
       OptionParser.parse(args,
         strict: [
           scenario_dir: :string,
+          scenario: :string,
+          json: :boolean,
+          out: :string,
           rounds: :integer,
           synth: :boolean,
           synth_model: :string,
@@ -98,16 +107,25 @@ defmodule Mix.Tasks.Tracefield.Consult do
         ]
       )
 
-    adapter = adapter_module(Keyword.get(opts, :adapter, "ollama"))
+    adapter_name = Keyword.get(opts, :adapter, "cli")
+    adapter = adapter_module(adapter_name)
+
+    scenario_dir =
+      Keyword.get(opts, :scenario_dir) || Keyword.get(opts, :scenario) ||
+        Mix.raise(
+          "--scenario-dir (alias --scenario) is required, e.g. --scenario-dir scenarios/enterprise-hi"
+        )
 
     result =
       run_consult(
-        scenario_dir: Keyword.fetch!(opts, :scenario_dir),
+        scenario_dir: scenario_dir,
         adapter: adapter,
         embed_adapter: embed_adapter(adapter),
-        model: Keyword.get(opts, :model, @default_model),
+        model: Keyword.get(opts, :model, default_model_for(adapter_name)),
         rounds: Keyword.get(opts, :rounds, @default_rounds),
-        synth: Keyword.get(opts, :synth, true),
+        # mock is model-free: default to deliberation-only so a first run needs no
+        # model at all. Real adapters keep synth on (that is the point of consult).
+        synth: Keyword.get(opts, :synth, adapter_name != "mock"),
         synth_model: Keyword.get(opts, :synth_model, @default_synth_model),
         synth_n: Keyword.get(opts, :synth_n, @default_synth_n),
         novelty: Keyword.get(opts, :novelty, false),
@@ -120,8 +138,41 @@ defmodule Mix.Tasks.Tracefield.Consult do
         persist: Keyword.get(opts, :persist)
       )
 
-    print(result)
+    emit(result, adapter_name,
+      json?: Keyword.get(opts, :json, false),
+      out: Keyword.get(opts, :out)
+    )
+
     result
+  end
+
+  # Output policy: a human-readable report by default; raw JSON only on request.
+  #
+  #   (default)        readable report to stdout
+  #   --json           raw JSON to stdout (pipe-friendly), no decorative report
+  #   --out FILE       write pretty JSON to FILE (in addition to the report)
+  defp emit(result, adapter_name, json?: json?, out: out) do
+    if out, do: File.write!(out, Jason.encode!(to_json(result), pretty: true))
+
+    cond do
+      json? ->
+        Mix.shell().info(Jason.encode!(to_json(result)))
+
+      true ->
+        if adapter_name == "mock" do
+          hint =
+            if result.synthesis == nil do
+              "⚠ mock adapter: model-free output (deliberation only). Pass --adapter ollama|cli|openrouter for real, synthesized results."
+            else
+              "⚠ mock adapter: deliberation is synthetic (synth used a real model). Pass --adapter ollama|cli|openrouter for a fully real run."
+            end
+
+          Mix.shell().info(hint)
+        end
+
+        print(result)
+        if out, do: Mix.shell().info("wrote JSON → #{out}")
+    end
   end
 
   @doc """
@@ -217,7 +268,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
         manifest
         |> File.read!()
         |> Jason.decode!()
-        |> Map.fetch!("agents")
+        |> manifest_agents()
         |> Enum.map(&agent_spec_from_manifest(&1, dir))
 
       {task, specs}
@@ -241,6 +292,16 @@ defmodule Mix.Tasks.Tracefield.Consult do
     end
   end
 
+  # accept both a bare array (the _template / ideate form) and {"agents": [...]}
+  defp manifest_agents(agents) when is_list(agents), do: agents
+  defp manifest_agents(%{"agents" => agents}) when is_list(agents), do: agents
+
+  defp manifest_agents(_),
+    do:
+      Mix.raise(
+        ~s|agents.json must be a JSON array of agents, or an object with an "agents" array|
+      )
+
   defp agent_spec_from_manifest(%{"corpus" => corpus} = a, _dir) do
     id = Map.fetch!(a, "id")
     root = corpus |> Map.fetch!("root") |> Path.expand(File.cwd!())
@@ -256,11 +317,18 @@ defmodule Mix.Tasks.Tracefield.Consult do
   end
 
   defp agent_spec_from_manifest(a, dir) do
+    # accept both "doc" (consult) and "private_doc" (ideate) so one manifest works across tasks
+    doc_file =
+      Map.get(a, "doc") || Map.get(a, "private_doc") ||
+        Mix.raise(
+          ~s|agent #{inspect(Map.get(a, "id"))} in agents.json needs a "doc" (or "private_doc") field|
+        )
+
     %{
       id: Map.fetch!(a, "id"),
       domain: Map.fetch!(a, "domain"),
       desc: Map.get(a, "desc", ""),
-      doc: File.read!(Path.join([dir, "private", Map.fetch!(a, "doc")])),
+      doc: File.read!(Path.join([dir, "private", doc_file])),
       corpus_source?: false,
       corpus_chunks: []
     }
@@ -465,8 +533,6 @@ defmodule Mix.Tasks.Tracefield.Consult do
           Mix.shell().info("dropped (ungrounded) citations: #{length(synth.dropped_citations)}")
         end
     end
-
-    Mix.shell().info(Jason.encode!(to_json(result)))
   end
 
   defp to_json(result) do
@@ -498,6 +564,11 @@ defmodule Mix.Tasks.Tracefield.Consult do
       "UX" => File.read!(Path.join(dir, "ux.md"))
     }
   end
+
+  # cli deliberation goes through cursor-agent, which expects a strong-model slug
+  # (not the ollama gemma default); other adapters keep the local gemma default.
+  defp default_model_for("cli"), do: @default_cli_model
+  defp default_model_for(_), do: @default_model
 
   defp adapter_module("ollama"), do: Tracefield.LLM.Ollama
   defp adapter_module("openrouter"), do: Tracefield.LLM.OpenRouter
