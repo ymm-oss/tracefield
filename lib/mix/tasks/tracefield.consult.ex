@@ -28,6 +28,11 @@ defmodule Mix.Tasks.Tracefield.Consult do
   cluster (best-of-N pools paraphrases of the same idea). Merged findings show
   `(×N merged)` and union their citations; all entries stay governable.
 
+  `--quorum N` (default 1) keeps only synth findings backed by >= N samples
+  (each finding carries `support` = how many of the best-of-N samples produced
+  it). Resolves contradictory low-support findings — a 1/N claim does not
+  survive against an N/N one.
+
   `--serve-breadth N` (default 1) makes each deliberation turn issue N
   diversified serve queries (base + cross-domain-gap + counterexample angles)
   and union the retrieved entries — a retrieval-breadth lever against the
@@ -79,6 +84,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
           novelty_doc: :string,
           dedupe: :boolean,
           dedupe_threshold: :float,
+          quorum: :integer,
           serve_breadth: :integer,
           persist: :string,
           adapter: :string,
@@ -102,6 +108,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
         novelty_doc: Keyword.get(opts, :novelty_doc),
         dedupe: Keyword.get(opts, :dedupe, false),
         dedupe_threshold: Keyword.get(opts, :dedupe_threshold),
+        quorum: Keyword.get(opts, :quorum, 1),
         serve_breadth: Keyword.get(opts, :serve_breadth, 1),
         persist: Keyword.get(opts, :persist)
       )
@@ -258,6 +265,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
     |> Keyword.merge(novelty_opts(opts, synth_model))
     |> Keyword.put(:dedupe, Keyword.get(opts, :dedupe, false))
     |> maybe_put(:dedupe_threshold, Keyword.get(opts, :dedupe_threshold))
+    |> Keyword.put(:quorum, Keyword.get(opts, :quorum, 1))
   end
 
   # Novelty gate (opt-in): judge each grounded finding against a ground-truth
@@ -377,7 +385,13 @@ defmodule Mix.Tasks.Tracefield.Consult do
               _ -> ""
             end
 
-          Mix.shell().info("- [#{f.id}]#{tag}#{cluster} cites=#{inspect(f.citations)}")
+          support =
+            case Map.get(f, :support) do
+              v when is_integer(v) -> " support=#{v}"
+              _ -> ""
+            end
+
+          Mix.shell().info("- [#{f.id}]#{tag}#{cluster}#{support} cites=#{inspect(f.citations)}")
           Mix.shell().info("  #{f.text}")
         end)
 

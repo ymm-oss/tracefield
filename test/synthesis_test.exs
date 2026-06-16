@@ -276,4 +276,32 @@ defmodule Tracefield.SynthesisTest do
 
     refute Map.has_key?(result, :novelty_checked)
   end
+
+  test "findings carry support = number of samples that produced them" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    # 3 samples each emit the same finding text -> support 3
+    result =
+      Synthesis.run(ref, layer0, synth_n: 3, synth_complete: synth_stub([e1.id, e2.id]))
+
+    assert [finding] = result.findings
+    assert finding.support == 3
+  end
+
+  test "quorum drops findings backed by fewer than N samples" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    # 1 sample -> support 1; quorum 2 filters it out before grounding/absorb
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        quorum: 2
+      )
+
+    assert result.findings == []
+    assert result.synth_entry_ids == []
+  end
 end

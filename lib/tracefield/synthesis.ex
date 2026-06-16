@@ -45,6 +45,11 @@ defmodule Tracefield.Synthesis do
     * `:dedupe` — when `true`, cluster near-duplicate findings by embedding
       cosine and keep one representative per cluster (default `false`)
     * `:dedupe_threshold` — cosine threshold for clustering (default `0.85`)
+    * `:quorum` — keep only findings backed by >= N samples (default `1` = no
+      filter); resolves contradictory low-support findings
+
+  Each finding carries `:support` (how many of the N samples produced it; for a
+  dedupe cluster, the summed support of its members).
 
   Returns `%{findings: [...], synth_entry_ids: [...], dropped_citations: [...],
   sample_count: n}` where each finding is `%{id, text, citations, verified}`.
@@ -66,11 +71,33 @@ defmodule Tracefield.Synthesis do
     id_set = MapSet.new(Enum.map(layer0, &value(&1, :id)))
     n = max(Keyword.get(opts, :synth_n, @default_synth_n), 1)
 
-    raw =
+    # Sample-consensus / quorum (brushup④, e32): best-of-N pools N samples;
+    # uniq_by/text collapsed duplicates but THREW AWAY the count, so a finding
+    # backed by 1/N samples and one backed by N/N looked identical and a
+    # contradictory pair (A→B vs A→¬B) was kept with no vote. Keep the support
+    # count (how many samples produced each finding) and optionally require a
+    # `:quorum` (default 1 = no filter). Order is preserved (uniq_by order) for
+    # determinism; citations are unioned across the supporting samples.
+    pooled =
       1..n
       |> Enum.flat_map(fn _i -> synth_sample(layer0, id_set, opts) end)
       |> Enum.reject(&(&1.text == "" or &1.citations == []))
+
+    support = Enum.frequencies_by(pooled, & &1.text)
+    citations_by_text = Enum.group_by(pooled, & &1.text, & &1.citations)
+
+    raw =
+      pooled
       |> Enum.uniq_by(& &1.text)
+      |> Enum.map(fn finding ->
+        finding
+        |> Map.put(:support, Map.fetch!(support, finding.text))
+        |> Map.put(
+          :citations,
+          citations_by_text |> Map.fetch!(finding.text) |> List.flatten() |> Enum.uniq()
+        )
+      end)
+      |> apply_quorum(opts)
       |> Enum.with_index(1)
       |> Enum.map(fn {finding, i} -> Map.put(finding, :id, "synth-tmp-#{i}") end)
 
@@ -87,9 +114,18 @@ defmodule Tracefield.Synthesis do
 
     synth_entries = Reference.absorb(reference, survivors, Keyword.get(opts, :author, "SYNTH"))
 
+    support_by_text = Map.new(raw, &{&1.text, &1.support})
+
     findings =
       Enum.map(synth_entries, fn e ->
-        %{id: e.id, text: e.text, citations: e.citations, verified: true, embedding: e.embedding}
+        %{
+          id: e.id,
+          text: e.text,
+          citations: e.citations,
+          verified: true,
+          support: Map.get(support_by_text, e.text, 1),
+          embedding: e.embedding
+        }
       end)
 
     # Dedup BEFORE novelty: best-of-N pools paraphrases of the same idea
@@ -151,12 +187,28 @@ defmodule Tracefield.Synthesis do
   defp merge_cluster(members) do
     rep = Enum.max_by(members, &String.length(&1.text))
     citations = members |> Enum.flat_map(& &1.citations) |> Enum.uniq()
+    # cluster support = total samples backing any member (semantic consensus)
+    support = members |> Enum.map(&Map.get(&1, :support, 1)) |> Enum.sum()
 
     rep
     |> Map.put(:citations, citations)
+    |> Map.put(:support, support)
     |> Map.put(:cluster_size, length(members))
     |> Map.put(:cluster_member_ids, Enum.map(members, & &1.id))
     |> Map.delete(:embedding)
+  end
+
+  # Quorum filter: keep only findings backed by >= :quorum samples (default 1 =
+  # no filter). Resolves contradictory low-support findings (e32) — a 1/N claim
+  # does not survive against an N/N one when quorum > 1.
+  defp apply_quorum(findings, opts) do
+    quorum = max(Keyword.get(opts, :quorum, 1), 1)
+
+    if quorum <= 1 do
+      findings
+    else
+      Enum.filter(findings, &(Map.get(&1, :support, 1) >= quorum))
+    end
   end
 
   # --- ensemble sampling ---
