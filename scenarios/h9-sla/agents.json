@@ -1,0 +1,7 @@
+{
+  "agents": [
+    {"id": "OPS", "domain": "reliability", "desc": "信頼性・可用性・障害設計を最優先する", "doc": "ops.md"},
+    {"id": "BIZ", "domain": "business-speed", "desc": "コスト・上市速度・ROI を最優先する", "doc": "biz.md"},
+    {"id": "SEC", "domain": "security", "desc": "セキュリティ・データ保護・規制を最優先する", "doc": "sec.md"}
+  ]
+}
