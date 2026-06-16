@@ -1,36 +1,36 @@
 # Contributing to tracefield
 
-Thanks for your interest. `tracefield` is a research project, so APIs, mix task
-names, and scenario formats change as experiments evolve. Contributions are
-welcome, but please open an issue to discuss anything substantial before sending a
-large change.
+Thanks for your interest. `tracefield` is a research project, so APIs, command
+names, and scenario formats may change as experiments evolve. Please open an
+issue to discuss substantial changes before sending a large patch.
 
-## Development setup
+## Development Setup
 
 ```sh
-mise install                 # installs the pinned Elixir/OTP toolchain
-mise exec -- mix deps.get
-mise exec -- mix compile
-mise exec -- mix test
+cargo build --release -p tracefield
+cargo check -p tracefield
+cargo test
 ```
 
-A built-in `mock` adapter means the full test suite runs with no model. Live runs
-need a local [Ollama](https://ollama.com/) instance or an `OPENROUTER_API_KEY`.
+The built-in `mock` adapter means the test suite and smoke scenarios run with no
+model. Live runs need a local [Ollama](https://ollama.com/) instance or an
+`OPENROUTER_API_KEY`.
 
-## Before opening a pull request
+## Before Opening A Pull Request
 
-- Run the formatter: `mise exec -- mix format`
-- Run the tests: `mise exec -- mix test`
-- Keep changes focused; explain the *why* in the PR description
-- For experiment changes, record what you found under `docs/findings-*.md` so the
-  result is reproducible and the reasoning is preserved
+- Run the formatter: `cargo fmt --check`
+- Run the checks: `cargo check -p tracefield`
+- Run the tests: `cargo test`
+- Keep changes focused; explain the why in the PR description
+- For experiment changes, record what you found under `docs/findings-*.md`
 
-## Scenario data
+## Scenario Data
 
-All data under `scenarios/` is **synthetic and fictional**. Do not add real client,
-customer, or personal data to this repository.
+All data under `scenarios/` is **synthetic and fictional**. Do not add real
+client, customer, or personal data to this repository.
 
 ## Licensing
 
 By contributing, you agree that your contributions are licensed under the
-[Apache License, Version 2.0](./LICENSE), consistent with the rest of the project.
+[Apache License, Version 2.0](./LICENSE), consistent with the rest of the
+project.

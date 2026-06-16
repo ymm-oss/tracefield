@@ -1,56 +1,46 @@
 # tracefield
 
-> **Governable exploration for multi-agent systems.** A research harness for
-> *semi-soluble orchestration* — letting AI agents collaborate openly while
-> keeping the downstream influence of every input **traceable, isolable, and
-> retractable**.
+> **Governable exploration for multi-agent systems.** A Rust CLI for
+> semi-soluble orchestration: letting AI agents collaborate while keeping each
+> input's downstream influence traceable, isolable, and retractable.
 
-`tracefield` is an experimental Elixir project that investigates a single design
-hypothesis:
+`tracefield` investigates a single design hypothesis:
 
-> Can open-ended multi-agent exploration retain **provenance**, **reversibility**,
-> and **gateability** — so that when a contaminated, false, or retracted input
-> enters the system, its downstream impact can be located, isolated, excised, and
-> re-evaluated?
+> Can open-ended multi-agent exploration retain **provenance**,
+> **reversibility**, and **gateability** so that when a contaminated, false, or
+> retracted input enters the system, its downstream impact can be located,
+> isolated, excised, and re-evaluated?
 
 The detailed design notes, experiment plans, and findings live in [`docs/`](./docs)
-and are written in Japanese. This README is a short English entry point.
+and are written mostly in Japanese.
 
----
+## The Idea
 
-## The idea in one screen
-
-Multi-agent exploration faces a well-known trade-off:
+Multi-agent exploration faces a trade-off:
 
 | Mode | Openness | Governability |
 | --- | --- | --- |
-| Free-form exploration | high — reaches interstitial blind spots nobody owns | low — contamination is hard to trace, isolate, or retract |
-| Fixed-role pipeline | low — rigid, misses cross-role blind spots | high — clear ownership and stop points |
+| Free-form exploration | high | low |
+| Fixed-role pipeline | low | high |
 | **Semi-soluble orchestration** | retains high openness | retains provenance / reversibility / gateability |
 
-The core value tested here is **not "find more blind spots"** — that is just a
-matter of adding agents. The primary outcome is **impact recall / precision**: how
-accurately the system can identify and contain the downstream influence of a bad
-input once it is discovered.
+The core value tested here is **not "find more blind spots"**. The primary
+outcome is **impact recall / precision**: how accurately the system can identify
+and contain the downstream influence of a bad input once it is discovered.
 
-"Semi"-soluble means agents share state deeply enough to collaborate beyond the
-bottleneck of natural language, but not so completely that each agent's bias
-(perspective, expertise, originality) dissolves into a uniform blur — because that
-diversity is what makes multi-agent exploration worth doing.
-
-See [`docs/overview.md`](./docs/overview.md) for the full conceptual background and
+See [`docs/overview.md`](./docs/overview.md) for conceptual background and
 [`docs/glossary.md`](./docs/glossary.md) for terminology.
-
----
 
 ## Requirements
 
-- [Elixir](https://elixir-lang.org/) ~> 1.18 (the repo is pinned to 1.20 / OTP 29 via [`mise`](https://mise.jdx.io/))
-- For live runs: a local [Ollama](https://ollama.com/) instance, or an
-  `OPENROUTER_API_KEY` for cross-family runs via [OpenRouter](https://openrouter.ai/)
-- A mock adapter is built in, so the test suite and demos run with no model at all
+- [Rust](https://www.rust-lang.org/tools/install) with Cargo
+- For live local model runs: [Ollama](https://ollama.com/)
+- For OpenRouter runs: `OPENROUTER_API_KEY`
 
-## Quick start
+The built-in `mock` adapter runs with no model, no network service, and no API
+key.
+
+## Quick Start
 
 ```sh
 git clone https://github.com/ymm-oss/tracefield.git
@@ -58,101 +48,93 @@ cd tracefield
 ./install.sh
 ```
 
-`install.sh` installs the pinned toolchain (via [`mise`](https://mise.jdx.io/), if
-present), fetches deps, compiles, and runs a model-free smoke check — so a fresh
-checkout is ready with one command and **no model required**. Flags: `--test` also
-runs the full suite, `--no-smoke` skips the smoke run, `-h` for help.
+`install.sh` builds the Rust CLI, runs `cargo check -p tracefield`, and runs a
+model-free smoke check unless `--no-smoke` is passed.
 
-<details>
-<summary>Prefer to run the steps manually?</summary>
+Manual commands:
 
 ```sh
-# install the pinned toolchain
-mise install
-
-# fetch deps, compile, test
-mise exec -- mix deps.get
-mise exec -- mix compile
-mise exec -- mix test
-
-# run a phase with the mock adapter (no model needed)
-mise exec -- mix tracefield.phase1 --adapter mock --n 8
+cargo build --release -p tracefield
+cargo check -p tracefield
+cargo test
 ```
 
-</details>
-
-For live runs with a local model:
+Run the CLI:
 
 ```sh
-ollama serve
-ollama pull gemma4:12b
-mise exec -- mix tracefield.phase1 --adapter ollama --n 2 --model gemma4:12b
+./target/release/tracefield doctor
+./target/release/tracefield consult --scenario-dir scenarios/generic-smoke --adapter mock
 ```
 
-See [`RUNNING.md`](./RUNNING.md) for more run notes.
-
-## Mix tasks
-
-The harness is driven through `mix tracefield.*` tasks. Start here:
+Install it into Cargo's bin directory:
 
 ```sh
-mise exec -- mix tracefield          # categorized overview of every task
-mise exec -- mix tracefield.doctor   # check toolchain, Ollama, API keys, CLI adapters
+cargo install --path crates/tracefield-cli --locked
+tracefield doctor
 ```
 
-A few entry points:
-
-| Task | Purpose |
-| --- | --- |
-| `mix tracefield` | Categorized overview of all tasks |
-| `mix tracefield.doctor` | Diagnose toolchain / adapters (mock, ollama, openrouter, cli) |
-| `mix tracefield.new <name>` | Scaffold a new consult scenario, ready to run |
-| `mix tracefield.consult` | Consult the team; return a governed best-of-N synthesis |
-| `mix tracefield.phase0` / `.phase1` | Core experiment phases |
-| `mix tracefield.governance_vs_fusion` | Compare provenance-closure governance vs post-hoc fusion containment |
-| `mix tracefield.hetero` | Private-document substrate-heterogeneity experiment |
-| `mix tracefield.retract` | Retract an entry in a persisted store and show isolated synthesis |
-| `mix tracefield.genesis` | Attractor detection and cluster scaffolding |
-
-`consult` defaults to `--adapter cli` (a strong model via `cursor-agent` /
-`claude`) and prints a readable report; add `--json` for raw JSON on stdout or
-`--out <file>` to write it. Use `--adapter mock` for a model-free run
-(deliberation only), or `ollama` / `openrouter` for other backends.
-
-Run `mise exec -- mix help` to see the full list.
-
-### Author your own scenario
+## Commands
 
 ```sh
-mise exec -- mix tracefield.new my-review
+tracefield doctor
+tracefield new my-review
+tracefield consult --scenario-dir scenarios/my-review --adapter mock
+tracefield consult --scenario-dir scenarios/my-review --adapter ollama --model gemma4:12b
+tracefield consult --scenario-dir scenarios/my-review --adapter mock --persist runs/reference.jsonl
+tracefield retract --store runs/reference.jsonl --entry e3
+```
+
+`consult` writes a readable report by default. Use `--json` for compact JSON or
+`--out <file>` for a pretty JSON file.
+
+## Author A Scenario
+
+```sh
+tracefield new my-review
 # edit scenarios/my-review/task.md and private/*.md
-mise exec -- mix tracefield.consult --scenario-dir scenarios/my-review --adapter mock
+tracefield consult --scenario-dir scenarios/my-review --adapter mock
 ```
 
-A scenario is a `task.md` (the shared task) plus an `agents.json` manifest and
-one `private/<doc>.md` per agent (each agent's private lens). See
-[`scenarios/_template`](./scenarios/_template).
+A scenario is:
 
-## Repository layout
-
-```
-lib/tracefield/     core: field, provenance, stance, synthesis, llm adapters, ...
-lib/mix/tasks/      mix tracefield.* entry points
-scenarios/          synthetic, fictional consulting scenarios (test fixtures)
-docs/               design notes, experiment plans, findings (Japanese)
-test/               ExUnit test suite
-experiments/        Python analysis scripts for run outputs
+```text
+scenarios/<name>/
+├── task.md
+├── agents.json
+└── private/
+    ├── lens1.md
+    └── lens2.md
 ```
 
-> All scenario data under `scenarios/` — including the per-agent "private fact"
-> memos under `scenarios/*/private/` — is **synthetic and fictional**. No real
-> client or personal data is included.
+`agents.json` accepts either a wrapped or raw agent list:
+
+```json
+{
+  "agents": [
+    {"id": "A1", "domain": "risk", "desc": "Focus on risks.", "doc": "lens1.md"},
+    {"id": "A2", "domain": "value", "desc": "Focus on value.", "doc": "lens2.md"}
+  ]
+}
+```
+
+## Repository Layout
+
+```text
+crates/tracefield-cli/   CLI binary
+crates/tracefield-core/  scenario, store, LLM adapter, consult logic
+scenarios/               synthetic, fictional consulting scenarios
+docs/                    design notes, experiment plans, findings
+experiments/             Python analysis scripts for historical run outputs
+```
+
+All scenario data under `scenarios/` is **synthetic and fictional**. Do not add
+real client, customer, or personal data to this repository.
 
 ## Status
 
-This is a **research project**, not a stable library. APIs, task names, and scenario
-formats change as experiments evolve. Findings are recorded under `docs/findings-*.md`
-and summarized in [`docs/conclusions.md`](./docs/conclusions.md).
+This is a **research project**, not a stable library. APIs, command names, and
+scenario formats may change as experiments evolve. Current Rust-port scope is
+tracked in [`docs/rust-port.md`](./docs/rust-port.md).
 
 ## License
 
