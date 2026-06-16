@@ -304,4 +304,59 @@ defmodule Tracefield.SynthesisTest do
     assert result.findings == []
     assert result.synth_entry_ids == []
   end
+
+  # stance verdicts keyed by pair index (n): citation order after grounding is
+  # [e1, e2], so n=1 → e1, n=2 → e2.
+  defp stance_stub(relations) do
+    body =
+      relations
+      |> Enum.with_index(1)
+      |> Map.new(fn {rel, i} -> {Integer.to_string(i), %{"relation" => rel}} end)
+      |> Jason.encode!()
+
+    fn _prompt -> {:ok, body} end
+  end
+
+  test "stance audit drops a citation judged contradicting (before absorb)" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        stance_audit: true,
+        stance_audit_complete: stance_stub(["supports", "contradicts"])
+      )
+
+    assert [finding] = result.findings
+    assert finding.citations == [e1.id]
+    refute e2.id in finding.citations
+
+    assert Enum.any?(
+             result.stance_dropped,
+             &(&1.cited_id == e2.id and &1.relation == "contradicts")
+           )
+
+    # store never persisted the infidelitous citation
+    [synth_id] = result.synth_entry_ids
+    refute e2.id in Reference.get(ref, synth_id).citations
+  end
+
+  test "stance audit keeps genuinely supporting citations (no stance_dropped key)" do
+    {ref, e1, e2, _e3} = seed_store()
+    layer0 = Reference.all(ref)
+
+    result =
+      Synthesis.run(ref, layer0,
+        synth_n: 1,
+        synth_complete: synth_stub([e1.id, e2.id]),
+        stance_audit: true,
+        stance_audit_complete: stance_stub(["supports", "supports"])
+      )
+
+    assert [finding] = result.findings
+    assert Enum.sort(finding.citations) == Enum.sort([e1.id, e2.id])
+    refute Map.has_key?(result, :stance_dropped)
+  end
 end
