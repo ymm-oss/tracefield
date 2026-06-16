@@ -8,6 +8,9 @@ Use this reference when creating or editing a Tracefield scenario.
 scenarios/<name>/
 ├── task.md
 ├── agents.json
+├── skills/
+│   └── review/
+│       └── SKILL.md
 └── private/
     ├── lens1.md
     └── lens2.md
@@ -39,7 +42,8 @@ Use either wrapped or raw form. Wrapped form is preferred:
       "id": "RISK",
       "domain": "risk",
       "desc": "Focus on failure modes, compliance, and operational constraints.",
-      "doc": "risk.md"
+      "doc": "risk.md",
+      "skills": ["review"]
     },
     {
       "id": "VALUE",
@@ -58,6 +62,9 @@ Fields:
 - `desc`: role instruction.
 - `doc`: file name under `private/`.
 - `model`: optional per-agent model override.
+- `skills`: optional list of scenario-local skill ids. Each id must use
+  lowercase ASCII letters, digits, or `-`, and resolves to
+  `skills/<id>/SKILL.md`.
 
 ## private/*.md
 
@@ -71,6 +78,33 @@ Known constraints:
 Concerns:
 - Role boundaries are ambiguous during escalation.
 ```
+
+## skills
+
+Use skills for user-defined procedures that should influence an agent and remain
+auditable. Referenced skills are loaded as `procedure` entries and every entry
+produced by the agent automatically cites those procedure entries.
+
+```markdown
+---
+name: review
+description: Check claims against explicit evidence before recommending changes.
+---
+
+# Review
+
+Before recommending a change, check whether the claim depends on an explicit
+source, a private lens, or an assumption that should be stated separately.
+```
+
+The folder name, `agents.json` id, and frontmatter `name` must match. In the
+example above, the file must be `skills/review/SKILL.md` and agents reference it
+with `"skills": ["review"]`.
+
+Tracefield currently injects `SKILL.md` instructions into the consult prompt and
+tracks the skill as a `procedure` entry. Bundled `references/`, `scripts/`, and
+`assets/` may exist in the skill folder, but consult does not automatically read
+or execute them.
 
 ## Quality Checks
 

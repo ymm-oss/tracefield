@@ -37,12 +37,21 @@ Scenario directories keep the shared shape:
 scenarios/<name>/
 ├── task.md
 ├── agents.json
+├── skills/
+│   └── review/
+│       └── SKILL.md
 └── private/
     ├── lens1.md
     └── lens2.md
 ```
 
 `agents.json` may be either wrapped (`{"agents": [...]}`) or a raw agent array.
+Agents may reference scenario-local user skills with `skills: ["review"]`;
+referenced skills are loaded from `skills/<id>/SKILL.md` and seeded as
+`procedure` entries. `SKILL.md` must include `name` and `description`
+frontmatter, and `name` must match `<id>`. The Rust CLI currently injects
+`SKILL.md` instructions only; bundled references, scripts, and assets are not
+automatically read or executed by `consult`.
 
 ## Current Gaps
 

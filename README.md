@@ -28,8 +28,9 @@ The core value tested here is **not "find more blind spots"**. The primary
 outcome is **impact recall / precision**: how accurately the system can identify
 and contain the downstream influence of a bad input once it is discovered.
 
-See [`docs/overview.md`](./docs/overview.md) for conceptual background and
-[`docs/glossary.md`](./docs/glossary.md) for terminology.
+See [`docs/user-guide.md`](./docs/user-guide.md) for usage, [`docs/overview.md`](./docs/overview.md)
+for conceptual background, and [`docs/glossary.md`](./docs/glossary.md) for
+terminology.
 
 ## Requirements
 
@@ -101,6 +102,9 @@ A scenario is:
 scenarios/<name>/
 ├── task.md
 ├── agents.json
+├── skills/
+│   └── security-review/
+│       └── SKILL.md
 └── private/
     ├── lens1.md
     └── lens2.md
@@ -111,11 +115,20 @@ scenarios/<name>/
 ```json
 {
   "agents": [
-    {"id": "A1", "domain": "risk", "desc": "Focus on risks.", "doc": "lens1.md"},
+    {"id": "A1", "domain": "risk", "desc": "Focus on risks.", "doc": "lens1.md", "skills": ["security-review"]},
     {"id": "A2", "domain": "value", "desc": "Focus on value.", "doc": "lens2.md"}
   ]
 }
 ```
+
+Agent skills are user-defined, scenario-local procedures. A skill id in
+`agents.json` resolves to `skills/<id>/SKILL.md`. `SKILL.md` must use the agent
+skill shape: YAML frontmatter with `name` and `description`, followed by
+Markdown instructions. Loaded skills are seeded as `procedure` entries and are
+automatically cited by entries produced by agents that use them, so skill
+influence remains retractable. Tracefield currently injects `SKILL.md`
+instructions only; bundled references, scripts, and assets are not automatically
+read or executed by `consult`.
 
 ## Repository Layout
 

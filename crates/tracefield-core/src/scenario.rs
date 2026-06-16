@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,8 @@ pub struct Scenario {
     pub agents: Vec<AgentSpec>,
     #[serde(default)]
     pub private_docs: BTreeMap<String, String>,
+    #[serde(default)]
+    pub skills: BTreeMap<String, SkillSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +28,18 @@ pub struct AgentSpec {
     pub private: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillSpec {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    pub raw_content: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,18 +70,28 @@ impl Scenario {
         }
 
         let private_docs = load_private_docs(dir)?;
+        let skills = load_skill_docs(dir, &agents)?;
 
         Ok(Self {
             dir: dir.to_path_buf(),
             task: strip_agent_meta(&task),
             agents,
             private_docs,
+            skills,
         })
     }
 
     pub fn agent_private_doc(&self, agent: &AgentSpec) -> Option<&str> {
         let doc = agent.doc.as_ref().or(agent.private.as_ref())?;
         self.private_docs.get(doc).map(String::as_str)
+    }
+
+    pub fn agent_skills(&self, agent: &AgentSpec) -> Vec<&SkillSpec> {
+        agent
+            .skills
+            .iter()
+            .filter_map(|skill_id| self.skills.get(skill_id))
+            .collect()
     }
 }
 
@@ -150,6 +174,119 @@ fn load_private_docs(dir: &Path) -> Result<BTreeMap<String, String>> {
     Ok(docs)
 }
 
+fn load_skill_docs(dir: &Path, agents: &[AgentSpec]) -> Result<BTreeMap<String, SkillSpec>> {
+    let mut skills = BTreeMap::new();
+    for skill_id in agents
+        .iter()
+        .flat_map(|agent| agent.skills.iter())
+        .collect::<BTreeSet<_>>()
+    {
+        validate_skill_id(skill_id)?;
+        let (path, content) = read_skill_doc(dir, skill_id)?;
+        let skill = parse_skill(skill_id, path, content)?;
+        skills.insert(skill_id.clone(), skill);
+    }
+
+    Ok(skills)
+}
+
+fn read_skill_doc(dir: &Path, skill_id: &str) -> Result<(String, String)> {
+    let nested = PathBuf::from("skills").join(skill_id).join("SKILL.md");
+    let path = dir.join(&nested);
+
+    if path.exists() {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        return Ok((nested.to_string_lossy().to_string(), content));
+    }
+
+    bail!(
+        "skill {skill_id} not found; expected {} under {}",
+        nested.display(),
+        dir.display()
+    );
+}
+
+fn validate_skill_id(skill_id: &str) -> Result<()> {
+    if skill_id.is_empty() || skill_id.len() > 63 {
+        bail!("invalid skill id {skill_id:?}; use 1-63 lowercase letters, digits, or hyphens");
+    }
+    if skill_id.starts_with('-') || skill_id.ends_with('-') || skill_id.contains("--") {
+        bail!(
+            "invalid skill id {skill_id:?}; use hyphen-case without leading, trailing, or repeated hyphens"
+        );
+    }
+    if !skill_id
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    {
+        bail!(
+            "invalid skill id {skill_id:?}; use only lowercase ASCII letters, digits, or hyphens"
+        );
+    }
+
+    Ok(())
+}
+
+fn parse_skill(skill_id: &str, path: String, raw_content: String) -> Result<SkillSpec> {
+    let (frontmatter, body) = split_skill_frontmatter(&raw_content)
+        .with_context(|| format!("skill {skill_id} must start with YAML frontmatter"))?;
+    let name = frontmatter_value(frontmatter, "name")
+        .with_context(|| format!("skill {skill_id} frontmatter is missing required name"))?;
+    let description = frontmatter_value(frontmatter, "description")
+        .with_context(|| format!("skill {skill_id} frontmatter is missing required description"))?;
+
+    if name != skill_id {
+        bail!("skill {skill_id} frontmatter name must match the skill directory name");
+    }
+    if description.trim().is_empty() {
+        bail!("skill {skill_id} frontmatter description must not be empty");
+    }
+
+    Ok(SkillSpec {
+        id: skill_id.to_string(),
+        path,
+        name,
+        description,
+        body: body.trim().to_string(),
+        raw_content,
+    })
+}
+
+fn split_skill_frontmatter(raw: &str) -> Option<(&str, &str)> {
+    let rest = raw
+        .strip_prefix("---\n")
+        .or_else(|| raw.strip_prefix("---\r\n"))?;
+    let separator = rest
+        .find("\n---\n")
+        .map(|index| (index, 5))
+        .or_else(|| rest.find("\r\n---\r\n").map(|index| (index, 7)))
+        .or_else(|| rest.find("\n---\r\n").map(|index| (index, 6)))
+        .or_else(|| rest.find("\r\n---\n").map(|index| (index, 6)))?;
+    let (frontmatter, remainder) = rest.split_at(separator.0);
+    Some((frontmatter, &remainder[separator.1..]))
+}
+
+fn frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    frontmatter.lines().find_map(|line| {
+        let value = line.trim().strip_prefix(&prefix)?.trim();
+        Some(unquote(value).to_string())
+    })
+}
+
+fn unquote(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value)
+}
+
 fn write_if_allowed(path: &Path, content: &str, force: bool) -> Result<()> {
     if path.exists() && !force {
         bail!(
@@ -196,5 +333,107 @@ mod tests {
             scenario.agent_private_doc(&scenario.agents[0]),
             Some("Operational notes")
         );
+    }
+
+    #[test]
+    fn loads_agent_skills_from_scenario_local_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("task.md"), "Investigate growth.\n").unwrap();
+        fs::write(
+            dir.path().join("agents.json"),
+            r#"{"agents":[{"id":"A1","domain":"ops","doc":"ops.md","skills":["review"]}]}"#,
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("private")).unwrap();
+        fs::write(dir.path().join("private").join("ops.md"), "Ops notes").unwrap();
+        fs::create_dir_all(dir.path().join("skills").join("review")).unwrap();
+        let raw_skill = r#"---
+name: review
+description: Check claims against explicit evidence.
+---
+
+# Review
+
+Review procedure
+"#;
+        fs::write(
+            dir.path().join("skills").join("review").join("SKILL.md"),
+            raw_skill,
+        )
+        .unwrap();
+
+        let scenario = Scenario::load(dir.path()).unwrap();
+        let agent_skills = scenario.agent_skills(&scenario.agents[0]);
+
+        assert_eq!(agent_skills.len(), 1);
+        assert_eq!(agent_skills[0].id, "review");
+        assert_eq!(agent_skills[0].path, "skills/review/SKILL.md");
+        assert_eq!(agent_skills[0].name, "review");
+        assert_eq!(
+            agent_skills[0].description,
+            "Check claims against explicit evidence."
+        );
+        assert_eq!(agent_skills[0].body, "# Review\n\nReview procedure");
+        assert_eq!(agent_skills[0].raw_content, raw_skill);
+    }
+
+    #[test]
+    fn missing_agent_skill_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("task.md"), "Investigate growth.\n").unwrap();
+        fs::write(
+            dir.path().join("agents.json"),
+            r#"{"agents":[{"id":"A1","skills":["missing"]}]}"#,
+        )
+        .unwrap();
+
+        let error = Scenario::load(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("skill missing not found"));
+    }
+
+    #[test]
+    fn skill_without_required_frontmatter_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("task.md"), "Investigate growth.\n").unwrap();
+        fs::write(
+            dir.path().join("agents.json"),
+            r#"{"agents":[{"id":"A1","skills":["review"]}]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("skills").join("review")).unwrap();
+        fs::write(
+            dir.path().join("skills").join("review").join("SKILL.md"),
+            "# Review\n\nReview procedure",
+        )
+        .unwrap();
+
+        let error = Scenario::load(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("must start with YAML frontmatter"));
+    }
+
+    #[test]
+    fn skill_name_must_match_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("task.md"), "Investigate growth.\n").unwrap();
+        fs::write(
+            dir.path().join("agents.json"),
+            r#"{"agents":[{"id":"A1","skills":["review"]}]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("skills").join("review")).unwrap();
+        fs::write(
+            dir.path().join("skills").join("review").join("SKILL.md"),
+            r#"---
+name: other-review
+description: Check claims.
+---
+
+# Review
+"#,
+        )
+        .unwrap();
+
+        let error = Scenario::load(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("frontmatter name must match"));
     }
 }

@@ -14,6 +14,7 @@
 
 | 文書 | 内容 | こんなときに読む |
 | --- | --- | --- |
+| [`user-guide.md`](./user-guide.md) | Rust CLI の使い方。インストール、scenario 作成、agent/private/skill 設定、consult、persist、retract、トラブルシュート | Tracefield を実際に動かしたい |
 | [`overview.md`](./overview.md) | 概念的背景・設計空白の主張・中核価値・EGI の双方向構造 | まず全体像を掴みたい |
 | [`experiment-plan.md`](./experiment-plan.md) | 実験計画書A 本文（全17節）。目的・仮説・接地真実・8条件・指標・成功/失敗基準 | 実験設計の正典を参照したい |
 | [`glossary.md`](./glossary.md) | 用語集（Field Actor / provenance / EGI / PCE gate / 各種指標 など） | 用語の定義を確認したい |
