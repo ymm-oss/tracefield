@@ -88,45 +88,60 @@ synthesis =
 findings = Enum.map(synthesis.findings, &%{id: &1.id, text: &1.text})
 IO.puts("== findings: #{length(findings)} ==")
 
-# --- H9 head-to-head: P が偽と判明したときの containment ---
+# --- H9 head-to-head: P が偽と判明したときの containment（精緻測定）---
 correction = "前提が誤り: AcmeCloud の SLA 99.99% 保証は実際には存在しない（撤回）"
 entries = Reference.all(reference)
 
-gt = GovernanceVsFusion.semantic_gt(findings, gt_keywords)
-gov = GovernanceVsFusion.gov_affected(entries, premise.id)
+# F2: 意味 GT — P 偽で各 finding が invalidated/reinforced/unrelated（Opus ラベル）。
+# containment の真の対象は invalidated のみ（reinforced=批判で補強, unrelated=無関係）。
+labels = GovernanceVsFusion.semantic_labels(findings, premise.text, correction, label_model: opus, label_cli: cli)
+gt = GovernanceVsFusion.invalidated(labels)
+gt_keyword = GovernanceVsFusion.semantic_gt(findings, gt_keywords)
 
-fusion =
-  GovernanceVsFusion.fusion_affected(findings, correction,
-    posthoc_model: opus,
-    posthoc_cli: cli
-  )
+# F1: GOV を reachable(推移閉包=氾濫) と direct(P 直接引用のみ=precision レバー)で比較。
+gov_reach = GovernanceVsFusion.gov_affected(entries, premise.id, mode: :reachable)
+gov_direct = GovernanceVsFusion.gov_affected(entries, premise.id, mode: :direct)
+fusion = GovernanceVsFusion.fusion_affected(findings, correction, posthoc_model: opus, posthoc_cli: cli)
 
-gov_score = GovernanceVsFusion.score(gov, gt)
-fusion_score = GovernanceVsFusion.score(fusion, gt)
+s_reach = GovernanceVsFusion.score(gov_reach, gt)
+s_direct = GovernanceVsFusion.score(gov_direct, gt)
+s_fusion = GovernanceVsFusion.score(fusion, gt)
 
-IO.puts("\n=== H9 RESULT (premise #{premise.id} falsified) ===")
+reinforced = for {id, "reinforced"} <- labels, do: id
+unrelated = for {id, "unrelated"} <- labels, do: id
+
+IO.puts("\n=== H9 RESULT (premise #{premise.id} falsified) — 意味 GT ===")
 IO.puts("served findings: #{length(findings)}")
-IO.puts("GT (含 #{inspect(gt_keywords)}): #{inspect(gt)}")
-IO.puts("GOV (closure):    #{inspect(gov)}  recall=#{gov_score.recall} precision=#{gov_score.precision} calls=0")
-IO.puts("FUSION-posthoc:   #{inspect(fusion)}  recall=#{fusion_score.recall} precision=#{fusion_score.precision} calls=1")
+IO.puts("意味 GT invalidated: #{inspect(gt)} | reinforced: #{inspect(reinforced)} | unrelated: #{inspect(unrelated)}")
+IO.puts("keyword GT (参考, 含 #{inspect(gt_keywords)}): #{inspect(gt_keyword)}")
+IO.puts("GOV reachable: #{inspect(gov_reach)}  recall=#{s_reach.recall} precision=#{s_reach.precision} calls=0")
+IO.puts("GOV direct:    #{inspect(gov_direct)}  recall=#{s_direct.recall} precision=#{s_direct.precision} calls=0")
+IO.puts("FUSION-posthoc:#{inspect(fusion)}  recall=#{s_fusion.recall} precision=#{s_fusion.precision} calls=1")
 
 out = Path.join(dir, "RESULT.md")
+fmt = fn x -> :erlang.float_to_binary(x * 1.0, decimals: 2) end
 
 File.write!(out, """
-# H9 実走結果 — governance vs fusion containment（h9-sla, 1 seed）
+# H9 実走結果 — governance vs fusion containment（h9-sla, 1 seed, 精緻測定）
 
 - premise P = #{premise.id}（AcmeCloud SLA 99.99%、偽と判明させ撤回）
 - served findings: #{length(findings)}
-- GT（"AcmeCloud" を含む findings = 真に依拠）: #{inspect(gt)}
+- **意味 GT（P 偽で無効化）invalidated**: #{inspect(gt)}
+  - reinforced（批判で補強）: #{inspect(reinforced)}
+  - unrelated（無関係）: #{inspect(unrelated)}
+- 参考 keyword GT（"AcmeCloud" 含む）: #{inspect(gt_keyword)}
+
+containment（vs 意味 GT invalidated）:
 
 | arm | affected | recall | precision | strong-model calls |
 |---|---|---|---|---|
-| GOV (provenance closure) | #{inspect(gov)} | #{gov_score.recall} | #{gov_score.precision} | 0 |
-| FUSION-posthoc (Opus 再読) | #{inspect(fusion)} | #{fusion_score.recall} | #{fusion_score.precision} | 1 |
+| GOV reachable（推移閉包） | #{length(gov_reach)}件 | #{fmt.(s_reach.recall)} | #{fmt.(s_reach.precision)} | 0 |
+| GOV direct（P 直接引用） | #{inspect(gov_direct)} | #{fmt.(s_direct.recall)} | #{fmt.(s_direct.precision)} | 0 |
+| FUSION-posthoc（Opus 再読） | #{inspect(fusion)} | #{fmt.(s_fusion.recall)} | #{fmt.(s_fusion.precision)} | 1 |
 | FUSION-naive | (来歴なし→隔離不能) | 0 | - | 全 consult 再実行 |
 
-## findings
-#{Enum.map_join(synthesis.findings, "\n", fn f -> "- [#{f.id}] cites=#{inspect(f.citations)} :: #{String.slice(f.text, 0, 160)}" end)}
+## findings（label 付き）
+#{Enum.map_join(synthesis.findings, "\n", fn f -> "- [#{f.id}] (#{Map.get(labels, f.id, "?")}) cites=#{inspect(f.citations)} :: #{String.slice(f.text, 0, 140)}" end)}
 """)
 
 IO.puts("== 書き出し: #{out} ==")
