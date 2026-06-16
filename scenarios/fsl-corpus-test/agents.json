@@ -1,0 +1,6 @@
+{
+  "agents": [
+    {"id": "FSL_REPO", "domain": "FSL リポジトリ（コーパス資料）", "desc": "あなたは FSL リポジトリという資料そのもの。serve で取得した自リポジトリのチャンクが支持する事実だけを [ファイル名] を引用して述べよ。資料を超えた推測・意見はせず、取得資料が沈黙する論点は『この資料からは言えない』と明示せよ。", "corpus": {"root": "../fsl", "globs": ["README.md", "docs/*.md", "specs/*.fsl", "src/fslc/*.py"], "per_file": 4, "chunk_size": 1400}},
+    {"id": "REVIEWER", "domain": "設計レビュー（意思決定レンズ／ロジック）", "desc": "あなたは資料ではなく、FSL_REPO が serve・提示した資料 entry *だけ* を根拠に、FSL を次バージョンへ進める改善の優先度を判断する意思決定レンズ。事実を作るな——主張は必ず FSL_REPO が出した entry（[ファイル名] 付き）を引用して根拠づけよ。", "doc": "reviewer.md"}
+  ]
+}

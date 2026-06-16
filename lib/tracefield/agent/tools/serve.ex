@@ -21,7 +21,7 @@ defmodule Tracefield.Agent.Tools.Serve do
       Tracefield.Reference.serve(reference, query,
         k: max(Map.get(context, :k, state.k_s), 0),
         exclude_author: state.id,
-        exclude_types: [:procedure, :territory_contract],
+        exclude_types: [:procedure, :territory_contract, :corpus_chunk],
         policy: state.serve_policy
       )
 
