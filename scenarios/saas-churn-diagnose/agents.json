@@ -1,0 +1,8 @@
+{
+  "agents": [
+    {"id": "SALES", "domain": "セールス・GTM", "desc": "新規獲得チャネルとセグメント、商談の質を見る。", "doc": "sales.md"},
+    {"id": "PRODUCT", "domain": "プロダクト", "desc": "機能設計と利用ログ、セグメント別の使われ方を見る。", "doc": "product.md"},
+    {"id": "CS", "domain": "カスタマーサクセス", "desc": "オンボーディングと顧客の声、解約理由を見る。", "doc": "cs.md"},
+    {"id": "FIN", "domain": "財務", "desc": "セグメント別の LTV/CAC・NRR・収益性を見る。", "doc": "fin.md"}
+  ]
+}

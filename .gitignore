@@ -13,3 +13,5 @@ erl_crash.dump
 # experiment run outputs
 /runs/
 /docs/index.bleve/
+scenarios/*/consult.log
+scenarios/*/run.jsonl

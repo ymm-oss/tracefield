@@ -1,0 +1,8 @@
+{
+  "agents": [
+    {"id": "GROWTH", "domain": "グロース・マーケ", "desc": "DAU・セッション頻度・リテンション・エンゲージ施策を見る。", "doc": "growth.md"},
+    {"id": "PRODUCT", "domain": "プロダクト", "desc": "機能リリースとその A/B 効果、利用の質を見る。", "doc": "product.md"},
+    {"id": "DATA", "domain": "データ分析", "desc": "指標間の整合・コホート・学習成果と利用の関係を見る。", "doc": "data.md"},
+    {"id": "FINANCE", "domain": "財務・収益", "desc": "継続率・LTV・解約・施策の長期収益影響を見る。", "doc": "finance.md"}
+  ]
+}
