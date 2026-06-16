@@ -31,6 +31,25 @@ defmodule Mix.Tasks.Tracefield.Consult do
   diversified serve queries (base + cross-domain-gap + counterexample angles)
   and union the retrieved entries — a retrieval-breadth lever against the
   documented synthesis ceiling (synth only connects what was retrieved).
+
+  ## Scenario formats
+
+  Two scenario layouts are accepted (auto-detected):
+
+  * **Generic (clean input API)** — `<dir>/agents.json` + `<dir>/task.md` +
+    `<dir>/private/<doc>`. The manifest defines N arbitrary agents:
+
+        {"agents": [{"id": "A1", "domain": "reliability", "desc": "...", "doc": "a.md"}, ...]}
+
+    No contaminant/correction files are required. This is the path for real
+    consults (arbitrary task + docs + lenses) — no custom run.exs needed.
+
+  * **Research harness** — no `agents.json` → falls back to `Scenario.load!`
+    (requires contaminant/correction files) with the fixed SEC/BIZ/UX agents.
+
+  Run deliberation on a strong model with `--adapter cli --model <slug>`
+  (e.g. `claude-opus-4-8-medium`); the cursor-agent command is built from the
+  slug. Other adapters use plain completion.
   """
   use Mix.Task
 
@@ -96,29 +115,31 @@ defmodule Mix.Tasks.Tracefield.Consult do
   `:synth_complete`, `:verify_adapter`, `:verify_model`.
   """
   def run_consult(opts) do
-    scenario = Scenario.load!(Keyword.fetch!(opts, :scenario_dir))
-    private_docs = load_private_docs(Path.join(Keyword.fetch!(opts, :scenario_dir), "private"))
+    dir = Keyword.fetch!(opts, :scenario_dir)
+    {task, agent_specs} = load_consult_inputs(dir)
     adapter = Keyword.get(opts, :adapter, Tracefield.LLM.Ollama)
     embed_adapter = Keyword.get(opts, :embed_adapter, embed_adapter(adapter))
     model = Keyword.get(opts, :model, @default_model)
+    cli = deliberation_cli(adapter, model, opts)
     rounds = Keyword.get(opts, :rounds, @default_rounds)
 
     {:ok, reference} =
       Reference.start_link(
         embed_adapter: embed_adapter,
         embed_model: "nomic-embed-text",
-        entries: [%{type: :chunk, author: "TASK", text: scenario.task, meta: %{domain: "task"}}]
+        entries: [%{type: :chunk, author: "TASK", text: task, meta: %{domain: "task"}}]
       )
 
     agents =
-      Dissolution.default_agents()
+      agent_specs
       |> Enum.with_index()
-      |> Enum.map(fn {agent, index} ->
-        Agent.new(agent.id, agent.domain, agent.desc,
-          anchor: scenario.task,
-          private_doc: Map.fetch!(private_docs, agent.id),
+      |> Enum.map(fn {spec, index} ->
+        Agent.new(spec.id, spec.domain, spec.desc,
+          anchor: task,
+          private_doc: spec.doc,
           adapter: adapter,
           model: model,
+          cli: cli,
           serve_policy: :diverse,
           serve_breadth: Keyword.get(opts, :serve_breadth, 1),
           aware: true,
@@ -146,12 +167,64 @@ defmodule Mix.Tasks.Tracefield.Consult do
       end
 
     %{
-      task: scenario.task,
+      task: task,
       deliberation: Enum.map(layer0, &%{id: &1.id, author: &1.author, text: &1.text}),
       synthesis: synthesis,
       layer0_index: Map.new(layer0, &{&1.id, &1.text})
     }
   end
+
+  # Generic consult input loader. If the scenario dir has an `agents.json`
+  # manifest, run the clean API: task.md + N arbitrary agents + their private
+  # docs, with NO required contaminant/correction files (brushup②). Otherwise
+  # fall back to the research scenario (Scenario.load! + fixed SEC/BIZ/UX), so
+  # existing harness scenarios keep working.
+  defp load_consult_inputs(dir) do
+    manifest = Path.join(dir, "agents.json")
+
+    if File.exists?(manifest) do
+      task = File.read!(Path.join(dir, "task.md"))
+
+      specs =
+        manifest
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("agents")
+        |> Enum.map(fn a ->
+          %{
+            id: Map.fetch!(a, "id"),
+            domain: Map.fetch!(a, "domain"),
+            desc: Map.get(a, "desc", ""),
+            doc: File.read!(Path.join([dir, "private", Map.fetch!(a, "doc")]))
+          }
+        end)
+
+      {task, specs}
+    else
+      scenario = Scenario.load!(dir)
+      private_docs = load_private_docs(Path.join(dir, "private"))
+
+      specs =
+        Enum.map(Dissolution.default_agents(), fn a ->
+          %{id: a.id, domain: a.domain, desc: a.desc, doc: Map.fetch!(private_docs, a.id)}
+        end)
+
+      {scenario.task, specs}
+    end
+  end
+
+  # Deliberation on a strong model (brushup①): with `--adapter cli`, build the
+  # cursor-agent command from `model` (the slug) so deliberation runs on e.g.
+  # Opus without a custom run.exs. Other adapters get nil (plain completion).
+  defp deliberation_cli(Tracefield.LLM.CLI, model, opts) do
+    Keyword.get(
+      opts,
+      :cli,
+      {"cursor-agent", ["-p", "--output-format", "text", "--model", model]}
+    )
+  end
+
+  defp deliberation_cli(_adapter, _model, _opts), do: nil
 
   defp synth_opts(opts) do
     synth_model = Keyword.get(opts, :synth_model, @default_synth_model)
