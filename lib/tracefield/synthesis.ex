@@ -45,6 +45,16 @@ defmodule Tracefield.Synthesis do
     * `:dedupe` — when `true`, cluster near-duplicate findings by embedding
       cosine and keep one representative per cluster (default `false`)
     * `:dedupe_threshold` — cosine threshold for clustering (default `0.85`)
+    * `:quorum` — keep only findings backed by >= N samples (default `1` = no
+      filter); resolves contradictory low-support findings
+    * `:stance_audit` — when `true`, after grounding judge each citation's
+      relation (supports / contradicts / tangential) and drop non-supporting
+      ones before absorb (default `false`); `:stance_adapter` / `:stance_model`
+      / `:stance_cli` configure the judge, `:stance_audit_complete` is the test
+      seam. Returns `stance_dropped: [...]` when any citation was dropped.
+
+  Each finding carries `:support` (how many of the N samples produced it; for a
+  dedupe cluster, the summed support of its members).
 
   Returns `%{findings: [...], synth_entry_ids: [...], dropped_citations: [...],
   sample_count: n}` where each finding is `%{id, text, citations, verified}`.
@@ -66,11 +76,33 @@ defmodule Tracefield.Synthesis do
     id_set = MapSet.new(Enum.map(layer0, &value(&1, :id)))
     n = max(Keyword.get(opts, :synth_n, @default_synth_n), 1)
 
-    raw =
+    # Sample-consensus / quorum (brushup④, e32): best-of-N pools N samples;
+    # uniq_by/text collapsed duplicates but THREW AWAY the count, so a finding
+    # backed by 1/N samples and one backed by N/N looked identical and a
+    # contradictory pair (A→B vs A→¬B) was kept with no vote. Keep the support
+    # count (how many samples produced each finding) and optionally require a
+    # `:quorum` (default 1 = no filter). Order is preserved (uniq_by order) for
+    # determinism; citations are unioned across the supporting samples.
+    pooled =
       1..n
       |> Enum.flat_map(fn _i -> synth_sample(layer0, id_set, opts) end)
       |> Enum.reject(&(&1.text == "" or &1.citations == []))
+
+    support = Enum.frequencies_by(pooled, & &1.text)
+    citations_by_text = Enum.group_by(pooled, & &1.text, & &1.citations)
+
+    raw =
+      pooled
       |> Enum.uniq_by(& &1.text)
+      |> Enum.map(fn finding ->
+        finding
+        |> Map.put(:support, Map.fetch!(support, finding.text))
+        |> Map.put(
+          :citations,
+          citations_by_text |> Map.fetch!(finding.text) |> List.flatten() |> Enum.uniq()
+        )
+      end)
+      |> apply_quorum(opts)
       |> Enum.with_index(1)
       |> Enum.map(fn {finding, i} -> Map.put(finding, :id, "synth-tmp-#{i}") end)
 
@@ -80,6 +112,16 @@ defmodule Tracefield.Synthesis do
     verdicts = Reference.verify(reference, raw, verify_opts(opts))
     {gated, dropped} = apply_grounding(raw, verdicts)
 
+    # Stance-fidelity audit (brushup④, e52), opt-in, AFTER grounding and BEFORE
+    # absorb. The grounding gate only asks "is there textual support?"; this asks
+    # the stricter "does the cited entry GENUINELY support the claim (relies_on),
+    # or does it CONTRADICT / is it merely TANGENTIAL?" — catching refutes-masked
+    # implicit relies_on and participation-based over-connection (the C5 0.50
+    # natural-contamination failure surface). Drops non-supporting citations so
+    # the store stays precise. Conservative: keep on judge miss (never drop
+    # without positive evidence of infidelity).
+    {gated, stance_dropped} = apply_stance_audit(reference, gated, opts)
+
     survivors =
       gated
       |> Enum.reject(&(&1.citations == []))
@@ -87,9 +129,18 @@ defmodule Tracefield.Synthesis do
 
     synth_entries = Reference.absorb(reference, survivors, Keyword.get(opts, :author, "SYNTH"))
 
+    support_by_text = Map.new(raw, &{&1.text, &1.support})
+
     findings =
       Enum.map(synth_entries, fn e ->
-        %{id: e.id, text: e.text, citations: e.citations, verified: true, embedding: e.embedding}
+        %{
+          id: e.id,
+          text: e.text,
+          citations: e.citations,
+          verified: true,
+          support: Map.get(support_by_text, e.text, 1),
+          embedding: e.embedding
+        }
       end)
 
     # Dedup BEFORE novelty: best-of-N pools paraphrases of the same idea
@@ -98,6 +149,8 @@ defmodule Tracefield.Synthesis do
     {findings, dedupe_summary} = maybe_dedupe(findings, opts)
     {findings, novelty_summary} = annotate_novelty(findings, opts)
 
+    stance_summary = if stance_dropped == [], do: %{}, else: %{stance_dropped: stance_dropped}
+
     Map.merge(
       %{
         findings: findings,
@@ -105,7 +158,7 @@ defmodule Tracefield.Synthesis do
         dropped_citations: dropped,
         sample_count: n
       },
-      Map.merge(dedupe_summary, novelty_summary)
+      dedupe_summary |> Map.merge(novelty_summary) |> Map.merge(stance_summary)
     )
   end
 
@@ -151,12 +204,143 @@ defmodule Tracefield.Synthesis do
   defp merge_cluster(members) do
     rep = Enum.max_by(members, &String.length(&1.text))
     citations = members |> Enum.flat_map(& &1.citations) |> Enum.uniq()
+    # cluster support = total samples backing any member (semantic consensus)
+    support = members |> Enum.map(&Map.get(&1, :support, 1)) |> Enum.sum()
 
     rep
     |> Map.put(:citations, citations)
+    |> Map.put(:support, support)
     |> Map.put(:cluster_size, length(members))
     |> Map.put(:cluster_member_ids, Enum.map(members, & &1.id))
     |> Map.delete(:embedding)
+  end
+
+  # Quorum filter: keep only findings backed by >= :quorum samples (default 1 =
+  # no filter). Resolves contradictory low-support findings (e32) — a 1/N claim
+  # does not survive against an N/N one when quorum > 1.
+  defp apply_quorum(findings, opts) do
+    quorum = max(Keyword.get(opts, :quorum, 1), 1)
+
+    if quorum <= 1 do
+      findings
+    else
+      Enum.filter(findings, &(Map.get(&1, :support, 1) >= quorum))
+    end
+  end
+
+  # --- stance-fidelity audit ---
+
+  defp apply_stance_audit(reference, gated, opts) do
+    if Keyword.get(opts, :stance_audit, false) and Enum.any?(gated, &(&1.citations != [])) do
+      by_id = Map.new(Reference.all(reference), &{value(&1, :id), &1})
+
+      pairs =
+        for f <- gated, cid <- f.citations do
+          %{key: {f.id, cid}, claim: f.text, cited: cited_text(by_id, cid)}
+        end
+
+      relations = judge_stance(pairs, opts)
+
+      Enum.reduce(gated, {[], []}, fn f, {kept, dropped} ->
+        {good, bad} =
+          Enum.split_with(f.citations, fn cid ->
+            Map.get(relations, {f.id, cid}, "supports") == "supports"
+          end)
+
+        kept = kept ++ [%{f | citations: good}]
+
+        dropped =
+          dropped ++
+            Enum.map(bad, fn cid ->
+              %{
+                finding_text: f.text,
+                cited_id: cid,
+                relation: Map.get(relations, {f.id, cid}, "unknown")
+              }
+            end)
+
+        {kept, dropped}
+      end)
+    else
+      {gated, []}
+    end
+  end
+
+  defp cited_text(by_id, cid) do
+    case Map.get(by_id, cid) do
+      nil -> ""
+      entry -> to_string(value(entry, :text))
+    end
+  end
+
+  defp judge_stance([], _opts), do: %{}
+
+  defp judge_stance(pairs, opts) do
+    numbered =
+      pairs
+      |> Enum.with_index(1)
+      |> Enum.map(fn {p, i} -> %{"n" => i, "claim" => p.claim, "cited" => p.cited} end)
+
+    content =
+      case stance_complete(stance_prompt(numbered), opts) do
+        {:ok, c} -> c
+        _ -> ""
+      end
+
+    parse_stance(content, pairs)
+  end
+
+  defp stance_complete(prompt, opts) do
+    case Keyword.get(opts, :stance_audit_complete) do
+      fun when is_function(fun, 1) ->
+        fun.(prompt)
+
+      _ ->
+        llm_opts =
+          [
+            adapter: Keyword.get(opts, :stance_adapter, Tracefield.LLM.CLI),
+            model: Keyword.get(opts, :stance_model, Keyword.get(opts, :synth_model)),
+            temperature: 0.0,
+            timeout: 300_000
+          ]
+          |> maybe_put(:cli, Keyword.get(opts, :stance_cli))
+
+        Tracefield.LLM.complete([%{role: "user", content: prompt}], llm_opts)
+    end
+  end
+
+  defp stance_prompt(numbered) do
+    """
+    各ペアについて、CITED が CLAIM をどう支持するかを厳密に分類せよ。
+    - "supports": CLAIM が CITED に実際に依拠している（genuine relies_on）
+    - "contradicts": CITED は CLAIM と矛盾する
+    - "tangential": CITED は CLAIM と関係が薄い（参加・近接のみで実依存でない）
+    迷う場合は "supports"。Return only JSON keyed by n, like {"1":{"relation":"supports"}}.
+
+    PAIRS:
+    #{Jason.encode!(numbered)}
+    """
+    |> String.trim()
+  end
+
+  defp parse_stance(content, pairs) do
+    case decode_object(content) do
+      {:ok, %{} = decoded} ->
+        pairs
+        |> Enum.with_index(1)
+        |> Map.new(fn {pair, i} ->
+          relation =
+            case Map.get(decoded, Integer.to_string(i), Map.get(decoded, i)) do
+              %{} = v -> to_string(Map.get(v, "relation", "supports"))
+              _ -> "supports"
+            end
+
+          {pair.key, relation}
+        end)
+
+      _ ->
+        %{}
+    end
   end
 
   # --- ensemble sampling ---

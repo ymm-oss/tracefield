@@ -28,6 +28,16 @@ defmodule Mix.Tasks.Tracefield.Consult do
   cluster (best-of-N pools paraphrases of the same idea). Merged findings show
   `(×N merged)` and union their citations; all entries stay governable.
 
+  `--stance-audit` adds a fidelity gate after grounding: each citation's relation
+  is judged (supports / contradicts / tangential) and non-supporting citations
+  are dropped before absorb — stricter than the textual grounding gate, catching
+  participation-based over-connection. Uses the same strong model as synth.
+
+  `--quorum N` (default 1) keeps only synth findings backed by >= N samples
+  (each finding carries `support` = how many of the best-of-N samples produced
+  it). Resolves contradictory low-support findings — a 1/N claim does not
+  survive against an N/N one.
+
   `--serve-breadth N` (default 1) makes each deliberation turn issue N
   diversified serve queries (base + cross-domain-gap + counterexample angles)
   and union the retrieved entries — a retrieval-breadth lever against the
@@ -79,6 +89,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
           novelty_doc: :string,
           dedupe: :boolean,
           dedupe_threshold: :float,
+          quorum: :integer,
+          stance_audit: :boolean,
           serve_breadth: :integer,
           persist: :string,
           adapter: :string,
@@ -102,6 +114,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
         novelty_doc: Keyword.get(opts, :novelty_doc),
         dedupe: Keyword.get(opts, :dedupe, false),
         dedupe_threshold: Keyword.get(opts, :dedupe_threshold),
+        quorum: Keyword.get(opts, :quorum, 1),
+        stance_audit: Keyword.get(opts, :stance_audit, false),
         serve_breadth: Keyword.get(opts, :serve_breadth, 1),
         persist: Keyword.get(opts, :persist)
       )
@@ -258,6 +272,36 @@ defmodule Mix.Tasks.Tracefield.Consult do
     |> Keyword.merge(novelty_opts(opts, synth_model))
     |> Keyword.put(:dedupe, Keyword.get(opts, :dedupe, false))
     |> maybe_put(:dedupe_threshold, Keyword.get(opts, :dedupe_threshold))
+    |> Keyword.put(:quorum, Keyword.get(opts, :quorum, 1))
+    |> Keyword.merge(stance_opts(opts, synth_model))
+  end
+
+  # Stance-fidelity audit (opt-in): judge each citation's relation with the same
+  # strong cursor-agent model as synth/verify.
+  defp stance_opts(opts, synth_model) do
+    if Keyword.get(opts, :stance_audit, false) do
+      [stance_audit: true]
+      |> maybe_put(:stance_audit_complete, Keyword.get(opts, :stance_audit_complete))
+      |> then(fn kw ->
+        if Keyword.has_key?(kw, :stance_audit_complete) do
+          kw
+        else
+          kw
+          |> Keyword.put(:stance_adapter, Keyword.get(opts, :stance_adapter, Tracefield.LLM.CLI))
+          |> Keyword.put(:stance_model, Keyword.get(opts, :stance_model, synth_model))
+          |> Keyword.put(
+            :stance_cli,
+            Keyword.get(
+              opts,
+              :stance_cli,
+              {"cursor-agent", ["-p", "--output-format", "text", "--model", synth_model]}
+            )
+          )
+        end
+      end)
+    else
+      []
+    end
   end
 
   # Novelty gate (opt-in): judge each grounded finding against a ground-truth
@@ -377,7 +421,13 @@ defmodule Mix.Tasks.Tracefield.Consult do
               _ -> ""
             end
 
-          Mix.shell().info("- [#{f.id}]#{tag}#{cluster} cites=#{inspect(f.citations)}")
+          support =
+            case Map.get(f, :support) do
+              v when is_integer(v) -> " support=#{v}"
+              _ -> ""
+            end
+
+          Mix.shell().info("- [#{f.id}]#{tag}#{cluster}#{support} cites=#{inspect(f.citations)}")
           Mix.shell().info("  #{f.text}")
         end)
 
