@@ -35,6 +35,7 @@ defmodule Tracefield.Agent do
         aware: [type: :boolean, default: false],
         serve_policy: [type: :any, default: :similar],
         serve_breadth: [type: :integer, default: 1],
+        corpus_source?: [type: :boolean, default: false],
         entry_limit: [type: :integer, default: 2],
         expected_types: [type: :any, default: nil],
         territory: [type: :any, default: nil],
@@ -87,16 +88,32 @@ defmodule Tracefield.Agent do
       # that surfaced. A single serve per turn under-retrieves; issuing several
       # diversified queries and unioning (dedup by id) raises retrieval breadth.
       # serve_breadth defaults to 1 → byte-identical to the prior single serve.
+      corpus_served =
+        if state.corpus_source? do
+          queries
+          |> Enum.flat_map(fn q ->
+            Tracefield.Reference.serve(reference, q,
+              k: max(state.k_s, 0),
+              only_author: state.id,
+              policy: :similar
+            )
+            |> Enum.filter(&(&1.type == :corpus_chunk))
+          end)
+        else
+          []
+        end
+
       served =
         queries
         |> Enum.flat_map(fn q ->
           Tracefield.Reference.serve(reference, q,
             k: max(state.k_s, 0),
             exclude_author: state.id,
-            exclude_types: [:procedure, :territory_contract],
+            exclude_types: [:procedure, :territory_contract, :corpus_chunk],
             policy: state.serve_policy
           )
         end)
+        |> Kernel.++(corpus_served)
         |> Enum.uniq_by(& &1.id)
 
       {retrieved, sharing_meta} = apply_sharing_filter(served, state, round)
@@ -988,6 +1005,7 @@ defmodule Tracefield.Agent do
           aware: Keyword.get(opts, :aware, false),
           serve_policy: Keyword.get(opts, :serve_policy, :similar),
           serve_breadth: Keyword.get(opts, :serve_breadth, 1),
+          corpus_source?: Keyword.get(opts, :corpus_source?, false),
           entry_limit: Keyword.get(opts, :entry_limit, 2),
           expected_types: normalize_expected_types(Keyword.get(opts, :expected_types)),
           territory: Keyword.get(opts, :territory),

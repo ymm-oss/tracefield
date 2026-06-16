@@ -64,7 +64,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
   """
   use Mix.Task
 
-  alias Tracefield.{Agent, Dissolution, Reference, Scenario, Synthesis}
+  alias Tracefield.{Agent, Corpus, Dissolution, Reference, Scenario, Synthesis}
 
   @shortdoc "Consult the team; return a governed best-of-N synthesis"
 
@@ -153,6 +153,10 @@ defmodule Mix.Tasks.Tracefield.Consult do
         |> maybe_put(:persist_path, Keyword.get(opts, :persist))
       )
 
+    for spec <- agent_specs, chunks = Map.get(spec, :corpus_chunks, []), chunks != [] do
+      Reference.absorb(reference, chunks, spec.id)
+    end
+
     agents =
       agent_specs
       |> Enum.with_index()
@@ -165,6 +169,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
           cli: cli,
           serve_policy: :diverse,
           serve_breadth: Keyword.get(opts, :serve_breadth, 1),
+          corpus_source?: Map.get(spec, :corpus_source?, false),
           aware: true,
           seed: 2000 + index
         )
@@ -213,14 +218,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
         |> File.read!()
         |> Jason.decode!()
         |> Map.fetch!("agents")
-        |> Enum.map(fn a ->
-          %{
-            id: Map.fetch!(a, "id"),
-            domain: Map.fetch!(a, "domain"),
-            desc: Map.get(a, "desc", ""),
-            doc: File.read!(Path.join([dir, "private", Map.fetch!(a, "doc")]))
-          }
-        end)
+        |> Enum.map(&agent_spec_from_manifest(&1, dir))
 
       {task, specs}
     else
@@ -229,11 +227,43 @@ defmodule Mix.Tasks.Tracefield.Consult do
 
       specs =
         Enum.map(Dissolution.default_agents(), fn a ->
-          %{id: a.id, domain: a.domain, desc: a.desc, doc: Map.fetch!(private_docs, a.id)}
+          %{
+            id: a.id,
+            domain: a.domain,
+            desc: a.desc,
+            doc: Map.fetch!(private_docs, a.id),
+            corpus_source?: false,
+            corpus_chunks: []
+          }
         end)
 
       {scenario.task, specs}
     end
+  end
+
+  defp agent_spec_from_manifest(%{"corpus" => corpus} = a, _dir) do
+    id = Map.fetch!(a, "id")
+    root = corpus |> Map.fetch!("root") |> Path.expand(File.cwd!())
+
+    %{
+      id: id,
+      domain: Map.fetch!(a, "domain"),
+      desc: Map.get(a, "desc", ""),
+      doc: Corpus.private_doc_note(id),
+      corpus_source?: true,
+      corpus_chunks: Corpus.ingest_entries(root, corpus, id)
+    }
+  end
+
+  defp agent_spec_from_manifest(a, dir) do
+    %{
+      id: Map.fetch!(a, "id"),
+      domain: Map.fetch!(a, "domain"),
+      desc: Map.get(a, "desc", ""),
+      doc: File.read!(Path.join([dir, "private", Map.fetch!(a, "doc")])),
+      corpus_source?: false,
+      corpus_chunks: []
+    }
   end
 
   # Deliberation on a strong model (brushup①): with `--adapter cli`, build the

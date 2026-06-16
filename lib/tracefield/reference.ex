@@ -26,6 +26,7 @@ defmodule Tracefield.Reference do
     :change,
     :verdict,
     :chunk,
+    :corpus_chunk,
     :procedure,
     :territory_contract,
     :recruit,
