@@ -67,6 +67,40 @@ defmodule Tracefield.GovernanceVsFusionTest do
     assert s.precision == 0.5
   end
 
+  test "GOV :direct mode counts only direct citers of P (precision lever vs flood)", ctx do
+    # f1, f2 cite P directly; f3, f4 do not. :direct = {f1, f2}; :reachable also
+    # = {f1, f2} here (f3/f4 don't cite P at all), but :direct never floods via
+    # transitive chains.
+    direct = GovernanceVsFusion.gov_affected(ctx.entries, ctx.p.id, mode: :direct)
+    assert Enum.sort(direct) == Enum.sort([ctx.ids.f1, ctx.ids.f2])
+    refute ctx.ids.f3 in direct
+  end
+
+  test "semantic_labels classifies invalidated/reinforced/unrelated (seam)", ctx do
+    labeller = fn _prompt ->
+      {:ok,
+       Jason.encode!(%{
+         ctx.ids.f1 => %{"label" => "invalidated"},
+         ctx.ids.f2 => %{"label" => "unrelated"},
+         ctx.ids.f3 => %{"label" => "reinforced"},
+         ctx.ids.f4 => %{"label" => "unrelated"}
+       })}
+    end
+
+    labels =
+      GovernanceVsFusion.semantic_labels(ctx.findings, "P", "P is false",
+        label_complete: labeller
+      )
+
+    assert GovernanceVsFusion.invalidated(labels) == [ctx.ids.f1]
+    # GOV :direct = {f1, f2}; scored against semantic invalidated GT {f1}:
+    direct = GovernanceVsFusion.gov_affected(ctx.entries, ctx.p.id, mode: :direct)
+    s = GovernanceVsFusion.score(direct, GovernanceVsFusion.invalidated(labels))
+    assert s.recall == 1.0
+    # f2 cited P directly but is semantically unrelated -> precision 0.5
+    assert s.precision == 0.5
+  end
+
   test "FUSION-posthoc scored against the same GT (seam-injected verdict)", ctx do
     # a strong post-hoc reader that correctly identifies the keyword-dependent ones
     posthoc = fn _prompt ->
