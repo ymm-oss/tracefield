@@ -51,14 +51,36 @@ F2/F1 を実装し再走（22 findings）。**意味 GT ラベル結果が決定
 ### 方法論の帰結
 containment を**測れる**ようにするには、植え込む前提を **load-bearing かつ無批判に build される事実**（findings が疑わず計算の土台にする数値・データフィード等）にせねばならない。ベンダー SLA 保証のような **agents が自然に懐疑する前提**では、合成が批判 finding を生み invalidated=0 になる。
 
-## moat 判断: 条件付き → opt-in 寄り（ただし要・追検証）
-2 データ点が示すのは: **governance-containment の価値は findings が前提依存であることに条件付き**で、tracefield の攻め過程はその依存を能動的に減らす。よって**敵対的合成の文脈では containment harm は稀**＝`--governance` opt-in 寄り（e81 と整合）。containment が効くのは「findings が無批判に build する load-bearing 前提（事実フィード等）」に限定される可能性が高い。**この限定こそが製品上の killer-context の特定**になる。
+## 第3データ点（load-bearing 前提 h9-capacity, 1 seed, Opus 全段）
 
-## 次手（順序・改訂）
-1. **load-bearing 前提シナリオ**: findings が疑わず土台にする事実（例: 確定した法規制値・計測データ）を P に植え込み、invalidated>0 を成立させて初めて GOV vs FUSION を測る。
-2. **F1 精緻 closure（残）**: stance/typed 重み付き closure（H7 typed_closure_effects、contradicts→flag・relies_on→invalidate）。prose の stance 記録（#3残り）が前提。
-3. **F3 追検証**: 「攻めの強さ↑で premise-dependence↓」を複数シナリオ・premise 種別で測る（攻め⇄守りの代替関係の定量）。
-4. 上記後に n≥6×複数ドメインで moat 決断（promote/opt-in）。
+F3 の方法論帰結に従い、**敵対エージェントが懐疑しない load-bearing な確定事実**（ピーク QPS=50,000 を「計測済の確定土台」として与え、agents に「確定値から設計せよ」と指示）を P に植え、容量/コスト/データ設計で再走（18 findings）。premise を「実は5,000＝誤り」として撤回。
+
+| ラベル | 件数 |
+|---|---|
+| invalidated | **0（また 0）** |
+| reinforced | 14 |
+| unrelated | 4 |
+
+GOV direct = **[]（synth findings は誰も premise を直接引用しなかった）**。GOV reachable=18(precision 0)、FUSION=7(precision 0)、いずれも空 GT に退化。
+
+合成は load-bearing 前提でも依拠せず迂回した: 「QPS 50,000 を固定とする設計は MAU 成長と不整合」(e21)、「容量は QPS でなく MAU×7年保持で決まる」(e17/e23/e29)、「ストレージが計算費を一桁支配＝最適化の主戦場は計算でない」(e19/e25/e31)。埋め込み数値($758,040 等)は QPS 依存だが、各 finding の**結論**は QPS が誤りでも成立（しばしば補強）。
+
+## moat 決断: governance-containment は opt-in（攻めが守りを部分代替）
+
+**異なる前提タイプ2種（契約的 SLA + 確定事実 QPS）で invalidated=0 が再現**＝tracefield 自身の敵対的 best-of-N 合成は **post-serving の premise-falsification harm をほとんど生まない**。cross-domain の圧力が各 finding を複数角度から防御可能にし、単一前提依存を構造的に除去するため。
+
+決断:
+- **governance-containment（永続化＋撤回閉包）は default でなく opt-in が正しい**。これは**現状の実装設計を追認**する: consult は **攻め（best-of-N synth）を default-on**、**守り（`--persist`＋`mix tracefield.retract`）を opt-in** にしている。H9 はこの既定が正しいことを実データで支持した（e81 の「best-of-N を主軸・撤回追跡を opt-in」と一致）。
+- **killer-context は狭い**: containment が効くのは findings が premise に無批判依存する場合だが、強い敵対的合成はそれを能動的に減らす。守りが主価値になるのは (i) 浅い/単一エージェント合成、(ii) 純粋な事実導出（cross-domain 圧力が無い）、(iii) 多段運用で前提が後から覆る頻度が高い領域、に限定される見込み。
+- **新しい研究主張（F3 昇格）**: **強い攻め（敵対的 best-of-N 合成）は守り（撤回 containment）の必要を部分代替する**。これは攻め⇄守りが独立でなく相互作用することを示し、製品ポジショニング（攻めが主 moat）と一致。
+
+## 残された検証（決断を覆し得る条件）
+- 浅い合成（synth_n=1 / 単一エージェント / 弱モデル）で invalidated>0 になり containment が効くか（守りの killer-context の確定）。
+- 多段運用（findings を跨ぐ長期 PJ）で前提が後から覆る自然頻度。
+- F1 精緻 closure（stance/typed、#3 残りの prose stance 記録が前提）は invalidated>0 シナリオが取れて初めて意味を持つ。
+
+## ハーネスの妥当性
+測定器（`GovernanceVsFusion`）は機能した: keyword-GT のノイズ(F2)・GOV の過剰連結(F1)・そして**合成の premise 頑健性(F3)** を順に炙り出し、moat 決断を実データで導いた。再帰ドッグフーディング（tracefield で tracefield を分析→改善→検証）が、moat 戦略そのものを書き換える発見（攻めが守りを代替）に到達した。
 
 ## ハーネスの妥当性
 測定器（`GovernanceVsFusion`）自体は機能：GOV の過剰連結(precision)と FUSION の保守性(recall)を同一 GT 上で定量化し、両者の不一致と GT の弱さを炙り出した。これは「測定器が研究上の本質的論点（containment precision と GT の意味論）を可視化した」＝再帰ドッグフーディングの所期の働き。
