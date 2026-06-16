@@ -1,0 +1,7 @@
+{
+  "agents": [
+    {"id": "CAP", "domain": "capacity-sizing", "desc": "確定 QPS からサーバ台数・冗長度・スケール設計をサイジングする", "doc": "cap.md"},
+    {"id": "COST", "domain": "cost-estimation", "desc": "確定トラフィックからインフラ費用・単価・年間コストを試算する", "doc": "cost.md"},
+    {"id": "DATA", "domain": "data-storage", "desc": "確定アクティブ数と7年保持からストレージ容量・シャーディングを設計する", "doc": "data.md"}
+  ]
+}
