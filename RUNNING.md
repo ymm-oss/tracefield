@@ -1,22 +1,51 @@
-# Tracefield MVP Running Notes
+# Tracefield Running Notes
 
-Run Elixir through mise:
+## Build And Validate
 
 ```sh
-mise exec -- mix compile
-mise exec -- mix test
-mise exec -- mix tracefield.phase0
-mise exec -- mix tracefield.phase1 --adapter mock --n 8
+cargo build --release -p tracefield
+cargo check -p tracefield
+cargo test
 ```
 
-For the live adapter, start Ollama locally and make sure the model exists:
+`./install.sh` runs the release build, `cargo check -p tracefield`, and a mock
+consult smoke check. Add `--test` to run the Rust test suite.
+
+## Model-Free Smoke
+
+```sh
+./target/release/tracefield doctor
+./target/release/tracefield consult --scenario-dir scenarios/generic-smoke --adapter mock
+```
+
+The mock adapter is deterministic and requires no model, local service, or API
+key.
+
+## Live Local Model
+
+Start Ollama and make sure the model exists:
 
 ```sh
 ollama serve
 ollama pull gemma4:12b
-mise exec -- mix tracefield.phase1 --adapter ollama --n 2 --model gemma4:12b
+./target/release/tracefield consult \
+  --scenario-dir scenarios/generic-smoke \
+  --adapter ollama \
+  --model gemma4:12b
 ```
 
-Phase 1 prints within/between distance summaries, Mann-Whitney AUC, Cliff's delta,
-the counterfactual ground-truth claim set, and proxy recall/precision. It also
-writes JSON run records and a phase summary under `runs/`.
+## Persist And Retract
+
+```sh
+./target/release/tracefield consult \
+  --scenario-dir scenarios/generic-smoke \
+  --adapter mock \
+  --persist /tmp/tracefield-store.jsonl
+
+./target/release/tracefield retract \
+  --store /tmp/tracefield-store.jsonl \
+  --entry e1
+```
+
+The store is JSONL. Retraction marks the target entry and its downstream citation
+closure as retracted.

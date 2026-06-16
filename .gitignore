@@ -1,21 +1,11 @@
 # macOS
 .DS_Store
 
-# Elixir / Mix
-/_build/
-/deps/
-/cover/
-/doc/
-*.beam
-erl_crash.dump
-*.ez
-
-# generated docs (ex_doc)
-/doc/
+# Rust
+/target/
 
 # editor / tooling
 /tmp/
-.elixir_ls/
 .claude/settings.local.json
 
 # experiment run outputs
