@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,43 +212,22 @@ async fn complete_openrouter(messages: &[Message], options: &LlmOptions) -> Resu
 }
 
 async fn complete_cli(messages: &[Message], options: &LlmOptions) -> Result<String> {
-    let command = std::env::var("TRACEFIELD_CLI_COMMAND").unwrap_or_else(|_| "cursor-agent".into());
-    let mut args = vec![
-        "-p".to_string(),
-        "--force".to_string(),
-        "--trust".to_string(),
-    ];
-
-    if command == "claude" {
-        if let Some(model) = &options.model {
-            args.push("--model".to_string());
-            args.push(model.clone());
-        }
-    } else if command == "cursor-agent" {
-        args.push("--model".to_string());
-        args.push(
-            options
-                .model
-                .clone()
-                .unwrap_or_else(|| "composer-2.5".to_string()),
-        );
-    }
-
     let prompt = messages
         .iter()
         .map(|message| message.content.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    args.push(prompt);
+    let command = std::env::var("TRACEFIELD_CLI_COMMAND").unwrap_or_else(|_| "cursor-agent".into());
+    let invocation = build_cli_invocation(&command, options, prompt, codex_last_message_path());
 
-    let child = Command::new(&command)
-        .args(args)
+    let child = Command::new(&invocation.program)
+        .args(&invocation.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("failed to spawn {command}"))?;
+        .with_context(|| format!("failed to spawn {}", invocation.program))?;
 
     let output = tokio::time::timeout(options.timeout, child.wait_with_output())
         .await
@@ -255,10 +236,131 @@ async fn complete_cli(messages: &[Message], options: &LlmOptions) -> Result<Stri
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        cleanup_last_message(&invocation);
         bail!("CLI adapter exited with {}: {}", output.status, stderr);
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    if let Some(path) = &invocation.output_last_message {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read Codex output {}", path.display()))?;
+        cleanup_last_message(&invocation);
+        Ok(content.trim().to_string())
+    } else {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CliInvocation {
+    program: String,
+    args: Vec<String>,
+    output_last_message: Option<PathBuf>,
+}
+
+fn build_cli_invocation(
+    command: &str,
+    options: &LlmOptions,
+    prompt: String,
+    codex_output_path: PathBuf,
+) -> CliInvocation {
+    let command = command.trim();
+    let executable = if command == "claude-code" {
+        "claude"
+    } else if command.is_empty() {
+        "cursor-agent"
+    } else {
+        command
+    };
+    let kind = Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(executable);
+
+    match kind {
+        "cursor-agent" => {
+            let mut args = vec![
+                "-p".to_string(),
+                "--force".to_string(),
+                "--trust".to_string(),
+                "--model".to_string(),
+                options
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "composer-2.5".to_string()),
+            ];
+            args.push(prompt);
+            CliInvocation {
+                program: executable.to_string(),
+                args,
+                output_last_message: None,
+            }
+        }
+        "claude" => {
+            let mut args = vec![
+                "-p".to_string(),
+                "--output-format".to_string(),
+                "text".to_string(),
+                "--no-session-persistence".to_string(),
+            ];
+            if let Some(model) = &options.model {
+                args.push("--model".to_string());
+                args.push(model.clone());
+            }
+            args.push(prompt);
+            CliInvocation {
+                program: executable.to_string(),
+                args,
+                output_last_message: None,
+            }
+        }
+        "codex" => {
+            let mut args = vec![
+                "exec".to_string(),
+                "--skip-git-repo-check".to_string(),
+                "--ephemeral".to_string(),
+                "--sandbox".to_string(),
+                "read-only".to_string(),
+                "--ask-for-approval".to_string(),
+                "never".to_string(),
+                "--color".to_string(),
+                "never".to_string(),
+                "--output-last-message".to_string(),
+                codex_output_path.to_string_lossy().to_string(),
+            ];
+            if let Some(model) = &options.model {
+                args.push("--model".to_string());
+                args.push(model.clone());
+            }
+            args.push(prompt);
+            CliInvocation {
+                program: executable.to_string(),
+                args,
+                output_last_message: Some(codex_output_path),
+            }
+        }
+        _ => CliInvocation {
+            program: executable.to_string(),
+            args: vec![prompt],
+            output_last_message: None,
+        },
+    }
+}
+
+fn codex_last_message_path() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!(
+        "tracefield-codex-{}-{nanos}.txt",
+        std::process::id()
+    ))
+}
+
+fn cleanup_last_message(invocation: &CliInvocation) {
+    if let Some(path) = &invocation.output_last_message {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn field(prompt: &str, name: &str) -> Option<String> {
@@ -286,5 +388,120 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&left).unwrap()["entries"][0]["type"],
             "claim"
         );
+    }
+
+    #[test]
+    fn cli_invocation_keeps_cursor_agent_compatibility() {
+        let options = LlmOptions {
+            model: Some("composer-test".to_string()),
+            ..LlmOptions::default()
+        };
+
+        let invocation = build_cli_invocation(
+            "cursor-agent",
+            &options,
+            "PROMPT".to_string(),
+            PathBuf::from("/tmp/unused"),
+        );
+
+        assert_eq!(invocation.program, "cursor-agent");
+        assert_eq!(
+            invocation.args,
+            vec![
+                "-p",
+                "--force",
+                "--trust",
+                "--model",
+                "composer-test",
+                "PROMPT"
+            ]
+        );
+        assert_eq!(invocation.output_last_message, None);
+    }
+
+    #[test]
+    fn cli_invocation_supports_claude_code() {
+        let options = LlmOptions {
+            model: Some("sonnet".to_string()),
+            ..LlmOptions::default()
+        };
+
+        let invocation = build_cli_invocation(
+            "claude",
+            &options,
+            "PROMPT".to_string(),
+            PathBuf::from("/tmp/unused"),
+        );
+
+        assert_eq!(invocation.program, "claude");
+        assert_eq!(
+            invocation.args,
+            vec![
+                "-p",
+                "--output-format",
+                "text",
+                "--no-session-persistence",
+                "--model",
+                "sonnet",
+                "PROMPT"
+            ]
+        );
+        assert_eq!(invocation.output_last_message, None);
+    }
+
+    #[test]
+    fn cli_invocation_supports_claude_code_alias() {
+        let invocation = build_cli_invocation(
+            "claude-code",
+            &LlmOptions::default(),
+            "PROMPT".to_string(),
+            PathBuf::from("/tmp/unused"),
+        );
+
+        assert_eq!(invocation.program, "claude");
+        assert_eq!(
+            invocation.args,
+            vec![
+                "-p",
+                "--output-format",
+                "text",
+                "--no-session-persistence",
+                "PROMPT"
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_invocation_supports_codex_exec() {
+        let options = LlmOptions {
+            model: Some("gpt-test".to_string()),
+            ..LlmOptions::default()
+        };
+        let output = PathBuf::from("/tmp/tracefield-codex-output.txt");
+
+        let invocation =
+            build_cli_invocation("codex", &options, "PROMPT".to_string(), output.clone());
+
+        assert_eq!(invocation.program, "codex");
+        assert_eq!(
+            invocation.args,
+            vec![
+                "exec",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--sandbox",
+                "read-only",
+                "--ask-for-approval",
+                "never",
+                "--color",
+                "never",
+                "--output-last-message",
+                "/tmp/tracefield-codex-output.txt",
+                "--model",
+                "gpt-test",
+                "PROMPT"
+            ]
+        );
+        assert_eq!(invocation.output_last_message, Some(output));
     }
 }

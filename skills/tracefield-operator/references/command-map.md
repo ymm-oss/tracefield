@@ -12,6 +12,8 @@ surface.
 | Run model-free consult | `tracefield consult --scenario-dir scenarios/<name> --adapter mock` |
 | Run Ollama consult | `tracefield consult --scenario-dir scenarios/<name> --adapter ollama --model <model>` |
 | Run CLI-backed consult | `tracefield consult --scenario-dir scenarios/<name> --adapter cli --model <model>` |
+| Run Claude Code consult | `TRACEFIELD_CLI_COMMAND=claude tracefield consult --scenario-dir scenarios/<name> --adapter cli --model <model>` |
+| Run Codex CLI consult | `TRACEFIELD_CLI_COMMAND=codex tracefield consult --scenario-dir scenarios/<name> --adapter cli --model <model>` |
 | Run OpenRouter consult | `tracefield consult --scenario-dir scenarios/<name> --adapter openrouter --model <provider/model>` |
 | Emit compact JSON | add `--json` |
 | Write pretty JSON report | add `--out <file>` |
