@@ -13,6 +13,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi --no-synth
       mix tracefield.consult --scenario-dir scenarios/enterprise-hi --synth-n 5 --synth-model claude-opus-4-8-medium
       mix tracefield.consult --scenario-dir scenarios/fsl-brushup --novelty --novelty-doc ../fsl/CHANGELOG.md
+      mix tracefield.consult --scenario-dir scenarios/generic-smoke --persist run.jsonl   # then: mix tracefield.retract --store run.jsonl --entry e3
 
   best-of-N synth calls a strong model N times (cost/latency scales with N).
 
@@ -79,6 +80,7 @@ defmodule Mix.Tasks.Tracefield.Consult do
           dedupe: :boolean,
           dedupe_threshold: :float,
           serve_breadth: :integer,
+          persist: :string,
           adapter: :string,
           model: :string
         ]
@@ -100,7 +102,8 @@ defmodule Mix.Tasks.Tracefield.Consult do
         novelty_doc: Keyword.get(opts, :novelty_doc),
         dedupe: Keyword.get(opts, :dedupe, false),
         dedupe_threshold: Keyword.get(opts, :dedupe_threshold),
-        serve_breadth: Keyword.get(opts, :serve_breadth, 1)
+        serve_breadth: Keyword.get(opts, :serve_breadth, 1),
+        persist: Keyword.get(opts, :persist)
       )
 
     print(result)
@@ -123,11 +126,17 @@ defmodule Mix.Tasks.Tracefield.Consult do
     cli = deliberation_cli(adapter, model, opts)
     rounds = Keyword.get(opts, :rounds, @default_rounds)
 
+    # Persist the store (layer-0 chunks + deliberation entries + synth findings,
+    # all with citations) so the served findings are first-class governable nodes
+    # that a post-serving retraction can still reach (brushup③). nil = no persist.
     {:ok, reference} =
       Reference.start_link(
-        embed_adapter: embed_adapter,
-        embed_model: "nomic-embed-text",
-        entries: [%{type: :chunk, author: "TASK", text: task, meta: %{domain: "task"}}]
+        [
+          embed_adapter: embed_adapter,
+          embed_model: "nomic-embed-text",
+          entries: [%{type: :chunk, author: "TASK", text: task, meta: %{domain: "task"}}]
+        ]
+        |> maybe_put(:persist_path, Keyword.get(opts, :persist))
       )
 
     agents =
