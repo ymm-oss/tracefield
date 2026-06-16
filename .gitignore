@@ -10,6 +10,14 @@
 erl_crash.dump
 *.ez
 
+# generated docs (ex_doc)
+/doc/
+
+# editor / tooling
+/tmp/
+.elixir_ls/
+.claude/settings.local.json
+
 # experiment run outputs
 /runs/
 /docs/index.bleve/
