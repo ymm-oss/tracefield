@@ -1,7 +1,7 @@
 defmodule Tracefield.MixProject do
   use Mix.Project
 
-  @source_url "https://github.com/ryoichi-izumita/tracefield"
+  @source_url "https://github.com/ymm-oss/tracefield"
 
   def project do
     [
