@@ -1,0 +1,7 @@
+{
+  "agents": [
+    {"id": "LANG", "domain": "language-semantics-design", "desc": "FSL の言語・意味論・方言・refinement の設計を最優先する", "doc": "lang.md"},
+    {"id": "VERIF", "domain": "verification-engine-soundness", "desc": "Z3/BMC/k帰納法の健全性・完全性・診断品質を最優先する", "doc": "verif.md"},
+    {"id": "AGENT", "domain": "ai-agent-experience", "desc": "LLM が write→verify→repair ループを駆動する体験・スキル・運用を最優先する", "doc": "agent.md"}
+  ]
+}

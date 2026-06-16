@@ -1,0 +1,9 @@
+{
+  "agents": [
+    {"id": "RESEARCH", "domain": "research-validity", "desc": "tracefield の実験プログラムの内的/外的妥当性・反証可能性を最優先する", "doc": "research.md"},
+    {"id": "SYNTH", "domain": "synthesis-serving", "desc": "best-of-N 合成層と consult serving 経路・retrieval 天井を最優先する", "doc": "synth.md"},
+    {"id": "GOVERNANCE", "domain": "governance-core", "desc": "来歴・撤回閉包・citation 接地精度(Fusion 不可の固有価値)を最優先する", "doc": "governance.md"},
+    {"id": "AGENT", "domain": "agent-llm-layer", "desc": "熟議機構・エージェント抽象・アダプタ・tool-use・serve policy を最優先する", "doc": "agent.md"},
+    {"id": "ADOPTION", "domain": "adoption-product", "desc": "機構の証明と実利用のギャップ・製品戦略を最優先する", "doc": "adoption.md"}
+  ]
+}
