@@ -5,6 +5,17 @@ defmodule Mix.Tasks.Tracefield.ConsultTest do
 
   @scenario_dir "scenarios/enterprise-hi"
 
+  defmodule BeliefMock do
+    @behaviour Tracefield.LLM
+    @impl true
+    def complete(_messages, _opts) do
+      {:ok,
+       Jason.encode!(%{
+         entries: [%{type: "belief", text: "generic improvement concern", citations: []}]
+       })}
+    end
+  end
+
   defp base_opts(extra) do
     [
       scenario_dir: @scenario_dir,
@@ -51,5 +62,26 @@ defmodule Mix.Tasks.Tracefield.ConsultTest do
 
     assert result.synthesis == nil
     assert is_list(result.deliberation)
+  end
+
+  test "generic agents.json scenario runs without contaminant files (clean input API)" do
+    # scenarios/generic-smoke has task.md + agents.json (2 arbitrary agents) +
+    # private/{a,b}.md and NO contaminant/correction files. The legacy
+    # Scenario.load! path would raise on the missing files; the generic loader
+    # must drive it from the manifest instead.
+    result =
+      Consult.run_consult(
+        scenario_dir: "scenarios/generic-smoke",
+        adapter: BeliefMock,
+        embed_adapter: Tracefield.Embed.Mock,
+        model: "mock",
+        rounds: 1,
+        synth: false
+      )
+
+    assert result.task =~ "改善案"
+    # both manifest agents (A1, A2), not the hardcoded SEC/BIZ/UX, externalized
+    authors = result.deliberation |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.sort()
+    assert authors == ["A1", "A2"]
   end
 end
