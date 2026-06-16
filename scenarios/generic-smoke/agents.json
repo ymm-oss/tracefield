@@ -1,0 +1,6 @@
+{
+  "agents": [
+    {"id": "A1", "domain": "reliability", "desc": "信頼性・障害耐性を最優先する", "doc": "a.md"},
+    {"id": "A2", "domain": "usability", "desc": "使いやすさ・学習コストを最優先する", "doc": "b.md"}
+  ]
+}
