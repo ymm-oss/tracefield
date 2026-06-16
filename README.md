@@ -53,6 +53,20 @@ See [`docs/overview.md`](./docs/overview.md) for the full conceptual background 
 ## Quick start
 
 ```sh
+git clone https://github.com/ymm-oss/tracefield.git
+cd tracefield
+./install.sh
+```
+
+`install.sh` installs the pinned toolchain (via [`mise`](https://mise.jdx.io/), if
+present), fetches deps, compiles, and runs a model-free smoke check — so a fresh
+checkout is ready with one command and **no model required**. Flags: `--test` also
+runs the full suite, `--no-smoke` skips the smoke run, `-h` for help.
+
+<details>
+<summary>Prefer to run the steps manually?</summary>
+
+```sh
 # install the pinned toolchain
 mise install
 
@@ -64,6 +78,8 @@ mise exec -- mix test
 # run a phase with the mock adapter (no model needed)
 mise exec -- mix tracefield.phase1 --adapter mock --n 8
 ```
+
+</details>
 
 For live runs with a local model:
 
