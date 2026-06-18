@@ -72,7 +72,21 @@ TRACEFIELD_CLI_COMMAND=codex tracefield run --scenario-dir scenarios/<name>
 
 `TRACEFIELD_CLI_COMMAND=claude-code` is accepted as an alias for the `claude`
 binary. Codex runs through `codex exec` and reads the final answer from
-`--output-last-message`.
+`--output-last-message`. Inline `command = "claude"` in `[organs.reasoning]` is
+equivalent to the env prefix.
+
+### Stale installed binary
+
+If the `claude` adapter errors with `unknown option '--force'`, or a subcommand
+like `run`/`aggregate` is missing, the `~/.cargo/bin/tracefield` copy predates
+the current source (it carries `cursor-agent`-only flags or the old `consult`
+surface). Rebuild and prefer the workspace binary:
+
+```sh
+cargo build --release
+./target/release/tracefield doctor
+# or reinstall: cargo install --path crates/tracefield-cli --locked
+```
 
 ## Empty Or Weak Flow Output
 
