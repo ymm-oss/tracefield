@@ -74,6 +74,26 @@
 
 ---
 
+## 次の壁（2026-06-18 外部評価より）
+
+> 評価の核: tracefield の価値は「AIが賢く協働する」ことではなく、**AI出力を構造化履歴に固定し、責任・根拠・影響を後から辿れること**。
+> よって主指標は死角発見数ではなく **Impact Recall / Precision**（悪い入力の影響範囲をどれだけ正確に特定できるか）。
+> 骨格（ReferenceStore + citation + retraction + gate + artifact manifest）は有望だが、以下が未成立。優先度は主指標への効きで決める。
+
+| 優先 | 壁 | 現状 | あるべき | 主指標への効き |
+| --- | --- | --- | --- | --- |
+| **P1** | citation の型付け + fallback 見直し | `citations: Vec<String>`。`apply_core_gates` は citation 空時に selected 先頭5件を fallback 補修 → 因果でなく「渡された入力」を巻き込み precision を下げる | `citation_type`（evidence / context / procedure / resolves_question / artifact_source / weak_dependency / fallback）で依存の意味を保持。retraction closure を型で重み付け | **直結**。Impact Precision の上限を決める |
+| **P2** | retract 後の repair | downstream closure を Retracted にする**隔離**まで。再導出は feedback/再runで間接的にのみ | 汚染除去後に残存 entry だけで再推論 → candidate delta 再構成 → artifact 差分修復 → **Repair Quality** を測定 | **直結**。Reversibility の本丸・研究主アウトカム |
+| **P3** | append-only event log / view 分離 | ReferenceStore は entries の Vec + next_id の mutable snapshot。retract は status 上書き、write_jsonl は全体書き出し | event log（created/retracted/citation_added/artifact_exported/gate_blocked/feedback_routed）と materialized view（active/retracted/closure/artifact 状態）を分離 | 統治基盤の前提。実務化で必須 |
+| **P4** | 日本語 source grounding | `source_quote_candidate_is_prose` が ASCII alphabetic / lowercase ratio で prose 判定 → 日本語文書で破綻 | 言語非依存の quote 検査（evidence_quote の連続部分文字列照合は言語に依らせる） | コンサル②（日本語文書）の実用前提 |
+| **P5** | prompt injection の taint model | HTML の script/style 除去のみ。本文レベルの間接注入は残る | source content（根拠として読む）/ source instruction（実行指示として読まない）/ tool instruction（system/scenario 由来のみ有効）の taint 区別 | web ingest 拡大時のセキュリティ |
+| **P6** | 実験の実施 | 8条件の評価設計と成功/失敗基準は良いが、シナリオ数・反復・モデル・評価者数・seed・counterfactual re-run 回数が未定（§14 規模化＝フェーズ4と接続） | counterfactual re-run を ground truth の一次定義に、専門家裁定を補助に。事後LLM再構成 baseline 比で Impact Recall/Precision を実証 | 「有望な仮説」→「実証済み」への昇格に必須 |
+
+**設計の指針**: P1（citation 型）は HigherGraphen 的には単純 edge でなく claim/evidence/transformation/artifact-section/decision/revision の高次関係。最小でも citation_type の導入から。
+provenance log を ground truth と誤認しない（評価が明記）— event log は「改竄されていない」を保証するが「最初の記録が真」は保証しない、append-only は必要条件であって十分条件ではない。
+
+---
+
 ## 推奨順序
 
 1. **1-0 push（保全）** → **1-1 モード** → **1-2 verify** → **1-3 訂正デモ** ── ②の独自価値を一気通貫で。
