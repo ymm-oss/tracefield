@@ -45,6 +45,7 @@ pub(crate) async fn run(
     let skill_citations = skill_citations.to_vec();
     let messages = messages.to_vec();
     let model = options.model.clone();
+    let web_search = options.web_search;
 
     // Share a kill handle between the blocking task and this async context so
     // that a timeout can terminate the child even though spawn_blocking is not
@@ -59,6 +60,7 @@ pub(crate) async fn run(
             &skill_citations,
             &messages,
             model,
+            web_search,
             child_handle_for_task,
         )
     });
@@ -89,10 +91,17 @@ fn run_sync(
     skill_citations: &[String],
     messages: &[Message],
     model: Option<String>,
+    web_search: bool,
     child_handle: Arc<Mutex<Option<std::process::Child>>>,
 ) -> Result<(String, Vec<NewEntry>)> {
-    let mut child = std::process::Command::new("codex")
-        .arg("app-server")
+    let mut command = std::process::Command::new("codex");
+    command.arg("app-server");
+    // Enable the native Responses `web_search` tool (no per-call approval) when
+    // the organ opts in with `web_search = true`. Equivalent to `codex --search`.
+    if web_search {
+        command.arg("-c").arg("tools.web_search=true");
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

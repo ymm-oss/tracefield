@@ -1,0 +1,3 @@
+{"agents":[
+  {"id":"SEARCH","domain":"web-search","desc":"webを検索して問いに答える検索者。検索で見つけた出典1件につきobservationを1つ出し、各observationのmetaにsource_urlを入れ、本文はその出典から接地された事実のみを書く。出典のない推測は別のobservationに分離しmeta.kind=\"assumption\"を付ける。"}
+]}

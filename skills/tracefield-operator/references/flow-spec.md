@@ -38,6 +38,7 @@
 | `command` | string | — | `cli` のときの実行コマンド（`claude` / `codex` / `cursor-agent`）。`claude-code` は `claude` の別名。`codex-app-server` では不要 |
 | `max_tokens` | int | — | 出力トークン上限 |
 | `timeout_seconds` | int | `300` | 1リクエストのタイムアウト |
+| `web_search` | bool | `false` | codex の native `web_search` ツールを有効化（`-c tools.web_search=true`＝`codex --search` 相当、per-call 承認なし）。**検証済み経路は `adapter="cli"` + `command="codex"`**（`codex exec` が出典URL付きの JSON エントリを返す）。`codex-app-server` でも配線済みだが現状 entries が空を返すため cli+codex を推奨 |
 
 ## `[stages.<id>]`（ステージ。宣言順に実行）
 

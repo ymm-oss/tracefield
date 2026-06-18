@@ -1,0 +1,26 @@
+[flow]
+profile = "web_search_smoke"
+policy = "fixed"
+budget = 8
+max_feedback_cycles = 0
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 2
+max_parallel_actors = 1
+[feedback]
+enabled = false
+[feedback_entries]
+enabled = false
+[organs.search]
+adapter = "cli"
+command = "codex"
+web_search = true
+timeout_seconds = 900
+[stages.search]
+organ = "search"
+inputs = ["path:task.md"]
+outputs = ["observation"]
+[stages.search.actors]
+mode = "fixed"
+count = 1
+roles = ["SEARCH"]
