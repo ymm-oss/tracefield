@@ -58,3 +58,14 @@ ADJ の正準ラベル等）。これらは analysis パネルでなく verify/a
 ```
 
 > ソース系では事実は CONTEXT(入力)から来る。desc に事実を書かず、**接地(引用)と分離(事実/ギャップ/警告)の規律**を書く。私的事実が要るなら `doc`(private)へ。
+
+## web 検索者（codex の web_search を使う）
+
+organ を `adapter="cli" command="codex" web_search=true` にしたステージで使う（[flow-spec.md](../tracefield-operator/references/flow-spec.md) の `web_search`）。偏りは「何を検索するか」に宿るので、直交する検索者を複数並べると web の死角が減る。
+
+```json
+{"id":"SEARCH_RISK","domain":"web-search-risk","desc":"webを検索し、問いに対する失敗事例・反証・下振れ・規制リスクを優先して探す検索者。出典1件につきobservationを1つ出し、metaにsource_urlを入れ、本文はその出典から接地された事実のみ。出典のない推測はmeta.kind=\"assumption\"で分離。"}
+{"id":"SEARCH_VALUE","domain":"web-search-value","desc":"webを検索し、問いに対する成功事例・上振れ・採用根拠を優先して探す検索者。出典1件=observation1件、metaにsource_url、接地事実のみ。推測はmeta.kind=\"assumption\"で分離。"}
+```
+
+→ 検索結果は出典ごとにエントリ化されるので、怪しい出典は `tracefield retract --entry <id>` でクロージャ伝播ごと撤回でき、下流の結論を `aggregate` で再計算できる。

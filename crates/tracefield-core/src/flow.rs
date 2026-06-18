@@ -155,6 +155,7 @@ pub struct OrganConfig {
     pub command: Option<String>,
     pub max_tokens: Option<usize>,
     pub timeout_seconds: Option<u64>,
+    pub web_search: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -603,6 +604,7 @@ impl FlowConfig {
                 command: string_value(values, "command"),
                 max_tokens: usize_value(values, "max_tokens"),
                 timeout_seconds: usize_value(values, "timeout_seconds").map(|value| value as u64),
+                web_search: bool_value(values, "web_search").unwrap_or(false),
             };
             organs.insert(organ.id.clone(), organ);
         }
@@ -3519,6 +3521,7 @@ async fn run_stage_actor(
         adapter,
         model: organ.and_then(|organ| organ.model.clone()),
         cli_command: organ.and_then(|organ| organ.command.clone()),
+        web_search: organ.map(|organ| organ.web_search).unwrap_or(false),
         max_tokens: organ
             .and_then(|organ| organ.max_tokens)
             .unwrap_or_else(|| LlmOptions::default().max_tokens),

@@ -72,6 +72,7 @@ pub struct LlmOptions {
     pub adapter: Adapter,
     pub model: Option<String>,
     pub cli_command: Option<String>,
+    pub web_search: bool,
     pub seed: u64,
     pub temperature: f32,
     pub max_tokens: usize,
@@ -84,6 +85,7 @@ impl Default for LlmOptions {
             adapter: Adapter::Mock,
             model: None,
             cli_command: None,
+            web_search: false,
             seed: 0,
             temperature: 0.2,
             max_tokens: 1200,
@@ -511,6 +513,12 @@ fn build_cli_invocation(
                 "--output-last-message".to_string(),
                 codex_output_path.to_string_lossy().to_string(),
             ];
+            // Enable the native web_search tool (no per-call approval) when the
+            // organ opts in. Equivalent to `codex --search`.
+            if options.web_search {
+                args.push("-c".to_string());
+                args.push("tools.web_search=true".to_string());
+            }
             if let Some(model) = &options.model
                 && model != "codex"
             {
