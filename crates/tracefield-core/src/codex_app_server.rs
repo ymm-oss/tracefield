@@ -187,17 +187,16 @@ fn drive_session(
         .join("\n\n");
 
     // 4. Start a turn: read-only sandbox, never ask for approvals.
+    // No outputSchema: the strict Responses structured-output schema is highly
+    // demanding (recursive additionalProperties:false, array items, etc.) and
+    // the prompt already instructs strict JSON, so — as in the `codex exec`
+    // path — we let the model follow the prompt instead.
     let mut turn_params = json!({
         "threadId": thread_id,
         "input": [{"type": "text", "text": prompt}],
         "cwd": cwd,
         "sandboxPolicy": {"type": "readOnly"},
         "approvalPolicy": "never",
-        "outputSchema": {
-            "type": "object",
-            "properties": {"entries": {"type": "array"}},
-            "required": ["entries"]
-        }
     });
     if let Some(m) = &model {
         turn_params["model"] = json!(m);
@@ -402,6 +401,22 @@ pub(crate) fn map_item_completed(
             .with_citations(skill_citations.to_vec())
             .with_meta("kind", json!("codex_tool_call"))
             .with_meta("detail", json!(detail));
+            Some(Some((String::new(), vec![entry])))
+        }
+        "webSearch" => {
+            let query = item
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let entry = NewEntry::new(
+                EntryType::Observation,
+                author,
+                format!("{author} web search: {query}"),
+            )
+            .with_citations(skill_citations.to_vec())
+            .with_meta("kind", json!("codex_web_search"))
+            .with_meta("detail", json!(cap(query)));
             Some(Some((String::new(), vec![entry])))
         }
         _ => None,
