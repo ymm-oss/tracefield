@@ -1,0 +1,73 @@
+[flow]
+profile = "lens_experiment_adjudicate"
+policy = "fixed"
+budget = 40
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 16
+max_parallel_actors = 1
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.reason]
+adapter = "cli"
+command = "claude"
+model = "claude-sonnet-4-6"
+max_tokens = 1500
+timeout_seconds = 600
+
+[organs.synth]
+adapter = "cli"
+command = "claude"
+model = "claude-sonnet-4-6"
+max_tokens = 3000
+timeout_seconds = 900
+
+[stages.analysis]
+organ = "reason"
+inputs = ["path:task.md"]
+outputs = ["observation", "question", "decision"]
+budget = 18
+
+[stages.analysis.actors]
+mode = "fixed"
+count = 6
+roles = ["BE", "FIN", "TOC", "REVERS", "DEONT", "PHENO"]
+
+[stages.verify]
+organ = "reason"
+inputs = ["stage:analysis"]
+outputs = ["observation", "question"]
+budget = 8
+
+[stages.verify.actors]
+mode = "fixed"
+count = 2
+roles = ["FALSIFY", "COUNTER"]
+
+[stages.adjudication]
+organ = "reason"
+inputs = ["stage:verify"]
+outputs = ["observation", "decision"]
+budget = 12
+
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+[stages.synthesis]
+organ = "synth"
+inputs = ["stage:analysis", "stage:adjudication"]
+outputs = ["observation", "decision"]
+budget = 6
+
+[stages.synthesis.actors]
+mode = "fixed"
+count = 1
+roles = ["SYNTH"]

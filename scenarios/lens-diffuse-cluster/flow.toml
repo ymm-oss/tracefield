@@ -1,0 +1,60 @@
+[flow]
+profile = "lens_diffuse_emergent_cluster"
+policy = "fixed"
+budget = 60
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 6
+max_parallel_actors = 3
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.reason]
+adapter = "cli"
+command = "claude"
+model = "claude-sonnet-4-6"
+max_tokens = 2500
+timeout_seconds = 600
+
+[stages.scatter]
+organ = "reason"
+inputs = ["path:task.md"]
+outputs = ["observation"]
+budget = 40
+
+[stages.scatter.actors]
+mode = "fixed"
+count = 4
+roles = ["SC1", "SC2", "SC3", "SC4"]
+
+[stages.cluster]
+inputs = ["stage:scatter"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.cluster.clustering]
+enabled = true
+by = ["kind"]
+min_cluster_size = 2
+max_clusters = 6
+
+[stages.cluster.actors]
+mode = "none"
+roles = ["clusterer"]
+
+[stages.synthesis]
+organ = "reason"
+inputs = ["stage:cluster", "stage:scatter"]
+outputs = ["observation", "decision"]
+budget = 10
+
+[stages.synthesis.actors]
+mode = "fixed"
+count = 1
+roles = ["SYNTH"]

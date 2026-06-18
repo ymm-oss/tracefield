@@ -1,0 +1,45 @@
+[flow]
+profile = "lens_conflict_centralized_synth"
+policy = "fixed"
+budget = 24
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 7
+max_parallel_actors = 3
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.reason]
+adapter = "mock"
+command = "claude"
+model = "claude-sonnet-4-6"
+max_tokens = 1500
+timeout_seconds = 600
+
+[stages.analysis]
+organ = "reason"
+inputs = ["path:task.md"]
+outputs = ["observation", "question", "decision"]
+budget = 18
+
+[stages.analysis.actors]
+mode = "fixed"
+count = 6
+roles = ["BE", "FIN", "TOC", "REVERS", "DEONT", "PHENO"]
+
+[stages.synthesis]
+organ = "reason"
+inputs = ["stage:analysis"]
+outputs = ["observation", "decision"]
+budget = 6
+
+[stages.synthesis.actors]
+mode = "fixed"
+count = 1
+roles = ["SYNTH"]
