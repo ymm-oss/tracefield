@@ -118,6 +118,15 @@ across actors. A stage with `[stages.<id>.clustering]` creates deterministic
 cluster entries with `source_cluster` metadata and citations to the source
 entries.
 
+`[stages.<id>.actors] roles` is the single source that binds an actor to a lens.
+When a role string matches an `agents.json` `id`, that agent drives the actor:
+its `domain`/`desc`/`private` document and the `actor_role` label all come from
+that one agent, so each entry's authoring lens stays unambiguous in provenance.
+Role strings that do not match an agent id stay free-text labels (the agent is
+assigned by position, as before). When `roles` is omitted, the bound agent's
+`domain` becomes the role automatically — define a lens once in `agents.json`
+instead of restating it per stage.
+
 Agent-produced feedback for Tracefield itself is represented as normal entries
 with `meta.kind = "tracefield_feedback"`. Configure routing with
 `[feedback_entries]`:

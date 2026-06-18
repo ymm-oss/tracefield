@@ -891,7 +891,7 @@ async fn execute_stage(
             for actor_index in 0..scaling.chosen_count {
                 let actor_selected =
                     actor_selected_entries(stage, &selected, actor_index, scaling.chosen_count);
-                let actor = scenario.agents.get(actor_index % scenario.agents.len());
+                let actor = actor_for_index(scenario, stage, actor_index);
                 let actor_id = actor
                     .map(|actor| actor.id.clone())
                     .unwrap_or_else(|| format!("{}-{}", stage.id, actor_index + 1));
@@ -1030,10 +1030,7 @@ async fn execute_stage_actors_parallel(
 
             let actor_selected =
                 actor_selected_entries(stage, selected, actor_index, scaling.chosen_count);
-            let actor = scenario
-                .agents
-                .get(actor_index % scenario.agents.len())
-                .cloned();
+            let actor = actor_for_index(scenario, stage, actor_index).cloned();
             let actor_id = actor
                 .as_ref()
                 .map(|actor| actor.id.clone())
@@ -3402,6 +3399,36 @@ fn actor_role_for_index(stage: &StageConfig, actor_index: usize) -> Option<&str>
     stage.actors.roles.get(index).map(String::as_str)
 }
 
+/// Resolve which agent drives an actor. A stage role naming an agent id binds
+/// that agent so its lens and role label come from the same source.
+fn actor_for_index<'a>(
+    scenario: &'a Scenario,
+    stage: &StageConfig,
+    actor_index: usize,
+) -> Option<&'a AgentSpec> {
+    let roles = &stage.actors.roles;
+    if !roles.is_empty() {
+        let role = &roles[actor_index % roles.len()];
+        if let Some(agent) = scenario.agents.iter().find(|agent| &agent.id == role) {
+            return Some(agent);
+        }
+    }
+    scenario.agents.get(actor_index % scenario.agents.len())
+}
+
+/// Role label for an actor: the declared stage role, otherwise the bound
+/// agent's domain. `actor_index` is 1-based to match `run_stage_actor`.
+fn resolve_actor_role(
+    stage: &StageConfig,
+    actor_index: usize,
+    actor: Option<&AgentSpec>,
+) -> String {
+    actor_role_for_index(stage, actor_index)
+        .map(ToOwned::to_owned)
+        .or_else(|| actor.and_then(|agent| agent.domain.clone()))
+        .unwrap_or_else(|| "general".to_string())
+}
+
 fn first_chars(value: &str, limit: usize) -> String {
     if limit == 0 {
         return String::new();
@@ -3650,9 +3677,7 @@ fn stage_messages(
     } else {
         stage.actors.roles.join(", ")
     };
-    let actor_role = actor_role_for_index(stage, actor_index)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "general".to_string());
+    let actor_role = resolve_actor_role(stage, actor_index, actor);
     let feedback_schema = feedback_schema_prompt(config);
     let source_grounding_contract = source_grounding_contract_prompt(stage);
     let artifact_contract = artifact_contract_prompt(stage);
@@ -4898,6 +4923,86 @@ fn string_array(values: &BTreeMap<String, ConfigValue>, key: &str) -> Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    fn actor_resolution_fixture(
+        agents: Vec<(&str, Option<&str>)>,
+        roles: Vec<&str>,
+    ) -> (Scenario, StageConfig) {
+        let scenario = Scenario {
+            dir: PathBuf::from("."),
+            task: "test task".to_string(),
+            agents: agents
+                .into_iter()
+                .map(|(id, domain)| AgentSpec {
+                    id: id.to_string(),
+                    domain: domain.map(ToOwned::to_owned),
+                    desc: None,
+                    doc: None,
+                    private: None,
+                    model: None,
+                    skills: Vec::new(),
+                })
+                .collect(),
+            private_docs: BTreeMap::new(),
+            skills: BTreeMap::new(),
+        };
+        let stage = StageConfig {
+            id: "test_stage".to_string(),
+            organ: None,
+            budget: None,
+            inputs: Vec::new(),
+            outputs: vec![EntryType::Observation],
+            context: None,
+            actors: ActorConfig {
+                mode: "fixed".to_string(),
+                count: None,
+                min: None,
+                max: None,
+                scale_by: Vec::new(),
+                roles: roles.into_iter().map(ToOwned::to_owned).collect(),
+            },
+            clustering: None,
+            artifact: None,
+        };
+        (scenario, stage)
+    }
+
+    #[test]
+    fn actor_for_index_binds_agent_named_by_role() {
+        let (scenario, stage) = actor_resolution_fixture(
+            vec![("risk", Some("risk")), ("value", Some("value"))],
+            vec!["value", "risk"],
+        );
+
+        assert_eq!(actor_for_index(&scenario, &stage, 0).unwrap().id, "value");
+        assert_eq!(actor_for_index(&scenario, &stage, 1).unwrap().id, "risk");
+    }
+
+    #[test]
+    fn actor_for_index_falls_back_to_position_for_free_text_roles() {
+        let (scenario, stage) = actor_resolution_fixture(
+            vec![("A1", Some("risk")), ("A2", Some("value"))],
+            vec!["market", "technical", "risk"],
+        );
+
+        assert_eq!(actor_for_index(&scenario, &stage, 0).unwrap().id, "A1");
+        assert_eq!(actor_for_index(&scenario, &stage, 2).unwrap().id, "A1");
+    }
+
+    #[test]
+    fn resolve_actor_role_inherits_agent_domain_when_no_roles() {
+        let (scenario, mut stage) =
+            actor_resolution_fixture(vec![("risk", Some("risk"))], Vec::new());
+        let actor = scenario.agents.first();
+
+        assert_eq!(resolve_actor_role(&stage, 1, actor), "risk");
+
+        stage.actors.roles = vec!["citation_auditor".to_string()];
+
+        assert_eq!(resolve_actor_role(&stage, 1, actor), "citation_auditor");
+    }
 
     #[test]
     fn parses_flow_config_with_stage_order_and_artifact() {

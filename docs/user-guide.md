@@ -416,6 +416,7 @@ flow output が弱い、または generic な場合は、live model の前に mo
 
 - `task.md`: 判断対象や調査対象を具体化する
 - `agents.json`: `domain` と `desc` の差を明確にする
+- `[stages.*.actors] roles`: agent の `id` を書くとその agent の lens（domain/desc/private）で actor を束縛できる。`roles` を省略すると agent の `domain` がそのまま role になるので、観点を stage 毎に書き直さなくてよい
 - `private/*.md`: 事実、制約、観測、既知の tradeoff を足す
 - `skills/<id>/SKILL.md`: agent に適用したい手順を短く明確に書く
 
