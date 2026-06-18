@@ -1,0 +1,10 @@
+https://developers.openai.com/api/docs/guides/evals
+https://developers.openai.com/api/docs/guides/production-best-practices
+https://openai.github.io/openai-agents-python/tracing/
+https://openai.github.io/openai-agents-python/guardrails/
+https://adk.dev/evaluate/
+https://adk.dev/agents/workflow-agents/
+https://learn.microsoft.com/en-us/azure/foundry/concepts/observability
+https://www.nist.gov/itl/ai-risk-management-framework
+https://www.w3.org/TR/prov-overview/
+https://spec.c2pa.org/specifications/specifications/2.4/specs/C2PA_Specification.html

@@ -1,0 +1,82 @@
+{
+  "entries": [
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "executive",
+        "format": "slides_markdown",
+        "kind": "strategy_deck_supplement",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e118",
+        "e124"
+      ],
+      "cluster_key": null,
+      "id": "e136",
+      "source_cluster": null,
+      "stage": "deck_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "executive",
+        "format": "slides_markdown",
+        "kind": "strategy_deck_supplement",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e119",
+        "e122",
+        "e125",
+        "e130"
+      ],
+      "cluster_key": null,
+      "id": "e137",
+      "source_cluster": null,
+      "stage": "deck_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "decision"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "executive",
+        "format": "slides_markdown",
+        "kind": "strategy_deck_supplement",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e120",
+        "e126",
+        "e131"
+      ],
+      "cluster_key": null,
+      "id": "e138",
+      "source_cluster": null,
+      "stage": "deck_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "requirement"
+    }
+  ],
+  "format": "slides_markdown",
+  "from_stage": "deck_finalize",
+  "id": "strategy_deck_supplement",
+  "path": "outputs/deck-supplement.md",
+  "source_entry_ids": [
+    "e136",
+    "e137",
+    "e138"
+  ]
+}

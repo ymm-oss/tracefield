@@ -1,0 +1,198 @@
+[flow]
+profile = "ds4_live_mini_all_layers"
+policy = "fixed"
+budget = 40
+max_feedback_cycles = 0
+
+[process]
+enabled = true
+organ = "reasoning"
+mode = "ds4_live_mini_all_layers"
+agent_count = 1
+artifact_after_feedback = true
+artifact_stages = ["artifact_strategy", "report_finalize", "deck_finalize"]
+
+[process.gates]
+enforce_artifact_gate = true
+allow_conditional_artifacts = false
+require_citations = true
+require_evidence_quotes = true
+block_publish_on_open_questions = true
+block_publish_on_quality_warnings = false
+require_manifest = true
+
+[process.stop]
+max_cycles = 1
+max_feedback_cycles = 0
+stop_when = ["audit_passed", "artifact_publishable"]
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 6
+max_parallel_actors = 1
+
+[feedback]
+enabled = false
+max_requests_per_cycle = 0
+
+[feedback_entries]
+enabled = true
+kind = "tracefield_feedback"
+accepted_types = ["change", "requirement", "question", "audit"]
+status_field = "status"
+max_requests_per_cycle = 0
+dedupe_by = ["target", "action", "normalized_request"]
+
+[organs.data]
+adapter = "cli"
+command = "/Users/rizumita/Workspace/github/ds4/ds4"
+model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+max_tokens = 420
+timeout_seconds = 600
+
+[organs.reasoning]
+adapter = "cli"
+command = "codex"
+model = "codex"
+timeout_seconds = 900
+
+[stages.source_discovery]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["question", "observation"]
+budget = 8
+
+[stages.source_discovery.actors]
+mode = "fixed"
+count = 1
+roles = ["source_discovery"]
+
+[stages.source_cluster]
+inputs = ["kind:input"]
+outputs = ["synthesis"]
+budget = 6
+
+[stages.source_cluster.clustering]
+enabled = true
+by = ["path_parent", "path"]
+max_clusters = 6
+
+[stages.source_cluster.actors]
+mode = "none"
+roles = ["source_clusterer"]
+
+[stages.source_extract]
+organ = "data"
+inputs = ["path:inputs/web/01-openai-github-io-openai-agents-python.md", "path:inputs/web/02-openai-github-io-openai-agents-python-multi-agent.md", "path:inputs/web/03-docs-langchain-com-oss-python-langgraph-graph-api.md", "path:inputs/web/07-modelcontextprotocol-io-specification-2025-06-18.md"]
+outputs = ["observation", "question"]
+budget = 12
+
+[stages.source_extract.context]
+mode = "source_excerpt"
+chars_per_entry = 1600
+chars_total = 5200
+keywords = ["agentic workflows", "orchestration", "handoffs", "agents as tools", "LangGraph", "state", "MCP", "guardrails", "tracing", "memory", "sessions"]
+
+[stages.source_extract.actors]
+mode = "fixed"
+count = 1
+roles = ["data_actor"]
+
+[stages.hypothesis]
+organ = "reasoning"
+inputs = ["stage:source_discovery", "stage:source_cluster", "stage:source_extract"]
+outputs = ["hypothesis", "question"]
+budget = 10
+
+[stages.hypothesis.actors]
+mode = "fixed"
+count = 1
+roles = ["synthesizer"]
+
+[stages.lens_analysis]
+organ = "reasoning"
+inputs = ["stage:hypothesis", "stage:source_extract", "stage:source_cluster"]
+outputs = ["synthesis", "audit", "question"]
+budget = 12
+
+[stages.lens_analysis.actors]
+mode = "fixed"
+count = 1
+roles = ["technical"]
+
+[stages.audit]
+organ = "reasoning"
+inputs = ["stage:lens_analysis", "stage:hypothesis", "stage:source_extract"]
+outputs = ["audit", "question"]
+budget = 8
+
+[stages.audit.actors]
+mode = "fixed"
+count = 1
+roles = ["citation_auditor"]
+
+[stages.feedback_triage]
+organ = "reasoning"
+inputs = ["stage:audit", "stage:lens_analysis"]
+outputs = ["change", "requirement", "decision", "question"]
+budget = 6
+
+[stages.feedback_triage.actors]
+mode = "fixed"
+count = 1
+roles = ["feedback_router"]
+
+[stages.artifact_strategy]
+organ = "reasoning"
+inputs = ["stage:feedback_triage", "stage:audit", "stage:lens_analysis", "stage:source_extract"]
+outputs = ["synthesis"]
+budget = 6
+
+[stages.artifact_strategy.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_strategist"]
+
+[stages.report_finalize]
+organ = "reasoning"
+inputs = ["stage:artifact_strategy", "stage:lens_analysis", "stage:audit", "stage:source_extract"]
+outputs = ["synthesis", "decision"]
+budget = 8
+
+[stages.report_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.report_finalize.artifact]
+kind = "executive_report"
+format = "markdown"
+audience = "developer"
+require_citations = true
+
+[stages.deck_finalize]
+organ = "reasoning"
+inputs = ["stage:artifact_strategy", "stage:lens_analysis", "stage:audit", "stage:source_extract"]
+outputs = ["synthesis"]
+budget = 8
+
+[stages.deck_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.deck_finalize.artifact]
+kind = "strategy_deck"
+format = "slides_markdown"
+audience = "developer"
+require_citations = true
+
+[artifacts.ds4_live_report]
+format = "markdown"
+from_stage = "report_finalize"
+path = "outputs/ds4-live-report.md"
+
+[artifacts.ds4_live_deck]
+format = "slides_markdown"
+from_stage = "deck_finalize"
+path = "outputs/ds4-live-deck.md"

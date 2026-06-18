@@ -1,0 +1,82 @@
+[flow]
+profile = "smoke_gemma_codex_artifact"
+policy = "fixed"
+budget = 20
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 3
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = true
+kind = "tracefield_feedback"
+accepted_types = ["change", "requirement", "question", "audit"]
+status_field = "status"
+max_requests_per_cycle = 0
+
+[organs.data]
+adapter = "cli"
+command = "/Users/rizumita/Workspace/github/ds4/ds4"
+model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+max_tokens = 700
+timeout_seconds = 240
+
+[organs.reasoning]
+adapter = "cli"
+command = "codex"
+model = "codex"
+timeout_seconds = 900
+
+[stages.source_extract]
+organ = "data"
+inputs = ["path:inputs/web/01-openai-github-io-openai-agents-python.md", "path:inputs/web/03-docs-langchain-com-oss-python-langgraph-graph-api.md", "path:inputs/web/04-microsoft-github-io-autogen-stable-user-guide-agentchat-user-guide-tutorial-team.md"]
+outputs = ["observation", "question"]
+budget = 8
+
+[stages.source_extract.context]
+mode = "source_excerpt"
+chars_per_entry = 5000
+chars_total = 12000
+keywords = ["agentic workflows", "orchestration", "handoffs", "agents as tools", "LangGraph", "AutoGen", "state", "edges", "nodes", "guardrails", "tracing"]
+
+[stages.source_extract.actors]
+mode = "fixed"
+count = 1
+roles = ["data_actor"]
+
+[stages.analysis]
+organ = "reasoning"
+inputs = ["stage:source_extract"]
+outputs = ["synthesis", "requirement", "question"]
+budget = 8
+
+[stages.analysis.actors]
+mode = "fixed"
+count = 1
+roles = ["technical"]
+
+[stages.report_finalize]
+organ = "reasoning"
+inputs = ["stage:analysis", "stage:source_extract"]
+outputs = ["synthesis", "decision"]
+budget = 8
+
+[stages.report_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.report_finalize.artifact]
+kind = "smoke_report"
+format = "markdown"
+audience = "developer"
+require_citations = true
+
+[artifacts.smoke_report]
+format = "markdown"
+from_stage = "report_finalize"
+path = "outputs/smoke-report.md"

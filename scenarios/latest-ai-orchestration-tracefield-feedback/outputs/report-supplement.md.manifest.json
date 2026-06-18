@@ -1,0 +1,83 @@
+{
+  "entries": [
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "executive",
+        "format": "markdown",
+        "kind": "executive_report_supplement",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e94",
+        "e100",
+        "e106"
+      ],
+      "cluster_key": null,
+      "id": "e109",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "executive",
+        "format": "markdown",
+        "kind": "executive_report_supplement",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e95",
+        "e98",
+        "e108"
+      ],
+      "cluster_key": null,
+      "id": "e110",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "decision"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "executive",
+        "format": "markdown",
+        "kind": "executive_report_supplement",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e96",
+        "e104",
+        "e105",
+        "e107"
+      ],
+      "cluster_key": null,
+      "id": "e111",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "requirement"
+    }
+  ],
+  "format": "markdown",
+  "from_stage": "report_finalize",
+  "id": "executive_report_supplement",
+  "path": "outputs/report-supplement.md",
+  "source_entry_ids": [
+    "e109",
+    "e110",
+    "e111"
+  ]
+}

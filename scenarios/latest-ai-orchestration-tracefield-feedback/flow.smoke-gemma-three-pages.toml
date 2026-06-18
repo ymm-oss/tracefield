@@ -1,0 +1,39 @@
+[flow]
+profile = "smoke_gemma_three_webpages_stage"
+policy = "fixed"
+budget = 8
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 1
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.data]
+adapter = "cli"
+command = "/Users/rizumita/Workspace/github/ds4/ds4"
+model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+max_tokens = 700
+timeout_seconds = 240
+
+[stages.source_extract]
+organ = "data"
+inputs = ["path:inputs/web/01-openai-github-io-openai-agents-python.md", "path:inputs/web/03-docs-langchain-com-oss-python-langgraph-graph-api.md", "path:inputs/web/04-microsoft-github-io-autogen-stable-user-guide-agentchat-user-guide-tutorial-team.md"]
+outputs = ["observation", "question"]
+budget = 8
+
+[stages.source_extract.context]
+mode = "source_excerpt"
+chars_per_entry = 5000
+chars_total = 12000
+keywords = ["agentic workflows", "orchestration", "handoffs", "agents as tools", "LangGraph", "AutoGen", "state", "edges", "nodes", "guardrails", "tracing"]
+
+[stages.source_extract.actors]
+mode = "fixed"
+count = 1
+roles = ["data_actor"]

@@ -1,0 +1,117 @@
+{
+  "entries": [
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "slides_markdown",
+        "kind": "strategy_deck",
+        "require_citations": true
+      },
+      "artifact_section": "Orchestration Risks",
+      "author": "A1",
+      "citations": [
+        "e52",
+        "e41",
+        "e45",
+        "e48"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e59",
+      "source_cluster": null,
+      "stage": "deck_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "slides_markdown",
+        "kind": "strategy_deck",
+        "require_citations": true
+      },
+      "artifact_section": "Layered Report Production",
+      "author": "A1",
+      "citations": [
+        "e53"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e60",
+      "source_cluster": null,
+      "stage": "deck_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "decision"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "slides_markdown",
+        "kind": "strategy_deck",
+        "require_citations": true
+      },
+      "artifact_section": "Artifact Manifest",
+      "author": "A1",
+      "citations": [
+        "e54",
+        "e49",
+        "e46"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e61",
+      "source_cluster": null,
+      "stage": "deck_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "decision"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "slides_markdown",
+        "kind": "strategy_deck",
+        "require_citations": true
+      },
+      "artifact_section": "Protocol Constraints",
+      "author": "A1",
+      "citations": [
+        "e47",
+        "e44",
+        "e45"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e62",
+      "source_cluster": null,
+      "stage": "deck_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "synthesis"
+    }
+  ],
+  "format": "slides_markdown",
+  "from_stage": "deck_finalize",
+  "id": "ds4_complete_deck",
+  "path": "outputs/ds4-complete-deck.marp.md",
+  "source_entry_ids": [
+    "e59",
+    "e60",
+    "e61",
+    "e62"
+  ]
+}

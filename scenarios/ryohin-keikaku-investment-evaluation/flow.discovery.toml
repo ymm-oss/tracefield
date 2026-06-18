@@ -1,0 +1,71 @@
+[flow]
+profile = "ryohin_keikaku_source_discovery"
+policy = "fixed"
+budget = 16
+max_feedback_cycles = 0
+
+[process]
+enabled = true
+organ = "analysis"
+mode = "source_discovery_supervision"
+agent_count = 1
+artifact_after_feedback = false
+artifact_stages = []
+
+[process.gates]
+enforce_artifact_gate = false
+allow_conditional_artifacts = true
+require_citations = false
+require_evidence_quotes = false
+block_publish_on_open_questions = false
+block_publish_on_quality_warnings = false
+require_manifest = false
+
+[process.stop]
+max_cycles = 1
+max_feedback_cycles = 0
+stop_when = ["sources_discovered"]
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 2
+max_parallel_actors = 1
+
+[feedback]
+enabled = false
+max_requests_per_cycle = 0
+
+[feedback_entries]
+enabled = false
+max_requests_per_cycle = 0
+
+[organs.web_search]
+adapter = "cli"
+command = "/private/tmp/tracefield-codex-tool/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"
+model = "codex"
+max_tokens = 2200
+timeout_seconds = 900
+
+[organs.analysis]
+adapter = "cli"
+command = "/private/tmp/tracefield-codex-tool/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"
+model = "codex"
+max_tokens = 1200
+timeout_seconds = 900
+
+[stages.source_discovery]
+organ = "web_search"
+inputs = ["kind:input"]
+outputs = ["observation", "question"]
+budget = 14
+
+[stages.source_discovery.context]
+mode = "head"
+chars_per_entry = 900
+chars_total = 2400
+keywords = ["IR", "financial results", "monthly sales", "stock price", "valuation", "Ryohin Keikaku", "7453"]
+
+[stages.source_discovery.actors]
+mode = "fixed"
+count = 1
+roles = ["web_source_discovery", "url_prioritization"]

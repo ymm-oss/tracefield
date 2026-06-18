@@ -1,0 +1,84 @@
+[flow]
+profile = "smoke_longrun_mock"
+policy = "fixed"
+budget = 12
+max_feedback_cycles = 0
+
+[long_run]
+enabled = true
+cycles = 2
+cycle_stages = ["source_extract", "analysis"]
+max_work_items = 8
+
+[process]
+enabled = true
+organ = "mock"
+mode = "smoke"
+agent_count = 1
+artifact_after_feedback = true
+artifact_stages = ["finalize"]
+
+[process.gates]
+enforce_artifact_gate = true
+allow_conditional_artifacts = false
+require_citations = true
+block_publish_on_open_questions = true
+require_manifest = true
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 2
+max_parallel_actors = 2
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.mock]
+adapter = "mock"
+
+[stages.source_extract]
+organ = "mock"
+inputs = ["path:inputs/web/01-openai-github-io-openai-agents-python.md"]
+outputs = ["observation", "question"]
+budget = 4
+
+[stages.source_extract.actors]
+mode = "fixed"
+count = 1
+roles = ["data_actor"]
+
+[stages.analysis]
+organ = "mock"
+inputs = ["stage:source_extract"]
+outputs = ["synthesis", "question"]
+budget = 4
+
+[stages.analysis.actors]
+mode = "fixed"
+count = 1
+roles = ["analyst"]
+
+[stages.finalize]
+organ = "mock"
+inputs = ["stage:analysis"]
+outputs = ["synthesis"]
+budget = 4
+
+[stages.finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_writer"]
+
+[stages.finalize.artifact]
+kind = "executive_report"
+format = "markdown"
+audience = "operator"
+require_citations = true
+
+[artifacts.smoke_longrun_report]
+format = "markdown"
+from_stage = "finalize"
+path = "outputs/smoke-longrun-report.md"

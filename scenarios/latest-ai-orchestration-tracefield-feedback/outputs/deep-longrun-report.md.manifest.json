@@ -1,0 +1,80 @@
+{
+  "entries": [
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "markdown",
+        "kind": "deep_longrun_report",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e85",
+        "e86",
+        "e88"
+      ],
+      "cluster_key": null,
+      "id": "e91",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "markdown",
+        "kind": "deep_longrun_report",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e86",
+        "e89"
+      ],
+      "cluster_key": null,
+      "id": "e92",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "decision"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "markdown",
+        "kind": "deep_longrun_report",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e87",
+        "e90"
+      ],
+      "cluster_key": null,
+      "id": "e93",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "requirement"
+    }
+  ],
+  "format": "markdown",
+  "from_stage": "report_finalize",
+  "id": "deep_longrun_report",
+  "path": "outputs/deep-longrun-report.md",
+  "source_entry_ids": [
+    "e91",
+    "e92",
+    "e93"
+  ]
+}

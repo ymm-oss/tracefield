@@ -64,7 +64,7 @@ Run the CLI:
 
 ```sh
 ./target/release/tracefield doctor
-./target/release/tracefield consult --scenario-dir scenarios/generic-smoke --adapter mock
+./target/release/tracefield run --scenario-dir scenarios/generic-smoke
 ```
 
 Install it into Cargo's bin directory:
@@ -78,24 +78,41 @@ tracefield doctor
 
 ```sh
 tracefield doctor
-tracefield new my-review
-tracefield consult --scenario-dir scenarios/my-review --adapter mock
-tracefield consult --scenario-dir scenarios/my-review --adapter ollama --model gemma4:12b
-TRACEFIELD_CLI_COMMAND=claude tracefield consult --scenario-dir scenarios/my-review --adapter cli --model sonnet
-TRACEFIELD_CLI_COMMAND=codex tracefield consult --scenario-dir scenarios/my-review --adapter cli --model gpt-5.4
-tracefield consult --scenario-dir scenarios/my-review --adapter mock --persist runs/reference.jsonl
+tracefield new my-review --profile consult
+tracefield new my-investigation --profile deep_investigation
+tracefield web-input --scenario-dir scenarios/my-investigation --url https://example.com/source
+tracefield run --scenario-dir scenarios/my-review
+TRACEFIELD_CLI_COMMAND=claude tracefield run --scenario-dir scenarios/my-review
+TRACEFIELD_CLI_COMMAND=codex tracefield run --scenario-dir scenarios/my-review
+tracefield run --scenario-dir scenarios/my-review --persist runs/reference.jsonl
 tracefield retract --store runs/reference.jsonl --entry e3
 ```
 
-`consult` writes a readable report by default. Use `--json` for compact JSON or
-`--out <file>` for a pretty JSON file.
+For live adapters, set `adapter` and `model` in `scenarios/<name>/flow.toml`
+under `[organs.reasoning]`, for example `adapter = "ollama"` and
+`model = "gemma4:12b"`. The `consult` profile defaults to `adapter = "mock"` and
+`[long_run] cycles = 2`.
+
+`tracefield run --persist <file>.jsonl` resumes from an existing store when the
+file exists and writes Markdown artifacts plus sidecar manifests when configured.
+`tracefield web-input` fetches pages into `inputs/web/` with source URL,
+fetched-at, content type, and byte provenance so Field Runner can consume them as
+normal inputs.
+Agents can feed improvements back into the runner by emitting entries with
+`meta.kind = "tracefield_feedback"`; `flow.toml` routes those entries to
+recollection, triage, analysis, or artifact layers.
+`deep_investigation` adds source discovery, deterministic source clustering,
+per-input data extraction, analysis, audit, report, and deck artifact layers.
+
+`tracefield run` writes a readable report by default. Use `--json` for compact
+JSON or `--out <file>` for a pretty JSON file.
 
 ## Author A Scenario
 
 ```sh
-tracefield new my-review
+tracefield new my-review --profile consult
 # edit scenarios/my-review/task.md and private/*.md
-tracefield consult --scenario-dir scenarios/my-review --adapter mock
+tracefield run --scenario-dir scenarios/my-review
 ```
 
 A scenario is:
@@ -104,6 +121,9 @@ A scenario is:
 scenarios/<name>/
 ├── task.md
 ├── agents.json
+├── flow.toml
+├── inputs/
+│   └── example.md
 ├── skills/
 │   └── security-review/
 │       └── SKILL.md
@@ -130,13 +150,13 @@ Markdown instructions. Loaded skills are seeded as `procedure` entries and are
 automatically cited by entries produced by agents that use them, so skill
 influence remains retractable. Tracefield currently injects `SKILL.md`
 instructions only; bundled references, scripts, and assets are not automatically
-read or executed by `consult`.
+read or executed by the flow.
 
 ## Repository Layout
 
 ```text
 crates/tracefield-cli/   CLI binary
-crates/tracefield-core/  scenario, store, LLM adapter, consult logic
+crates/tracefield-core/  scenario, store, LLM adapter, Field Runner / flow logic
 scenarios/               synthetic, fictional consulting scenarios
 docs/                    design notes, experiment plans, findings
 experiments/             Python analysis scripts for historical run outputs

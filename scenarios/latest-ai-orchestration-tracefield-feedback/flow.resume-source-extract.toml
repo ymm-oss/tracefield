@@ -1,0 +1,263 @@
+[flow]
+profile = "deep_investigation_resume_source_extract"
+policy = "fixed"
+budget = 180
+max_feedback_cycles = 2
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 24
+
+[feedback]
+enabled = true
+max_requests_per_cycle = 8
+dedupe_by = ["normalized_request", "target_entry", "stage"]
+
+[[feedback.edge]]
+from = ["hypothesis", "lens_analysis", "audit"]
+to = "source_extract"
+entry_types = ["question", "audit"]
+trigger_when = ["needs_evidence", "needs_refutation", "low_evidence_coverage"]
+
+[feedback_entries]
+enabled = true
+kind = "tracefield_feedback"
+accepted_types = ["change", "requirement", "question", "audit"]
+status_field = "status"
+max_requests_per_cycle = 8
+dedupe_by = ["target", "action", "normalized_request"]
+
+[[feedback_entries.route]]
+target_prefix = "flow.stage.source_extract"
+to = "source_extract"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "flow."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "artifact."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "gates."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "profile."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[organs.data]
+adapter = "cli"
+command = "/Users/rizumita/Workspace/github/ds4/ds4"
+model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+max_tokens = 800
+timeout_seconds = 600
+
+[organs.reasoning]
+adapter = "cli"
+command = "codex"
+model = "codex"
+
+[stages.source_extract]
+organ = "data"
+inputs = ["kind:input"]
+outputs = ["observation", "question"]
+budget = 40
+
+[stages.source_extract.context]
+mode = "source_excerpt"
+chars_per_entry = 6000
+chars_total = 14000
+keywords = ["agent", "agentic workflows", "orchestration", "handoffs", "agents as tools", "guardrails", "tracing", "evals", "workflow", "multi-agent", "MCP", "A2A", "state", "memory"]
+
+[stages.source_extract.actors]
+mode = "fixed"
+count = 1
+roles = ["data_actor"]
+
+[stages.hypothesis]
+organ = "reasoning"
+inputs = ["stage:source_discovery", "stage:source_cluster", "stage:source_extract"]
+outputs = ["hypothesis", "question"]
+budget = 40
+
+[stages.hypothesis.actors]
+mode = "auto"
+min = 2
+max = 6
+scale_by = ["budget", "input_count", "open_questions"]
+
+[stages.lens_analysis]
+organ = "reasoning"
+inputs = ["stage:hypothesis", "stage:source_cluster", "stage:source_extract"]
+outputs = ["synthesis", "audit", "question"]
+budget = 40
+
+[stages.lens_analysis.actors]
+mode = "fixed"
+count = 4
+roles = ["market", "technical", "risk", "operations"]
+
+[stages.audit]
+organ = "reasoning"
+inputs = ["stage:lens_analysis", "stage:hypothesis"]
+outputs = ["audit", "question"]
+budget = 30
+
+[stages.audit.actors]
+mode = "fixed"
+count = 2
+roles = ["artifact_critic", "citation_auditor"]
+
+[stages.feedback_triage]
+organ = "reasoning"
+inputs = ["kind:tracefield_feedback", "stage:audit", "stage:lens_analysis"]
+outputs = ["change", "requirement", "decision", "question"]
+budget = 15
+
+[stages.feedback_triage.actors]
+mode = "fixed"
+count = 1
+roles = ["feedback_router"]
+
+[stages.artifact_strategy]
+organ = "reasoning"
+inputs = ["stage:feedback_triage", "stage:audit", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.artifact_strategy.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_strategist"]
+
+[stages.report_architecture]
+organ = "reasoning"
+inputs = ["stage:artifact_strategy", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.report_architecture.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_architect"]
+
+[stages.report_draft]
+organ = "reasoning"
+inputs = ["stage:report_architecture", "stage:lens_analysis", "stage:audit"]
+outputs = ["synthesis", "decision"]
+budget = 30
+
+[stages.report_draft.actors]
+mode = "auto"
+min = 1
+max = 4
+scale_by = ["budget", "input_count"]
+roles = ["artifact_writer"]
+
+[stages.report_critique]
+organ = "reasoning"
+inputs = ["stage:report_draft"]
+outputs = ["audit"]
+budget = 10
+
+[stages.report_critique.actors]
+mode = "fixed"
+count = 2
+roles = ["artifact_critic", "citation_auditor"]
+
+[stages.report_finalize]
+organ = "reasoning"
+inputs = ["stage:report_draft", "stage:report_critique"]
+outputs = ["synthesis", "decision"]
+budget = 15
+
+[stages.report_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.report_finalize.artifact]
+kind = "executive_report"
+format = "markdown"
+audience = "executive"
+require_citations = true
+
+[stages.deck_storyline]
+organ = "reasoning"
+inputs = ["stage:artifact_strategy", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.deck_storyline.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_strategist"]
+
+[stages.slide_spec]
+organ = "reasoning"
+inputs = ["stage:deck_storyline", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.slide_spec.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_architect"]
+
+[stages.slide_draft]
+organ = "reasoning"
+inputs = ["stage:slide_spec", "stage:lens_analysis", "stage:audit"]
+outputs = ["synthesis"]
+budget = 30
+
+[stages.slide_draft.actors]
+mode = "auto"
+min = 2
+max = 6
+scale_by = ["budget", "input_count"]
+roles = ["artifact_writer"]
+
+[stages.deck_critique]
+organ = "reasoning"
+inputs = ["stage:slide_draft"]
+outputs = ["audit"]
+budget = 10
+
+[stages.deck_critique.actors]
+mode = "fixed"
+count = 2
+roles = ["artifact_critic", "citation_auditor"]
+
+[stages.deck_finalize]
+organ = "reasoning"
+inputs = ["stage:slide_draft", "stage:deck_critique"]
+outputs = ["synthesis"]
+budget = 15
+
+[stages.deck_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.deck_finalize.artifact]
+kind = "strategy_deck"
+format = "slides_markdown"
+audience = "executive"
+require_citations = true
+
+[artifacts.executive_report]
+format = "markdown"
+from_stage = "report_finalize"
+path = "outputs/report.md"
+
+[artifacts.strategy_deck]
+format = "slides_markdown"
+from_stage = "deck_finalize"
+path = "outputs/deck.md"

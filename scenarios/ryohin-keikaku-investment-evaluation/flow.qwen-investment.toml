@@ -1,0 +1,297 @@
+[flow]
+profile = "ryohin_keikaku_qwen_investment_evaluation"
+policy = "fixed"
+budget = 96
+max_feedback_cycles = 0
+
+[long_run]
+enabled = true
+cycles = 2
+cycle_stages = ["source_cluster", "source_extract_financials", "source_extract_market", "source_extract_strategy", "question_resolution", "scenario_forecast", "risk_analysis"]
+max_work_items = 32
+max_feedback_cycles = 0
+
+[process]
+enabled = true
+organ = "analysis"
+mode = "investment_research_process_manager"
+agent_count = 1
+artifact_after_feedback = true
+artifact_stages = ["artifact_strategy", "report_finalize", "deck_finalize", "report_finalize_v2", "deck_finalize_v2"]
+
+[process.gates]
+enforce_artifact_gate = false
+allow_conditional_artifacts = true
+require_citations = true
+require_evidence_quotes = true
+block_publish_on_open_questions = false
+block_publish_on_quality_warnings = false
+require_manifest = true
+
+[process.stop]
+max_cycles = 2
+max_feedback_cycles = 0
+stop_when = ["audit_passed", "artifact_publishable"]
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 8
+max_parallel_actors = 1
+
+[feedback]
+enabled = false
+max_requests_per_cycle = 2
+dedupe_by = ["target", "entry_id"]
+
+[[feedback.edge]]
+from = ["risk_analysis", "investment_thesis"]
+to = "source_extract_financials"
+entry_types = ["question"]
+trigger_when = ["recollect", "needs_followup"]
+
+[feedback_entries]
+enabled = false
+kind = "tracefield_feedback"
+accepted_types = ["change", "requirement", "answer", "audit", "question"]
+status_field = "status"
+max_requests_per_cycle = 2
+dedupe_by = ["target", "action", "normalized_request"]
+
+[[feedback_entries.route]]
+from = ["risk_analysis", "investment_thesis", "feedback_triage"]
+target_prefix = "flow.stage.source_extract"
+to = "source_extract_financials"
+entry_types = ["change", "requirement", "question"]
+actions = ["recollect", "rerun", "audit"]
+
+[organs.data]
+adapter = "ollama"
+model = "qwen3.6:27b"
+max_tokens = 900
+timeout_seconds = 900
+
+[organs.analysis]
+adapter = "cli"
+command = "/private/tmp/tracefield-codex-tool/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"
+model = "codex"
+max_tokens = 1800
+timeout_seconds = 900
+
+[stages.source_cluster]
+inputs = ["kind:input"]
+outputs = ["synthesis"]
+budget = 5
+
+[stages.source_cluster.clustering]
+enabled = true
+by = ["path_parent", "source_url", "path"]
+max_clusters = 8
+
+[stages.source_cluster.actors]
+mode = "none"
+roles = ["source_clusterer"]
+
+[stages.source_extract_financials]
+organ = "data"
+inputs = ["kind:input"]
+outputs = ["observation", "question"]
+budget = 16
+
+[stages.source_extract_financials.context]
+mode = "source_excerpt"
+chars_per_entry = 2600
+chars_total = 11000
+keywords = ["決算", "売上", "営業利益", "純利益", "既存店", "月次", "financial", "revenue", "operating profit", "profit", "guidance", "dividend"]
+
+[stages.source_extract_financials.actors]
+mode = "fixed"
+count = 1
+roles = ["webpage_agent", "financial_fact_extractor"]
+
+[stages.source_extract_market]
+organ = "data"
+inputs = ["kind:input"]
+outputs = ["observation", "question"]
+budget = 14
+
+[stages.source_extract_market.context]
+mode = "source_excerpt"
+chars_per_entry = 2400
+chars_total = 9000
+keywords = ["7453", "株価", "時価総額", "PER", "PBR", "配当利回り", "market cap", "valuation", "share price", "dividend yield"]
+
+[stages.source_extract_market.actors]
+mode = "fixed"
+count = 1
+roles = ["webpage_agent", "market_data_extractor"]
+
+[stages.source_extract_strategy]
+organ = "data"
+inputs = ["kind:input"]
+outputs = ["observation", "question"]
+budget = 14
+
+[stages.source_extract_strategy.context]
+mode = "source_excerpt"
+chars_per_entry = 2400
+chars_total = 10000
+keywords = ["中期経営計画", "海外", "中国", "店舗", "MUJI", "無印良品", "strategy", "store", "overseas", "China", "inventory", "pricing"]
+
+[stages.source_extract_strategy.actors]
+mode = "fixed"
+count = 1
+roles = ["webpage_agent", "strategy_fact_extractor"]
+
+[stages.question_resolution]
+organ = "analysis"
+inputs = ["entry_type:question", "stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy"]
+outputs = ["answer", "decision", "requirement"]
+budget = 10
+
+[stages.question_resolution.actors]
+mode = "fixed"
+count = 1
+roles = ["question_resolver"]
+
+[stages.scenario_forecast]
+organ = "analysis"
+inputs = ["stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy", "stage:question_resolution"]
+outputs = ["hypothesis", "synthesis", "question"]
+budget = 14
+
+[stages.scenario_forecast.actors]
+mode = "fixed"
+count = 1
+roles = ["forecast_modeler", "scenario_planner"]
+
+[stages.risk_analysis]
+organ = "analysis"
+inputs = ["stage:scenario_forecast", "stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy", "stage:question_resolution"]
+outputs = ["audit", "question", "requirement"]
+budget = 12
+
+[stages.risk_analysis.actors]
+mode = "fixed"
+count = 1
+roles = ["risk_challenger", "evidence_auditor"]
+
+[stages.investment_thesis]
+organ = "analysis"
+inputs = ["stage:scenario_forecast", "stage:risk_analysis", "stage:question_resolution", "stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy"]
+outputs = ["decision", "synthesis", "audit"]
+budget = 14
+
+[stages.investment_thesis.actors]
+mode = "fixed"
+count = 1
+roles = ["investment_evaluator"]
+
+[stages.feedback_triage]
+organ = "analysis"
+inputs = ["stage:risk_analysis", "stage:investment_thesis", "stage:question_resolution"]
+outputs = ["change", "requirement", "answer", "audit", "question"]
+budget = 8
+
+[stages.feedback_triage.actors]
+mode = "fixed"
+count = 1
+roles = ["feedback_router"]
+
+[stages.artifact_strategy]
+organ = "analysis"
+inputs = ["stage:feedback_triage", "stage:investment_thesis", "stage:risk_analysis", "stage:scenario_forecast"]
+outputs = ["synthesis", "decision"]
+budget = 8
+
+[stages.artifact_strategy.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_strategist"]
+
+[stages.report_finalize]
+organ = "analysis"
+inputs = ["stage:artifact_strategy", "stage:investment_thesis", "stage:risk_analysis", "stage:scenario_forecast", "stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy"]
+outputs = ["synthesis", "decision"]
+budget = 16
+
+[stages.report_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor", "investment_report_writer"]
+
+[stages.report_finalize.artifact]
+kind = "investment_research_report"
+format = "markdown"
+audience = "investor_research"
+require_citations = true
+
+[stages.deck_finalize]
+organ = "analysis"
+inputs = ["stage:artifact_strategy", "stage:investment_thesis", "stage:risk_analysis", "stage:scenario_forecast", "stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy"]
+outputs = ["synthesis", "decision"]
+budget = 14
+
+[stages.deck_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor", "marp_deck_writer"]
+
+[stages.deck_finalize.artifact]
+kind = "investment_research_deck"
+format = "slides_markdown"
+audience = "investor_research"
+require_citations = true
+
+[artifacts.ryohin_investment_report]
+format = "markdown"
+from_stage = "report_finalize"
+path = "outputs/ryohin-investment-report.md"
+
+[artifacts.ryohin_investment_deck]
+format = "slides_markdown"
+from_stage = "deck_finalize"
+path = "outputs/ryohin-investment-deck.marp.md"
+
+[stages.report_finalize_v2]
+organ = "analysis"
+inputs = ["stage:artifact_strategy", "stage:investment_thesis", "stage:risk_analysis", "stage:scenario_forecast", "stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy", "stage:feedback_triage", "path:inputs/web/99-fetch-failures.md"]
+outputs = ["synthesis", "decision", "audit"]
+budget = 18
+
+[stages.report_finalize_v2.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor", "investment_report_writer_v2"]
+
+[stages.report_finalize_v2.artifact]
+kind = "investment_research_report_v2"
+format = "markdown"
+audience = "investor_research"
+require_citations = true
+
+[stages.deck_finalize_v2]
+organ = "analysis"
+inputs = ["stage:artifact_strategy", "stage:investment_thesis", "stage:risk_analysis", "stage:scenario_forecast", "stage:source_extract_financials", "stage:source_extract_market", "stage:source_extract_strategy", "stage:feedback_triage", "path:inputs/web/99-fetch-failures.md"]
+outputs = ["synthesis", "decision", "audit"]
+budget = 16
+
+[stages.deck_finalize_v2.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor", "marp_deck_writer_v2"]
+
+[stages.deck_finalize_v2.artifact]
+kind = "investment_research_deck_v2"
+format = "slides_markdown"
+audience = "investor_research"
+require_citations = true
+
+[artifacts.ryohin_investment_report_v2]
+format = "markdown"
+from_stage = "report_finalize_v2"
+path = "outputs/ryohin-investment-report.v2.md"
+
+[artifacts.ryohin_investment_deck_v2]
+format = "slides_markdown"
+from_stage = "deck_finalize_v2"
+path = "outputs/ryohin-investment-deck.v2.marp.md"

@@ -1,0 +1,39 @@
+[flow]
+profile = "smoke_ds4_single_webpage_stage"
+policy = "fixed"
+budget = 5
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 1
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.data]
+adapter = "cli"
+command = "/Users/rizumita/Workspace/github/ds4/ds4"
+model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+max_tokens = 420
+timeout_seconds = 300
+
+[stages.source_extract]
+organ = "data"
+inputs = ["path:inputs/web/01-openai-github-io-openai-agents-python.md"]
+outputs = ["observation", "question"]
+budget = 5
+
+[stages.source_extract.context]
+mode = "source_excerpt"
+chars_per_entry = 1200
+chars_total = 1800
+keywords = ["agentic workflows", "Agents SDK", "handoffs", "guardrails", "tracing", "evals"]
+
+[stages.source_extract.actors]
+mode = "fixed"
+count = 1
+roles = ["data_actor"]

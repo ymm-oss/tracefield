@@ -11,15 +11,16 @@ cargo check -p tracefield
 cargo test
 ```
 
-`./install.sh` runs the release build, check, and a mock consult smoke check.
+`./install.sh` runs the release build, check, and a mock flow smoke check.
 
 ## Command Surface
 
 | Command | Status |
 | --- | --- |
 | `tracefield doctor` | Checks local adapter readiness: mock, Ollama reachability, OpenRouter key, CLI tools. |
-| `tracefield new <name>` | Scaffolds `task.md`, `agents.json`, and `private/*.md`. |
-| `tracefield consult --scenario-dir <dir>` | Runs a governed consult using `mock`, `ollama`, `cli`, or `openrouter`. |
+| `tracefield new <name> --profile consult` | Scaffolds a consult-style scenario with `task.md`, `agents.json`, `flow.toml`, `inputs/`, and `private/*.md`. The profile defaults to `adapter = "mock"` and `[long_run] cycles = 2`. |
+| `tracefield new <name> --profile deep_investigation` | Scaffolds the long-horizon investigation flow. |
+| `tracefield run --scenario-dir <dir>` | Runs a configured Field Runner flow from `flow.toml`, including staged actors, organ routing, JSONL persistence, and Markdown artifact export. Adapter and model are configured under `[organs.reasoning]`. |
 | `tracefield retract --store <jsonl> --entry <id>` | Marks an entry and downstream citation closure as retracted. |
 
 ## Crate Layout
@@ -27,7 +28,7 @@ cargo test
 | Crate | Role |
 | --- | --- |
 | `tracefield` | CLI binary package. |
-| `tracefield-core` | Scenario loading, reference store, LLM adapters, and consult logic. |
+| `tracefield-core` | Scenario loading, reference store, LLM adapters, and Field Runner / flow logic. |
 
 ## Scenario Format
 
@@ -37,6 +38,9 @@ Scenario directories keep the shared shape:
 scenarios/<name>/
 ├── task.md
 ├── agents.json
+├── flow.toml
+├── inputs/
+│   └── example.md
 ├── skills/
 │   └── review/
 │       └── SKILL.md
@@ -51,7 +55,7 @@ referenced skills are loaded from `skills/<id>/SKILL.md` and seeded as
 `procedure` entries. `SKILL.md` must include `name` and `description`
 frontmatter, and `name` must match `<id>`. The Rust CLI currently injects
 `SKILL.md` instructions only; bundled references, scripts, and assets are not
-automatically read or executed by `consult`.
+automatically read or executed by the flow.
 
 ## Current Gaps
 

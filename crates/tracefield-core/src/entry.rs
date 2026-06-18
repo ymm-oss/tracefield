@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryType {
+    #[default]
     Belief,
     Hypothesis,
     Observation,
@@ -21,12 +22,6 @@ pub enum EntryType {
     Claim,
     Synthesis,
     Audit,
-}
-
-impl Default for EntryType {
-    fn default() -> Self {
-        Self::Belief
-    }
 }
 
 impl EntryType {
@@ -52,18 +47,13 @@ impl EntryType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryStatus {
+    #[default]
     Active,
     Retracted,
     Superseded,
-}
-
-impl Default for EntryStatus {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

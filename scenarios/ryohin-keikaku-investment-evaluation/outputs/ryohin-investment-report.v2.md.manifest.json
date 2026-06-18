@@ -1,0 +1,306 @@
+{
+  "entries": [
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "investor_research",
+        "format": "markdown",
+        "kind": "investment_research_report_v2",
+        "require_citations": true
+      },
+      "artifact_section": "調査範囲と根拠品質",
+      "author": "WEB",
+      "citation_closure": [
+        "e35",
+        "e64",
+        "e65",
+        "e66"
+      ],
+      "citations": [
+        "e64",
+        "e65",
+        "e66",
+        "e35"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e78",
+      "provenance": {
+        "actor_role": "artifact_editor",
+        "adapter": "cli",
+        "author": "WEB",
+        "command": "/private/tmp/tracefield-codex-tool/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+        "entry_id": "e78",
+        "model": "codex",
+        "organ": "analysis",
+        "source_stage": "report_finalize_v2",
+        "stage": "report_finalize_v2"
+      },
+      "rerun": {
+        "stage": "report_finalize_v2",
+        "work_item_cycle": 2,
+        "work_item_reason": "final"
+      },
+      "retraction": {
+        "dependent_source_entry_ids": [
+          "e35",
+          "e64",
+          "e65",
+          "e66"
+        ],
+        "direct_source_entry_ids": [
+          "e64",
+          "e65",
+          "e66",
+          "e35"
+        ],
+        "impact": "invalidate_artifact_entry",
+        "status": "active"
+      },
+      "source_cluster": null,
+      "stage": "report_finalize_v2",
+      "stage_roles": [
+        "artifact_editor",
+        "investment_report_writer_v2"
+      ],
+      "trace_span": {
+        "actor_index": 1,
+        "budget_step": 22,
+        "parent_span_id": null,
+        "span_id": null,
+        "stage": "report_finalize_v2",
+        "trace_id": null
+      },
+      "type": "audit"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "investor_research",
+        "format": "markdown",
+        "kind": "investment_research_report_v2",
+        "require_citations": true
+      },
+      "artifact_section": "事業・モメンタム",
+      "author": "WEB",
+      "citation_closure": [
+        "e34",
+        "e52",
+        "e55"
+      ],
+      "citations": [
+        "e55",
+        "e34",
+        "e52"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e79",
+      "provenance": {
+        "actor_role": "artifact_editor",
+        "adapter": "cli",
+        "author": "WEB",
+        "command": "/private/tmp/tracefield-codex-tool/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+        "entry_id": "e79",
+        "model": "codex",
+        "organ": "analysis",
+        "source_stage": "report_finalize_v2",
+        "stage": "report_finalize_v2"
+      },
+      "rerun": {
+        "stage": "report_finalize_v2",
+        "work_item_cycle": 2,
+        "work_item_reason": "final"
+      },
+      "retraction": {
+        "dependent_source_entry_ids": [
+          "e34",
+          "e52",
+          "e55"
+        ],
+        "direct_source_entry_ids": [
+          "e55",
+          "e34",
+          "e52"
+        ],
+        "impact": "invalidate_artifact_entry",
+        "status": "active"
+      },
+      "source_cluster": null,
+      "stage": "report_finalize_v2",
+      "stage_roles": [
+        "artifact_editor",
+        "investment_report_writer_v2"
+      ],
+      "trace_span": {
+        "actor_index": 1,
+        "budget_step": 22,
+        "parent_span_id": null,
+        "span_id": null,
+        "stage": "report_finalize_v2",
+        "trace_id": null
+      },
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "investor_research",
+        "format": "markdown",
+        "kind": "investment_research_report_v2",
+        "require_citations": true
+      },
+      "artifact_section": "バリュエーションとシナリオ",
+      "author": "WEB",
+      "citation_closure": [
+        "e53",
+        "e56",
+        "e66"
+      ],
+      "citations": [
+        "e56",
+        "e66",
+        "e53"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e80",
+      "provenance": {
+        "actor_role": "artifact_editor",
+        "adapter": "cli",
+        "author": "WEB",
+        "command": "/private/tmp/tracefield-codex-tool/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+        "entry_id": "e80",
+        "model": "codex",
+        "organ": "analysis",
+        "source_stage": "report_finalize_v2",
+        "stage": "report_finalize_v2"
+      },
+      "rerun": {
+        "stage": "report_finalize_v2",
+        "work_item_cycle": 2,
+        "work_item_reason": "final"
+      },
+      "retraction": {
+        "dependent_source_entry_ids": [
+          "e53",
+          "e56",
+          "e66"
+        ],
+        "direct_source_entry_ids": [
+          "e56",
+          "e66",
+          "e53"
+        ],
+        "impact": "invalidate_artifact_entry",
+        "status": "active"
+      },
+      "source_cluster": null,
+      "stage": "report_finalize_v2",
+      "stage_roles": [
+        "artifact_editor",
+        "investment_report_writer_v2"
+      ],
+      "trace_span": {
+        "actor_index": 1,
+        "budget_step": 22,
+        "parent_span_id": null,
+        "span_id": null,
+        "stage": "report_finalize_v2",
+        "trace_id": null
+      },
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "investor_research",
+        "format": "markdown",
+        "kind": "investment_research_report_v2",
+        "require_citations": true
+      },
+      "artifact_section": "投資評価",
+      "author": "WEB",
+      "citation_closure": [
+        "e35",
+        "e64",
+        "e65",
+        "e66"
+      ],
+      "citations": [
+        "e64",
+        "e65",
+        "e66",
+        "e35"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e81",
+      "provenance": {
+        "actor_role": "artifact_editor",
+        "adapter": "cli",
+        "author": "WEB",
+        "command": "/private/tmp/tracefield-codex-tool/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+        "entry_id": "e81",
+        "model": "codex",
+        "organ": "analysis",
+        "source_stage": "report_finalize_v2",
+        "stage": "report_finalize_v2"
+      },
+      "rerun": {
+        "stage": "report_finalize_v2",
+        "work_item_cycle": 2,
+        "work_item_reason": "final"
+      },
+      "retraction": {
+        "dependent_source_entry_ids": [
+          "e35",
+          "e64",
+          "e65",
+          "e66"
+        ],
+        "direct_source_entry_ids": [
+          "e64",
+          "e65",
+          "e66",
+          "e35"
+        ],
+        "impact": "invalidate_artifact_entry",
+        "status": "active"
+      },
+      "source_cluster": null,
+      "stage": "report_finalize_v2",
+      "stage_roles": [
+        "artifact_editor",
+        "investment_report_writer_v2"
+      ],
+      "trace_span": {
+        "actor_index": 1,
+        "budget_step": 22,
+        "parent_span_id": null,
+        "span_id": null,
+        "stage": "report_finalize_v2",
+        "trace_id": null
+      },
+      "type": "decision"
+    }
+  ],
+  "format": "markdown",
+  "from_stage": "report_finalize_v2",
+  "id": "ryohin_investment_report_v2",
+  "path": "outputs/ryohin-investment-report.v2.md",
+  "retraction_model": {
+    "mode": "citation_closure",
+    "retracting_any_source_entry_invalidates_dependent_artifact_entries": true
+  },
+  "source_entry_ids": [
+    "e78",
+    "e79",
+    "e80",
+    "e81"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "entries": [
+    {
+      "actor_role": "artifact_writer",
+      "artifact": {
+        "audience": "operator",
+        "format": "markdown",
+        "kind": "executive_report",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e25",
+        "e26",
+        "e29",
+        "e30"
+      ],
+      "cluster_key": null,
+      "id": "e33",
+      "source_cluster": null,
+      "stage": "finalize",
+      "stage_roles": [
+        "artifact_writer"
+      ],
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_writer",
+      "artifact": {
+        "audience": "operator",
+        "format": "markdown",
+        "kind": "executive_report",
+        "require_citations": true
+      },
+      "author": "A1",
+      "citations": [
+        "e25",
+        "e26",
+        "e29",
+        "e30"
+      ],
+      "cluster_key": null,
+      "id": "e34",
+      "source_cluster": null,
+      "stage": "finalize",
+      "stage_roles": [
+        "artifact_writer"
+      ],
+      "type": "synthesis"
+    }
+  ],
+  "format": "markdown",
+  "from_stage": "finalize",
+  "id": "smoke_longrun_report",
+  "path": "outputs/smoke-longrun-report.md",
+  "source_entry_ids": [
+    "e33",
+    "e34"
+  ]
+}

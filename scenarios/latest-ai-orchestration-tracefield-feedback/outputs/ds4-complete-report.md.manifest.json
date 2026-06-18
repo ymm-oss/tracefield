@@ -1,0 +1,118 @@
+{
+  "entries": [
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "markdown",
+        "kind": "executive_report",
+        "require_citations": true
+      },
+      "artifact_section": "Orchestration Risk Boundaries",
+      "author": "A1",
+      "citations": [
+        "e52",
+        "e48",
+        "e41"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e55",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "synthesis"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "markdown",
+        "kind": "executive_report",
+        "require_citations": true
+      },
+      "artifact_section": "Layered Field Runner Design",
+      "author": "A1",
+      "citations": [
+        "e53",
+        "e42"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e56",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "decision"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "markdown",
+        "kind": "executive_report",
+        "require_citations": true
+      },
+      "artifact_section": "Artifact Manifest And Retraction",
+      "author": "A1",
+      "citations": [
+        "e54",
+        "e49",
+        "e46"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e57",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "decision"
+    },
+    {
+      "actor_role": "artifact_editor",
+      "artifact": {
+        "audience": "developer",
+        "format": "markdown",
+        "kind": "executive_report",
+        "require_citations": true
+      },
+      "artifact_section": "Evidence Caveats And Sequencing",
+      "author": "A1",
+      "citations": [
+        "e47",
+        "e44",
+        "e45",
+        "e54"
+      ],
+      "cluster_key": null,
+      "data_quality_warnings": null,
+      "evidence_quote": null,
+      "id": "e58",
+      "source_cluster": null,
+      "stage": "report_finalize",
+      "stage_roles": [
+        "artifact_editor"
+      ],
+      "type": "synthesis"
+    }
+  ],
+  "format": "markdown",
+  "from_stage": "report_finalize",
+  "id": "ds4_complete_report",
+  "path": "outputs/ds4-complete-report.md",
+  "source_entry_ids": [
+    "e55",
+    "e56",
+    "e57",
+    "e58"
+  ]
+}

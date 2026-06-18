@@ -1,0 +1,7 @@
+https://openai.github.io/openai-agents-python/
+https://openai.github.io/openai-agents-python/multi_agent/
+https://docs.langchain.com/oss/python/langgraph/graph-api
+https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/teams.html
+https://google.github.io/adk-docs/agents/multi-agents/
+https://a2a-protocol.org/latest/specification/
+https://modelcontextprotocol.io/specification/2025-06-18

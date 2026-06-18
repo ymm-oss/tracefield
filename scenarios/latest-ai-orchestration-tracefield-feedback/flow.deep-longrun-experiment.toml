@@ -1,0 +1,220 @@
+[flow]
+profile = "deep_longrun_experiment"
+policy = "fixed"
+budget = 90
+max_feedback_cycles = 0
+
+[long_run]
+enabled = true
+cycles = 2
+cycle_stages = ["source_cluster", "source_extract", "hypothesis", "lens_analysis", "audit", "feedback_triage"]
+max_work_items = 30
+max_feedback_cycles = 2
+
+[process]
+enabled = true
+organ = "reasoning"
+mode = "deep_longrun_experiment"
+agent_count = 1
+artifact_after_feedback = true
+artifact_stages = ["artifact_strategy", "report_architecture", "report_draft", "report_critique", "report_finalize"]
+
+[process.gates]
+enforce_artifact_gate = true
+allow_conditional_artifacts = false
+require_citations = true
+require_evidence_quotes = true
+block_publish_on_open_questions = true
+block_publish_on_quality_warnings = false
+require_manifest = true
+
+[process.stop]
+max_cycles = 2
+max_feedback_cycles = 2
+stop_when = ["feedback_triaged", "artifact_publishable"]
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 12
+max_parallel_actors = 2
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = true
+kind = "tracefield_feedback"
+accepted_types = ["change", "requirement", "question", "audit"]
+status_field = "status"
+max_requests_per_cycle = 4
+dedupe_by = ["target", "action", "normalized_request"]
+
+[[feedback_entries.route]]
+target_prefix = "flow."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "artifact."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "gates."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[organs.data]
+adapter = "cli"
+command = "/Users/rizumita/Workspace/github/ds4/ds4"
+model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+max_tokens = 800
+timeout_seconds = 900
+
+[organs.reasoning]
+adapter = "cli"
+command = "codex"
+model = "codex"
+timeout_seconds = 300
+
+[stages.source_cluster]
+inputs = ["path:inputs/web-supplement/01-developers-openai-com-api-docs-guides-evals.md", "path:inputs/web-supplement/03-openai-github-io-openai-agents-python-tracing.md", "path:inputs/web-supplement/04-openai-github-io-openai-agents-python-guardrails.md", "path:inputs/web-supplement/06-adk-dev-agents-workflow-agents.md"]
+outputs = ["synthesis"]
+budget = 5
+
+[stages.source_cluster.clustering]
+enabled = true
+by = ["path_parent", "path"]
+max_clusters = 4
+
+[stages.source_cluster.actors]
+mode = "none"
+roles = ["source_clusterer"]
+
+[stages.source_extract]
+organ = "data"
+inputs = ["path:inputs/web-supplement/01-developers-openai-com-api-docs-guides-evals.md", "path:inputs/web-supplement/03-openai-github-io-openai-agents-python-tracing.md", "path:inputs/web-supplement/04-openai-github-io-openai-agents-python-guardrails.md", "path:inputs/web-supplement/06-adk-dev-agents-workflow-agents.md"]
+outputs = ["observation", "question", "requirement"]
+budget = 20
+
+[stages.source_extract.context]
+mode = "source_excerpt"
+chars_per_entry = 6000
+chars_total = 12000
+keywords = ["agent", "agentic workflows", "orchestration", "workflow agents", "guardrails", "tracing", "evals", "observability", "handoffs", "audit", "artifact"]
+
+[stages.source_extract.actors]
+mode = "per_input"
+min = 1
+max = 4
+roles = ["data_actor"]
+
+[stages.hypothesis]
+organ = "reasoning"
+inputs = ["stage:source_cluster", "stage:source_extract", "stage:feedback_triage"]
+outputs = ["hypothesis", "question", "requirement"]
+budget = 15
+
+[stages.hypothesis.actors]
+mode = "fixed"
+count = 1
+roles = ["systems_thinker"]
+
+[stages.lens_analysis]
+organ = "reasoning"
+inputs = ["stage:hypothesis", "stage:source_cluster", "stage:source_extract"]
+outputs = ["synthesis", "audit", "question", "requirement"]
+budget = 20
+
+[stages.lens_analysis.actors]
+mode = "fixed"
+count = 2
+roles = ["technical", "risk"]
+
+[stages.audit]
+organ = "reasoning"
+inputs = ["stage:lens_analysis", "stage:hypothesis", "stage:source_extract"]
+outputs = ["audit", "question", "requirement"]
+budget = 10
+
+[stages.audit.actors]
+mode = "fixed"
+count = 1
+roles = ["citation_auditor"]
+
+[stages.feedback_triage]
+organ = "reasoning"
+inputs = ["kind:tracefield_feedback", "stage:audit", "stage:lens_analysis"]
+outputs = ["change", "requirement", "decision", "question"]
+budget = 8
+
+[stages.feedback_triage.actors]
+mode = "fixed"
+count = 1
+roles = ["feedback_router"]
+
+[stages.artifact_strategy]
+organ = "reasoning"
+inputs = ["stage:feedback_triage", "stage:audit", "stage:lens_analysis"]
+outputs = ["synthesis", "decision", "requirement"]
+budget = 8
+
+[stages.artifact_strategy.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_strategist"]
+
+[stages.report_architecture]
+organ = "reasoning"
+inputs = ["stage:artifact_strategy", "stage:lens_analysis", "stage:audit"]
+outputs = ["synthesis"]
+budget = 8
+
+[stages.report_architecture.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_architect"]
+
+[stages.report_draft]
+organ = "reasoning"
+inputs = ["stage:report_architecture", "stage:lens_analysis", "stage:audit"]
+outputs = ["synthesis", "decision", "requirement"]
+budget = 12
+
+[stages.report_draft.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_writer"]
+
+[stages.report_critique]
+organ = "reasoning"
+inputs = ["stage:report_draft"]
+outputs = ["audit", "question"]
+budget = 8
+
+[stages.report_critique.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_critic"]
+
+[stages.report_finalize]
+organ = "reasoning"
+inputs = ["stage:report_draft", "stage:report_critique"]
+outputs = ["synthesis", "decision", "requirement"]
+budget = 10
+
+[stages.report_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.report_finalize.artifact]
+kind = "deep_longrun_report"
+format = "markdown"
+audience = "developer"
+require_citations = true
+
+[artifacts.deep_longrun_report]
+format = "markdown"
+from_stage = "report_finalize"
+path = "outputs/deep-longrun-report.md"

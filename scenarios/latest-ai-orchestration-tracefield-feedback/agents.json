@@ -1,0 +1,6 @@
+{
+  "agents": [
+    {"id": "A1", "domain": "risk", "desc": "Focus on risks and constraints.", "doc": "lens1.md"},
+    {"id": "A2", "domain": "value", "desc": "Focus on user and business value.", "doc": "lens2.md"}
+  ]
+}

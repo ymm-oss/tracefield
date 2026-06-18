@@ -5,7 +5,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
 };
-use tracefield_core::{ConsultOptions, run_consult};
+use tracefield_core::{FlowRunOptions, WebInputOptions, ingest_web_inputs, run_flow};
 
 #[derive(Debug, Parser)]
 #[command(name = "tracefield")]
@@ -17,16 +17,14 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Consult a scenario and return governed findings.
-    Consult {
+    /// Run a configured Field Runner flow from flow.toml.
+    Run {
         #[arg(long, alias = "scenario", value_name = "DIR")]
         scenario_dir: PathBuf,
-        #[arg(long, default_value = "cli")]
-        adapter: String,
-        #[arg(long, value_name = "MODEL")]
-        model: Option<String>,
-        #[arg(long, default_value_t = 2)]
-        rounds: usize,
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        budget: Option<usize>,
         #[arg(long)]
         json: bool,
         #[arg(long, value_name = "FILE")]
@@ -34,11 +32,30 @@ enum Command {
         #[arg(long, value_name = "JSONL")]
         persist: Option<PathBuf>,
     },
+    /// Fetch web pages into inputs/web for Field Runner flows.
+    WebInput {
+        #[arg(long, alias = "scenario", value_name = "DIR")]
+        scenario_dir: PathBuf,
+        #[arg(long = "url", value_name = "URL")]
+        urls: Vec<String>,
+        #[arg(long, value_name = "FILE")]
+        url_file: Option<PathBuf>,
+        #[arg(long, value_name = "DIR", default_value = "inputs/web")]
+        out_dir: PathBuf,
+        #[arg(long, default_value_t = 1_000_000)]
+        max_bytes: usize,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Scaffold a new generic scenario.
     New {
         name: String,
         #[arg(long, value_name = "DIR")]
         dir: Option<PathBuf>,
+        #[arg(long, default_value = "default")]
+        profile: String,
         #[arg(long)]
         force: bool,
     },
@@ -60,63 +77,97 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Consult {
+        Command::New {
+            name,
+            dir,
+            profile,
+            force,
+        } => {
+            let target = tracefield_core::scenario::scaffold_with_profile(
+                &name,
+                dir.as_deref(),
+                force,
+                &profile,
+            )
+            .with_context(|| format!("failed to scaffold scenario {name}"))?;
+
+            println!("scaffolded {}", target.display());
+            println!("profile: {profile}");
+            println!();
+            println!(
+                "Next: tracefield run --scenario-dir {} --config flow.toml",
+                target.display()
+            );
+        }
+        Command::Run {
             scenario_dir,
-            adapter,
-            model,
-            rounds,
+            config,
+            budget,
             json,
             out,
             persist,
         } => {
             ensure_directory(&scenario_dir, "--scenario-dir")?;
-            ensure_positive_rounds(rounds)?;
+            if let Some(config) = &config {
+                ensure_file(config, "--config")?;
+            }
 
-            let result = run_consult(ConsultOptions {
+            let result = run_flow(FlowRunOptions {
                 scenario_dir: scenario_dir.clone(),
-                adapter: adapter.clone(),
-                model,
-                rounds,
+                config_path: config.clone(),
+                budget,
                 persist_path: persist.clone(),
             })
             .await
-            .with_context(|| {
-                format!(
-                    "failed to consult scenario {} with adapter {adapter}",
-                    scenario_dir.display()
-                )
-            })?;
+            .with_context(|| format!("failed to run flow {}", scenario_dir.display()))?;
 
-            let encoded = serde_json::to_string_pretty(&result)
-                .context("failed to encode consult result as JSON")?;
+            let encoded =
+                serde_json::to_string_pretty(&result).context("failed to encode run result")?;
             if let Some(out) = out {
                 write_text(&out, &encoded)
                     .with_context(|| format!("failed to write JSON report to {}", out.display()))?;
             }
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string(&result)
-                        .context("failed to encode compact consult JSON")?
-                );
+                println!("{}", serde_json::to_string(&result)?);
             } else {
-                print_consult_report(&result).context("failed to render consult report")?;
+                print_run_report(&result).context("failed to render run report")?;
                 if let Some(path) = persist {
                     println!();
                     println!("persisted store: {}", path.display());
                 }
             }
         }
-        Command::New { name, dir, force } => {
-            let target = tracefield_core::scenario::scaffold(&name, dir.as_deref(), force)
-                .with_context(|| format!("failed to scaffold scenario {name}"))?;
+        Command::WebInput {
+            scenario_dir,
+            urls,
+            url_file,
+            out_dir,
+            max_bytes,
+            force,
+            json,
+        } => {
+            ensure_directory(&scenario_dir, "--scenario-dir")?;
+            let urls = collect_web_input_urls(urls, url_file.as_deref())?;
+            let result = ingest_web_inputs(WebInputOptions {
+                scenario_dir: scenario_dir.clone(),
+                urls,
+                out_dir,
+                max_bytes,
+                force,
+            })
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to ingest web inputs into {}",
+                    scenario_dir.display()
+                )
+            })?;
 
-            println!("scaffolded {}", target.display());
-            println!();
-            println!(
-                "Next: tracefield consult --scenario-dir {} --adapter mock",
-                target.display()
-            );
+            if json {
+                println!("{}", serde_json::to_string(&result)?);
+            } else {
+                print_web_input_report(&result);
+            }
         }
         Command::Retract {
             store,
@@ -164,13 +215,6 @@ fn ensure_file(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_positive_rounds(rounds: usize) -> Result<()> {
-    if rounds == 0 {
-        bail!("--rounds must be at least 1");
-    }
-    Ok(())
-}
-
 fn write_text(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path
         .parent()
@@ -183,32 +227,118 @@ fn write_text(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn print_consult_report(result: &tracefield_core::ConsultResult) -> Result<()> {
-    let value = serde_json::to_value(result).context("failed to convert consult result to JSON")?;
+fn collect_web_input_urls(mut urls: Vec<String>, url_file: Option<&Path>) -> Result<Vec<String>> {
+    if let Some(path) = url_file {
+        ensure_file(path, "--url-file")?;
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read URL file {}", path.display()))?;
+        urls.extend(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(ToOwned::to_owned),
+        );
+    }
 
-    println!("# tracefield consult");
+    urls.retain(|url| !url.trim().is_empty());
+    urls.dedup();
+    if urls.is_empty() {
+        bail!("provide at least one --url or --url-file");
+    }
+    Ok(urls)
+}
+
+fn print_web_input_report(result: &tracefield_core::WebInputResult) {
+    println!("# tracefield web-input");
+    println!();
+    println!("pages: {}", result.pages.len());
+    println!();
+    for page in &result.pages {
+        let title = page.title.as_deref().unwrap_or("(untitled)");
+        println!(
+            "- {} -> {} ({}, {} bytes)",
+            page.url, page.path, title, page.bytes
+        );
+    }
+}
+
+fn print_run_report(result: &tracefield_core::FlowRunResult) -> Result<()> {
+    let value = serde_json::to_value(result).context("failed to convert run result to JSON")?;
+
+    println!("# tracefield run");
     println!();
 
     if let Some(task) = value.get("task").and_then(Value::as_str) {
         println!("task: {}", first_line(task));
-        println!();
     }
+    if let Some(profile) = value.get("profile").and_then(Value::as_str) {
+        println!("profile: {profile}");
+    }
+    if let Some(policy) = value.get("policy").and_then(Value::as_str) {
+        println!("policy: {policy}");
+    }
+    println!();
 
-    if let Some(deliberation) = value.get("deliberation").and_then(Value::as_array) {
-        println!("## deliberation");
-        if deliberation.is_empty() {
+    println!("## stages");
+    if let Some(stages) = value.get("stages").and_then(Value::as_array) {
+        if stages.is_empty() {
             println!("(none)");
         } else {
-            for entry in deliberation {
+            for stage in stages {
+                let id = stage.get("id").and_then(Value::as_str).unwrap_or("stage");
+                let actor_count = stage
+                    .get("actor_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let entry_count = stage
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0);
+                println!("- {id}: actors={actor_count}, entries={entry_count}");
+            }
+        }
+    }
+    println!();
+
+    println!("## entries");
+    if let Some(entries) = value.get("entries").and_then(Value::as_array) {
+        if entries.is_empty() {
+            println!("(none)");
+        } else {
+            for entry in entries {
                 print_entry_line(entry);
             }
         }
-        println!();
     }
+    println!();
 
-    if let Some(synthesis) = value.get("synthesis") {
-        println!("## synthesis");
-        print_synthesis(synthesis);
+    println!("## artifacts");
+    if let Some(artifacts) = value.get("artifacts").and_then(Value::as_array) {
+        if artifacts.is_empty() {
+            println!("(none)");
+        } else {
+            for artifact in artifacts {
+                let id = artifact
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("artifact");
+                let path = artifact.get("path").and_then(Value::as_str).unwrap_or("");
+                let manifest_path = artifact
+                    .get("manifest_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let format = artifact
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                if manifest_path.is_empty() {
+                    println!("- {id} ({format}): {path}");
+                } else {
+                    println!("- {id} ({format}): {path} [manifest: {manifest_path}]");
+                }
+            }
+        }
     }
 
     Ok(())
@@ -283,36 +413,6 @@ async fn print_doctor() {
     );
 }
 
-fn print_synthesis(value: &Value) {
-    match value {
-        Value::Null => println!("(none)"),
-        Value::Array(entries) if entries.is_empty() => println!("(none)"),
-        Value::Array(entries) => {
-            for entry in entries {
-                print_entry_line(entry);
-            }
-        }
-        Value::Object(map) => {
-            if let Some(findings) = map
-                .get("findings")
-                .or_else(|| map.get("entries"))
-                .and_then(Value::as_array)
-            {
-                if findings.is_empty() {
-                    println!("(none)");
-                } else {
-                    for entry in findings {
-                        print_entry_line(entry);
-                    }
-                }
-            } else {
-                print_json_summary(value);
-            }
-        }
-        _ => print_json_summary(value),
-    }
-}
-
 fn print_entry_line(entry: &Value) {
     let id = entry.get("id").and_then(Value::as_str).unwrap_or("-");
     let author = entry
@@ -331,13 +431,6 @@ fn print_entry_line(entry: &Value) {
         println!("- [{id}] {author}");
     } else {
         println!("- [{id}] {author}: {}", first_line(text));
-    }
-}
-
-fn print_json_summary(value: &Value) {
-    match serde_json::to_string_pretty(value) {
-        Ok(text) => println!("{text}"),
-        Err(_) => println!("{value}"),
     }
 }
 

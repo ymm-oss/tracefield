@@ -1,0 +1,40 @@
+{
+  "agents": [
+    {
+      "id": "WEB",
+      "domain": "web-source-discovery",
+      "desc": "Find current public sources, prioritize official IR and reliable market data, and emit source URLs with rationale.",
+      "doc": "web.md"
+    },
+    {
+      "id": "PAGE",
+      "domain": "webpage-extraction",
+      "desc": "Extract only source-grounded facts from fetched web pages. Separate facts, gaps, and low-quality source warnings.",
+      "doc": "page.md"
+    },
+    {
+      "id": "FIN",
+      "domain": "financial-analysis",
+      "desc": "Analyze revenue, margin, cash flow, valuation, shareholder returns, and financial risks.",
+      "doc": "finance.md"
+    },
+    {
+      "id": "STRAT",
+      "domain": "strategy-forecast",
+      "desc": "Analyze business strategy, competitive position, overseas growth, and future scenarios.",
+      "doc": "strategy.md"
+    },
+    {
+      "id": "RISK",
+      "domain": "investment-risk",
+      "desc": "Challenge the thesis with downside risks, missing evidence, and scenario sensitivity.",
+      "doc": "risk.md"
+    },
+    {
+      "id": "EDITOR",
+      "domain": "artifact-production",
+      "desc": "Create a cited report and Marp deck from audited findings.",
+      "doc": "editor.md"
+    }
+  ]
+}
