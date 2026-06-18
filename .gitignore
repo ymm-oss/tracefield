@@ -13,3 +13,4 @@
 /docs/index.bleve/
 scenarios/*/consult.log
 scenarios/*/run.jsonl
+scenarios/generic-smoke/outputs/

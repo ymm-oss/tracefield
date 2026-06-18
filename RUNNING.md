@@ -9,54 +9,40 @@ cargo test
 ```
 
 `./install.sh` runs the release build, `cargo check -p tracefield`, and a mock
-consult smoke check. Add `--test` to run the Rust test suite.
+flow smoke check. Add `--test` to run the Rust test suite.
 
 ## Model-Free Smoke
 
 ```sh
 ./target/release/tracefield doctor
-./target/release/tracefield consult --scenario-dir scenarios/generic-smoke --adapter mock
+./target/release/tracefield run --scenario-dir scenarios/generic-smoke
 ```
 
-The mock adapter is deterministic and requires no model, local service, or API
-key.
+`scenarios/generic-smoke/flow.toml` uses `adapter = "mock"`, which is
+deterministic and requires no model, local service, or API key.
 
-## Live Local Model
+## Choosing An Adapter And Model
 
-Start Ollama and make sure the model exists:
+The adapter and model are set per organ in `flow.toml`, not via CLI flags:
 
-```sh
-ollama serve
-ollama pull gemma4:12b
-./target/release/tracefield consult \
-  --scenario-dir scenarios/generic-smoke \
-  --adapter ollama \
-  --model gemma4:12b
+```toml
+[organs.reasoning]
+adapter = "ollama"        # mock / ollama / cli / openrouter / codex-app-server
+model = "gemma4:12b"
 ```
 
-## CLI-Backed Models
+- `ollama` — start `ollama serve` and `ollama pull <model>` first.
+- `cli` — set `command = "claude"` / `"codex"` / `"cursor-agent"` and a matching `model`.
+- `openrouter` — `model = "provider/slug"`, requires `OPENROUTER_API_KEY`.
+- `codex-app-server` — codex via JSON-RPC; supports `web_search = true` with search provenance.
 
-The CLI adapter defaults to `cursor-agent`. Set `TRACEFIELD_CLI_COMMAND` to use
-Claude Code or Codex CLI:
-
-```sh
-TRACEFIELD_CLI_COMMAND=claude tracefield consult \
-  --scenario-dir scenarios/generic-smoke \
-  --adapter cli \
-  --model sonnet
-
-TRACEFIELD_CLI_COMMAND=codex tracefield consult \
-  --scenario-dir scenarios/generic-smoke \
-  --adapter cli \
-  --model gpt-5.4
-```
+Full field reference: `skills/tracefield-operator/references/flow-spec.md`.
 
 ## Persist And Retract
 
 ```sh
-./target/release/tracefield consult \
+./target/release/tracefield run \
   --scenario-dir scenarios/generic-smoke \
-  --adapter mock \
   --persist /tmp/tracefield-store.jsonl
 
 ./target/release/tracefield retract \
@@ -65,4 +51,4 @@ TRACEFIELD_CLI_COMMAND=codex tracefield consult \
 ```
 
 The store is JSONL. Retraction marks the target entry and its downstream citation
-closure as retracted.
+closure as retracted; re-running `run` regenerates aggregates and artifacts.
