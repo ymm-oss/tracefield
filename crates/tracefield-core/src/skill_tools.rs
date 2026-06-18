@@ -290,7 +290,13 @@ async fn run_skill_script(
 
 fn cap_output(mut text: String) -> String {
     if text.len() > TOOL_OUTPUT_CAP {
-        text.truncate(TOOL_OUTPUT_CAP);
+        // Back off to the nearest char boundary so multi-byte (e.g. Japanese)
+        // tool output is never split mid-codepoint, which would panic.
+        let mut new_len = TOOL_OUTPUT_CAP;
+        while new_len > 0 && !text.is_char_boundary(new_len) {
+            new_len -= 1;
+        }
+        text.truncate(new_len);
         text.push_str("\n…(truncated)");
     }
     text
