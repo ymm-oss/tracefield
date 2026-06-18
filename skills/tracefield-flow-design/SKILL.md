@@ -1,6 +1,6 @@
 ---
 name: tracefield-flow-design
-description: 確証済みの設計知見に基づき tracefield の flow.toml / agents.json を設計・記述する。レンズ選定・ステージ構成・機械的集約・沈殿の判断を与える。「flow.tomlを書いて/設計して」「agents.jsonを作って」「レンズを選んで」「調査フローを設計して」「審議パネルを組んで」と言われた時に使用する。生フォーマットは tracefield-operator の references/scenario-format.md、CLI 運用は tracefield-operator を参照。
+description: tracefield の flow.toml / agents.json を設計する（中身の意思決定: レンズ選定・ステージ構成・機械的集約・沈殿）。「flow.tomlを設計して/書いて」「agents.jsonを作って」「レンズを選んで」「調査フローを設計して」「審議パネルを組んで」と言われた時に使用する。シナリオの新規作成・実行・retract・doctor など CLI 運用は tracefield-operator を使う。
 ---
 
 # Tracefield Flow Design
@@ -8,7 +8,7 @@ description: 確証済みの設計知見に基づき tracefield の flow.toml / 
 flow.toml / agents.json を**設計**するための意思決定ガイド。生の構文・CLI 運用は
 [tracefield-operator](../tracefield-operator/SKILL.md) と
 [scenario-format.md](../tracefield-operator/references/scenario-format.md) を読む。
-根拠は `docs/findings-lens-type.md` / `findings-diffusion-thinking.md` /
+根拠はリポジトリ `docs/` の findings: `findings-lens-type.md` / `findings-diffusion-thinking.md` /
 `findings-longrun-investigation.md` / `findings-being-sedimentation.md`。
 
 コピペ可能なテンプレは [references/patterns.md](references/patterns.md)。
@@ -49,11 +49,9 @@ analysis（直交レンズのパネル） → verify（FALSIFY/COUNTER） → ad
 ### 検証可能性（retract）
 - provenance が要る/後で覆す可能性があるなら `--persist <jsonl>`。load-bearing 前提を `tracefield retract` するとクロージャ伝播で依存結論が自動再開され、再 `aggregate` で基盤が再計算される。
 
-## 機械・運用の罠
-- `adapter="cli"`, `command="claude"`, `model="claude-sonnet-4-6"`。弱いモデルは大入力で合成が激しく崩れる。
-- ビルド済み `./target/release/tracefield` を使う（`~/.cargo/bin` 版は古いことがある）。
-- **必ず mock で構造検証してからライブ**（`adapter="mock"` に sed して `tracefield run`）。
-- `per_input` は入力エントリ数に actor をスケール。`roles` 長1なら全 actor が同一 lens 駆動。
+## 設計に効く制約（運用機構は tracefield-operator）
+- **モデルは合成の頑健性に効く設計変数**。弱いモデルは大入力で合成が激しく崩れる（レンズ脱落・結論反転）→ 鉄則2「小規模域に留める」を一層厳守。例: `adapter="cli" command="claude" model="claude-sonnet-4-6"`（adapter/model の権威ある設定・mock検証・ビルド済みバイナリ等の運用は operator 参照）。
+- `per_input` は入力エントリ数に actor をスケール（`roles` 長1なら全 actor が同一 lens 駆動）＝ステージ設計の道具。
 
 ## アンチパターン（findings 由来）
 - 死角照射目的でロールパネルを使う（冗長）。
