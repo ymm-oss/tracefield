@@ -4,6 +4,11 @@
 # Rust
 /target/
 
+# build / runtime artifacts
+/_build/
+/deps/
+/erl_crash.dump
+
 # editor / tooling
 /tmp/
 .claude/settings.local.json

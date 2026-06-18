@@ -467,6 +467,8 @@ fn wait_for_response(
 
 fn cap(mut text: String) -> String {
     if text.len() > OUTPUT_CAP {
+        // Back off to the nearest char boundary at or below the cap so we never
+        // split a multi-byte (e.g. Japanese) codepoint, which would panic.
         let mut end = OUTPUT_CAP;
         while end > 0 && !text.is_char_boundary(end) {
             end -= 1;
