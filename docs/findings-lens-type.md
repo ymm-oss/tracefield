@@ -64,6 +64,21 @@
 - パネルに**対立する哲学レンズ（功利主義⇄義務論等）を1〜2枚混ぜる**と、ロールだけのパネルが見落とす代替案と価値次元が表面化する。
 - **合成・批判ステージは敵対項目を1アクターに隔離し、最終結論は機械的集約で出す**。一枚岩 LLM 合成に丸投げしない。
 
+## 6.5 機械的集約の実装（confabボトルネックの解消）
+
+工程6（機械的集約）を `tracefield aggregate --store <jsonl> [--stage adjudication]` として実装した
+（`crates/tracefield-cli/src/main.rs`）。durable JSONL ストアの adjudication ステージの decision エントリを読み、
+各 verdict を**明示的な「判定:」ラベルの先頭だけ**で {overturn / conditional / reject / maintain / unclassified}
+に決定論的分類（プロセ中の「覆す」「維持」に汚染されないよう head 24 文字に限定）、
+
+- overturn が1件でもあれば結論 changed、
+- unclassified があれば indeterminate（清浄な fold を阻む＝要対応として surface、silent drop なし）、
+- それ以外は maintained ＋ conditional verdict の和集合を条件として列挙。
+
+既存の審判 run（`runs/lens-exp-synth-adjudicate.jsonl`）で検証: 6 verdict → conditional 5 / reject 1 /
+overturn 0 → **maintained(B) ＋ 5 条件**を全 id 付きで出力。LLM SYNTH が起こした PHENO 脱落・反証捏造・
+コンテキスト切り詰めは構造的に発生しない。分類のプロセ汚染耐性はユニットテストで固定（`classify_verdict`）。
+
 ## 7. 留保
 
 - 単一モデル(sonnet)・題材各1・小 n。一般化には別題材/別モデルでの再現が必要。

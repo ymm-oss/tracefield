@@ -68,6 +68,15 @@ enum Command {
         #[arg(long, default_value = "operator")]
         author: String,
     },
+    /// Mechanically aggregate adjudication verdicts in a persisted JSONL store.
+    Aggregate {
+        #[arg(long, value_name = "JSONL")]
+        store: PathBuf,
+        #[arg(long, default_value = "adjudication")]
+        stage: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Check local runtime dependencies.
     Doctor,
 }
@@ -186,6 +195,19 @@ async fn main() -> Result<()> {
                 .with_context(|| format!("failed to persist retraction to {}", store.display()))?;
 
             print_retract_report(&entry, &affected)?;
+        }
+        Command::Aggregate { store, stage, json } => {
+            ensure_file(&store, "--store")?;
+
+            let reference = tracefield_core::ReferenceStore::from_jsonl_path(&store)
+                .with_context(|| format!("failed to load persisted store {}", store.display()))?;
+            let report = aggregate_verdicts(&reference, &stage);
+
+            if json {
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                print_aggregate_report(&report);
+            }
         }
         Command::Doctor => {
             print_doctor().await;
@@ -344,6 +366,143 @@ fn print_run_report(result: &tracefield_core::FlowRunResult) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize)]
+struct VerdictRecord {
+    id: String,
+    author: String,
+    class: String,
+    text: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AggregateReport {
+    stage: String,
+    total: usize,
+    conclusion: String,
+    overturn: Vec<String>,
+    conditional: Vec<String>,
+    reject: Vec<String>,
+    maintain: Vec<String>,
+    unclassified: Vec<String>,
+    records: Vec<VerdictRecord>,
+}
+
+/// Classify one adjudication verdict from its explicit `判定` label, looking only
+/// at the head of that label so downstream prose (which may quote 覆す/維持) cannot
+/// contaminate the class.
+fn classify_verdict(text: &str) -> &'static str {
+    let head: String = match text.find("判定") {
+        Some(idx) => text[idx..].chars().take(24).collect(),
+        None => return "unclassified",
+    };
+    if head.contains("却下") {
+        "reject"
+    } else if head.contains("条件付き") {
+        "conditional"
+    } else if head.contains("結論変更") {
+        "overturn"
+    } else if head.contains("維持") {
+        "maintain"
+    } else {
+        "unclassified"
+    }
+}
+
+/// Deterministically fold per-refutation adjudication verdicts into a standing
+/// conclusion: any overturn changes the conclusion; an unclassified verdict blocks
+/// a clean fold; otherwise the conclusion is maintained under the union of the
+/// conditional verdicts. No LLM, no silent drops.
+fn aggregate_verdicts(reference: &tracefield_core::ReferenceStore, stage: &str) -> AggregateReport {
+    let mut records = Vec::new();
+    for entry in reference.all() {
+        if entry.status != tracefield_core::EntryStatus::Active {
+            continue;
+        }
+        if entry.entry_type != tracefield_core::EntryType::Decision {
+            continue;
+        }
+        if entry.meta.get("stage").and_then(Value::as_str) != Some(stage) {
+            continue;
+        }
+        records.push(VerdictRecord {
+            id: entry.id.clone(),
+            author: entry.author.clone(),
+            class: classify_verdict(&entry.text).to_string(),
+            text: entry.text.clone(),
+        });
+    }
+
+    let ids = |class: &str| {
+        records
+            .iter()
+            .filter(|record| record.class == class)
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let overturn = ids("overturn");
+    let conditional = ids("conditional");
+    let reject = ids("reject");
+    let maintain = ids("maintain");
+    let unclassified = ids("unclassified");
+
+    let conclusion = if !overturn.is_empty() {
+        "changed"
+    } else if !unclassified.is_empty() {
+        "indeterminate"
+    } else {
+        "maintained"
+    }
+    .to_string();
+
+    AggregateReport {
+        stage: stage.to_string(),
+        total: records.len(),
+        conclusion,
+        overturn,
+        conditional,
+        reject,
+        maintain,
+        unclassified,
+        records,
+    }
+}
+
+fn print_aggregate_report(report: &AggregateReport) {
+    println!(
+        "aggregate stage={} verdicts={} -> conclusion: {}",
+        report.stage, report.total, report.conclusion
+    );
+    println!(
+        "  overturn={} conditional={} reject={} maintain={} unclassified={}",
+        report.overturn.len(),
+        report.conditional.len(),
+        report.reject.len(),
+        report.maintain.len(),
+        report.unclassified.len()
+    );
+    if !report.overturn.is_empty() {
+        println!();
+        println!("## overturning verdicts (conclusion changed)");
+        for id in &report.overturn {
+            println!("- {id}");
+        }
+    }
+    if !report.unclassified.is_empty() {
+        println!();
+        println!("## unclassified verdicts (block clean fold — need attention)");
+        for id in &report.unclassified {
+            println!("- {id}");
+        }
+    }
+    if report.conclusion == "maintained" && !report.conditional.is_empty() {
+        println!();
+        println!("## conditions to honor (union of conditional verdicts)");
+        for record in report.records.iter().filter(|r| r.class == "conditional") {
+            println!("- [{}] {}", record.id, first_line(&record.text));
+        }
+    }
+}
+
 fn print_retract_report<T>(entry: &str, affected: &T) -> Result<()>
 where
     T: serde::Serialize,
@@ -444,4 +603,34 @@ fn find_on_path(binary: &str) -> bool {
     };
 
     env::split_paths(&paths).any(|path| path.join(binary).is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_verdict;
+
+    #[test]
+    fn classifies_canonical_labels() {
+        assert_eq!(classify_verdict("判定: 結論変更を要する(覆る)。根拠..."), "overturn");
+        assert_eq!(classify_verdict("判定: 条件付きで結論維持(B)。条件: ..."), "conditional");
+        assert_eq!(classify_verdict("判定: 却下。論理的欠陥は..."), "reject");
+    }
+
+    #[test]
+    fn prose_does_not_contaminate_class() {
+        // "覆す" / "維持" appear later in prose but must not flip the verdict class.
+        assert_eq!(
+            classify_verdict("判定: 却下。暫定合意Bを覆すに足る論理的欠陥があり結論Bを維持する。"),
+            "reject"
+        );
+        assert_eq!(
+            classify_verdict("判定: 条件付きで結論維持(B)。e24は有効だが覆すに至らない。"),
+            "conditional"
+        );
+    }
+
+    #[test]
+    fn missing_label_is_unclassified() {
+        assert_eq!(classify_verdict("Bが妥当だと考える。"), "unclassified");
+    }
 }
