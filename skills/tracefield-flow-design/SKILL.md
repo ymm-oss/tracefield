@@ -1,6 +1,6 @@
 ---
 name: tracefield-flow-design
-description: tracefield の flow.toml / agents.json を設計する（中身の意思決定: レンズ選定・ステージ構成・機械的集約・沈殿）。「flow.tomlを設計して/書いて」「agents.jsonを作って」「レンズを選んで」「調査フローを設計して」「審議パネルを組んで」と言われた時に使用する。シナリオの新規作成・実行・retract・doctor など CLI 運用は tracefield-operator を使う。
+description: tracefield の flow.toml / agents.json を設計する（レンズ選定・ステージ構成・機械的集約・沈殿の意思決定）。「flow.tomlを設計して/書いて」「agents.jsonを作って」「レンズを選んで」「調査フローを設計して」「審議パネルを組んで」と言われた時に使用する。シナリオの新規作成・実行・retract・doctor など CLI 運用は tracefield-operator を使う。
 ---
 
 # Tracefield Flow Design
