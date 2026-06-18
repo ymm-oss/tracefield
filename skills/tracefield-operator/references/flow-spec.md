@@ -33,9 +33,9 @@
 
 | key | 型 | 既定 | 説明 |
 | --- | --- | --- | --- |
-| `adapter` | string | `"mock"` | `mock` / `ollama` / `cli` / `openrouter` |
+| `adapter` | string | `"mock"` | `mock` / `ollama` / `cli` / `openrouter` / `codex-app-server`（`codex_app_server` も可） |
 | `model` | string | — | 下表「アダプタとモデル」参照 |
-| `command` | string | — | `cli` のときの実行コマンド（`claude` / `codex` / `cursor-agent`）。`claude-code` は `claude` の別名 |
+| `command` | string | — | `cli` のときの実行コマンド（`claude` / `codex` / `cursor-agent`）。`claude-code` は `claude` の別名。`codex-app-server` では不要 |
 | `max_tokens` | int | — | 出力トークン上限 |
 | `timeout_seconds` | int | `300` | 1リクエストのタイムアウト |
 
@@ -102,7 +102,11 @@
 | `cli` (`command="claude"`) | claude のモデル id（例 `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`） | `claude --help` の `--model` |
 | `cli` (`command="codex"`) | `codex`（codex 側がモデルを決める） | — |
 | `cli` (`command="cursor-agent"`) | 既定 `composer-2.5` | — |
+| `codex-app-server` | 任意の codex モデル id（省略可、未指定なら codex 既定） | `codex` を PATH に。tool 使用と provenance 対応 |
 | `openrouter` | `provider/model` slug（例 `openai/gpt-5.5`） | OpenRouter のモデル一覧。`OPENROUTER_API_KEY` 必須 |
+
+`cli` + `command="codex"` は one-shot の `codex exec`。`codex-app-server` は `codex app-server`
+の JSON-RPC stdio プロトコルで駆動し、ツール活動を provenance エントリとして残せる（別物）。
 
 固定の「選択可能モデル一覧」は存在しない（adapter とローカル環境に依存）。`tracefield doctor` で
 利用可能アダプタを確認する。**弱いモデルは大入力で合成が崩れやすい**（設計判断は tracefield-flow-design）。
