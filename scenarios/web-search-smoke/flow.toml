@@ -12,8 +12,7 @@ enabled = false
 [feedback_entries]
 enabled = false
 [organs.search]
-adapter = "cli"
-command = "codex"
+adapter = "codex-app-server"
 web_search = true
 timeout_seconds = 900
 [stages.search]

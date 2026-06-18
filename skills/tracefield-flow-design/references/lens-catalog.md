@@ -61,7 +61,12 @@ ADJ の正準ラベル等）。これらは analysis パネルでなく verify/a
 
 ## web 検索者（codex の web_search を使う）
 
-organ を `adapter="cli" command="codex" web_search=true` にしたステージで使う（[flow-spec.md](../tracefield-operator/references/flow-spec.md) の `web_search`）。偏りは「何を検索するか」に宿るので、直交する検索者を複数並べると web の死角が減る。
+organ を web_search 有効の codex にしたステージで使う（[flow-spec.md](../tracefield-operator/references/flow-spec.md) の `web_search`）。2経路とも動作:
+
+- `adapter="codex-app-server" web_search=true` … **推奨**。各検索を `kind="codex_web_search"` の provenance エントリに残す（監査・retract 理由づけに効く）。
+- `adapter="cli" command="codex" web_search=true` … 動くが検索 provenance は残らない。
+
+偏りは「何を検索するか」に宿るので、直交する検索者を複数並べると web の死角が減る。
 
 ```json
 {"id":"SEARCH_RISK","domain":"web-search-risk","desc":"webを検索し、問いに対する失敗事例・反証・下振れ・規制リスクを優先して探す検索者。出典1件につきobservationを1つ出し、metaにsource_urlを入れ、本文はその出典から接地された事実のみ。出典のない推測はmeta.kind=\"assumption\"で分離。"}
