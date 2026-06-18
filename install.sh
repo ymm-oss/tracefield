@@ -9,7 +9,7 @@
 # or external API key is required for the default run.
 #
 # Flags:
-#   --no-smoke   skip the mock consult smoke run
+#   --no-smoke   skip the mock flow smoke run
 #   --test       also run the Rust test suite
 #   -h, --help   show this help
 
@@ -64,9 +64,9 @@ if [ "$RUN_TEST" -eq 1 ]; then
 fi
 
 if [ "$RUN_SMOKE" -eq 1 ]; then
-  step "Smoke check: mock consult"
-  ./target/release/tracefield consult --scenario-dir scenarios/generic-smoke --adapter mock >/dev/null
-  info "mock consult OK"
+  step "Smoke check: mock flow run"
+  ./target/release/tracefield run --scenario-dir scenarios/generic-smoke >/dev/null
+  info "mock flow run OK"
 fi
 
 printf '\n%s✓ tracefield is ready.%s\n\n' "$GREEN$BOLD" "$RESET"
@@ -74,7 +74,7 @@ cat <<EOF
 Next steps:
 
   ./target/release/tracefield doctor
-  ./target/release/tracefield consult --scenario-dir scenarios/generic-smoke --adapter mock
+  ./target/release/tracefield run --scenario-dir scenarios/generic-smoke
   ./target/release/tracefield new my-review
 
 For live runs with a local model, start Ollama and pull a model first
