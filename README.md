@@ -32,46 +32,65 @@ See [`docs/user-guide.md`](./docs/user-guide.md) for usage, [`docs/overview.md`]
 for conceptual background, and [`docs/glossary.md`](./docs/glossary.md) for
 terminology.
 
-## Requirements
+## Installation
 
-- [Rust](https://www.rust-lang.org/tools/install) with Cargo
-- For live local model runs: [Ollama](https://ollama.com/)
-- For OpenRouter runs: `OPENROUTER_API_KEY`
+### Prerequisites
 
-The built-in `mock` adapter runs with no model, no network service, and no API
-key.
+- [Rust](https://www.rust-lang.org/tools/install) with Cargo (the 2024-edition
+  toolchain). This is the only hard requirement — the built-in `mock` adapter
+  runs with no model, network, or API key.
+- Optional, only for live model runs:
+  - [Ollama](https://ollama.com/) for local models (`adapter = "ollama"`).
+  - A CLI agent on your `PATH` — `claude` or `codex` — for `adapter = "cli"`.
+  - `OPENROUTER_API_KEY` for `adapter = "openrouter"`.
 
-## Quick Start
+### Install
 
 ```sh
 git clone https://github.com/ymm-oss/tracefield.git
 cd tracefield
-./install.sh
 ```
 
-`install.sh` builds the Rust CLI, runs `cargo check -p tracefield`, and runs a
-model-free smoke check unless `--no-smoke` is passed.
+Then pick one:
 
-Manual commands:
+**Bootstrap script** — builds the CLI and runs a model-free smoke check:
 
 ```sh
-cargo build --release -p tracefield
-cargo check -p tracefield
-cargo test
+./install.sh            # --test also runs the test suite; --no-smoke skips the smoke run
 ```
 
-Run the CLI:
-
-```sh
-./target/release/tracefield doctor
-./target/release/tracefield run --scenario-dir scenarios/generic-smoke
-```
-
-Install it into Cargo's bin directory:
+**Install the `tracefield` binary onto your PATH:**
 
 ```sh
 cargo install --path crates/tracefield-cli --locked
-tracefield doctor
+```
+
+**Or build in place** and call `./target/release/tracefield`:
+
+```sh
+cargo build --release
+```
+
+> If a previously installed `~/.cargo/bin/tracefield` lags behind the source
+> (e.g. an adapter errors with `unknown option '--force'`, or a subcommand is
+> missing), rebuild with `cargo build --release` or reinstall with the
+> `cargo install` line above.
+
+### Verify
+
+```sh
+tracefield doctor                                   # or ./target/release/tracefield doctor
+tracefield run --scenario-dir scenarios/generic-smoke   # mock run; needs nothing else
+```
+
+`doctor` reports adapter availability:
+
+```text
+Adapters
+- mock: ok
+- ollama: ok
+- openrouter: OPENROUTER_API_KEY not set
+- cli: claude, codex found
 ```
 
 ## Commands
@@ -85,8 +104,16 @@ tracefield run --scenario-dir scenarios/my-review
 TRACEFIELD_CLI_COMMAND=claude tracefield run --scenario-dir scenarios/my-review
 TRACEFIELD_CLI_COMMAND=codex tracefield run --scenario-dir scenarios/my-review
 tracefield run --scenario-dir scenarios/my-review --persist runs/reference.jsonl
+tracefield aggregate --store runs/reference.jsonl
 tracefield retract --store runs/reference.jsonl --entry e3
 ```
+
+| Adapter | Use | Config |
+| --- | --- | --- |
+| `mock` | structure check, no model | `adapter = "mock"` |
+| `ollama` | local models | `adapter = "ollama"`, `model = "<model>"` |
+| `cli` | local agents (`claude` / `codex`) | `adapter = "cli"`, `command = "claude"` (or `TRACEFIELD_CLI_COMMAND=claude` prefix) |
+| `openrouter` | hosted models | `adapter = "openrouter"`, `model = "<provider/model>"`, `OPENROUTER_API_KEY` |
 
 For live adapters, set `adapter` and `model` in `scenarios/<name>/flow.toml`
 under `[organs.reasoning]`, for example `adapter = "ollama"` and
@@ -106,6 +133,33 @@ per-input data extraction, analysis, audit, report, and deck artifact layers.
 
 `tracefield run` writes a readable report by default. Use `--json` for compact
 JSON or `--out <file>` for a pretty JSON file.
+
+`tracefield aggregate --store <file>.jsonl` deterministically folds the verdicts
+of an `adjudication` stage into a standing conclusion **without an LLM**: any
+`overturn` → conclusion changed; any unclassifiable verdict → `indeterminate`
+(surfaced, never silently dropped); otherwise `maintained` under the union of
+the conditional verdicts. This replaces a monolithic LLM "synthesis" step, whose
+fidelity degrades at scale (see [Findings](#findings)).
+
+## A Governed Investigation
+
+The investigation pattern that the design findings converge on keeps every model
+call inside a small, faithful context and reserves integration for deterministic
+code:
+
+```text
+analysis (a panel of orthogonal lenses)
+  → verify (adversarial falsify / counter-example)
+  → adjudication (one isolated actor per refutation, mode = "per_input")
+  → tracefield aggregate (mechanical fold; no central synthesizer)
+```
+
+Persisting with `--persist` makes the result **falsifiable over time**:
+`tracefield retract` on a load-bearing premise propagates a closure over every
+dependent entry, and re-running `aggregate` recomputes the standing conclusion.
+The [`tracefield-flow-design`](./skills/tracefield-flow-design/SKILL.md) skill
+encodes how to choose lenses and wire these stages; reproducible example
+scenarios live under `scenarios/lens-*`.
 
 ## Author A Scenario
 
@@ -152,12 +206,46 @@ influence remains retractable. Tracefield currently injects `SKILL.md`
 instructions only; bundled references, scripts, and assets are not automatically
 read or executed by the flow.
 
+## Skills
+
+[`skills/`](./skills) holds Claude Code skills that capture operating and design
+knowledge so it is reusable across sessions:
+
+- [`tracefield-operator`](./skills/tracefield-operator/SKILL.md) — **running** the
+  CLI: `doctor` / `new` / `run` / `persist` / `aggregate` / `retract`, adapters,
+  and troubleshooting.
+- [`tracefield-flow-design`](./skills/tracefield-flow-design/SKILL.md) —
+  **designing** `flow.toml` / `agents.json`: lens selection, stage topology,
+  mechanical aggregation, and denoise patterns, distilled from the findings.
+
+## Findings
+
+Highlights confirmed by controlled and blind-rated experiments (full notes in
+[`docs/`](./docs)):
+
+- **Lens type** ([`findings-lens-type.md`](./docs/findings-lens-type.md)) —
+  panels of mutually *orthogonal* philosophical lenses surface more
+  blind-spot considerations than role lenses (blind-judge confirmed). Operations
+  (synthesis, critique) belong in *stages*, not lenses.
+- **Synthesis bottleneck** (same doc) — a monolithic LLM "synthesis" is faithful
+  on small inputs but drops/inverts at scale, worse on weaker models; the fix is
+  per-refutation isolation + the mechanical `aggregate`.
+- **Diffusion-like iteration** ([`findings-diffusion-thinking.md`](./docs/findings-diffusion-thinking.md))
+  — peer iteration across `long_run` cycles refines without mode collapse
+  (~3 cycles is the sweet spot).
+- **Long-run investigation** ([`findings-longrun-investigation.md`](./docs/findings-longrun-investigation.md))
+  — the governed pattern above, run end to end with retract-based falsifiability.
+- **Sedimentation** ([`findings-being-sedimentation.md`](./docs/findings-being-sedimentation.md))
+  — a self-referential standpoint seeded against the model's default holds and
+  self-reinforces across cycles (path-dependent, not a washed-out costume).
+
 ## Repository Layout
 
 ```text
 crates/tracefield-cli/   CLI binary
 crates/tracefield-core/  scenario, store, LLM adapter, Field Runner / flow logic
 scenarios/               synthetic, fictional consulting scenarios
+skills/                  Claude Code skills (operate + design)
 docs/                    design notes, experiment plans, findings
 experiments/             Python analysis scripts for historical run outputs
 ```
