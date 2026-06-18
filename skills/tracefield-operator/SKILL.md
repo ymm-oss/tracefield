@@ -33,8 +33,10 @@ tracefield new <name> --profile deep_investigation
 ```
 
 Edit `scenarios/<name>/task.md`, `agents.json`, `flow.toml`, `inputs/*`, and
-`private/*.md`. For the exact format and agent-design rules, read
-[references/scenario-format.md](references/scenario-format.md).
+`private/*.md`. For the `agents.json` / directory format read
+[references/scenario-format.md](references/scenario-format.md); for the full
+`flow.toml` field spec, valid values, and what `model` to set per adapter read
+[references/flow-spec.md](references/flow-spec.md).
 
 Fetch web pages into Field Runner inputs when URLs are part of the task:
 
