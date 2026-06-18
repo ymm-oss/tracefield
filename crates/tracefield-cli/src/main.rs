@@ -391,7 +391,10 @@ struct AggregateReport {
 /// at the head of that label so downstream prose (which may quote 覆す/維持) cannot
 /// contaminate the class.
 fn classify_verdict(text: &str) -> &'static str {
-    let head: String = match text.find("判定") {
+    // Anchor on the explicit verdict label "判定:" / "判定：" (with a colon) so a bare
+    // "判定" inside prose (e.g. "準拠判定を保留") cannot be mistaken for the label.
+    let anchor = text.find("判定:").or_else(|| text.find("判定："));
+    let head: String = match anchor {
         Some(idx) => text[idx..].chars().take(24).collect(),
         None => return "unclassified",
     };
@@ -625,6 +628,11 @@ mod tests {
         );
         assert_eq!(
             classify_verdict("判定: 条件付きで結論維持(B)。e24は有効だが覆すに至らない。"),
+            "conditional"
+        );
+        // A bare 判定 in prose ("準拠判定を保留") precedes the real 判定: label.
+        assert_eq!(
+            classify_verdict("監査法人が準拠判定を保留する実例は存在する。判定: 条件付き結論維持。条件—..."),
             "conditional"
         );
     }
