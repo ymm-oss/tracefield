@@ -1,6 +1,6 @@
 ---
 name: tracefield-operator
-description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続化、retract検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「retractして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。
+description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続化、機械的集約(aggregate)、retract検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「flowを実行して」「集約して/aggregateして」「retractして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。flow.toml/agents.jsonの設計判断は tracefield-flow-design を使う。
 ---
 
 # Tracefield Operator
@@ -8,7 +8,14 @@ description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続
 ## Overview
 
 Use the Rust `tracefield` CLI as the active implementation. Do not use removed
-Mix/Elixir commands.
+Mix/Elixir commands. This skill covers **running** the CLI (doctor / new / run /
+persist / aggregate / retract). For **designing** what goes into `flow.toml` /
+`agents.json` (lens selection, stage topology, mechanical aggregation, denoise),
+use the [tracefield-flow-design](../tracefield-flow-design/SKILL.md) skill.
+
+Build/run from the workspace with `./target/release/tracefield` (the
+`~/.cargo/bin` copy can lag behind the source — rebuild if a flag like `--force`
+or a subcommand is missing; see troubleshooting).
 
 ## Workflow
 
@@ -71,7 +78,18 @@ with source entry ids.
 `deep_investigation` includes source discovery, deterministic source clustering,
 per-input extraction, analysis, audit, report, and deck artifact stages.
 
-6. Retract by entry id and inspect the downstream closure:
+6. When the flow has an `adjudication` stage, fold the per-refutation verdicts
+   into a standing conclusion mechanically (no LLM):
+
+```sh
+tracefield aggregate --store runs/<name>.jsonl
+```
+
+Reports `maintained` (with the union of conditions), `changed` (any overturning
+verdict), or `indeterminate` (an unclassifiable verdict is surfaced, never
+dropped). Add `--stage <id>` if the adjudication stage is named otherwise.
+
+7. Retract by entry id and inspect the downstream closure:
 
 ```sh
 tracefield retract --store runs/<name>.jsonl --entry e3
