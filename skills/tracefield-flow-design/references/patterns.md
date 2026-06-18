@@ -1,12 +1,12 @@
 # Flow Patterns（コピペ可能）
 
-すべて `adapter="cli" command="claude" model="claude-sonnet-4-6"` 前提。ライブ前に
-`adapter="mock"` に変えて `tracefield run` で構造検証すること。実例は `scenarios/lens-*`。
+organ は例として `adapter="cli" command="claude" model="claude-sonnet-4-6"` を使う（adapter/model の
+権威ある設定・mock 検証・実行手順は tracefield-operator）。実例は `scenarios/lens-*`。
 
 ## 共通: organ 定義
 
 ```toml
-[organs.reason]
+[organs.reasoning]
 adapter = "cli"
 command = "claude"
 model = "claude-sonnet-4-6"
@@ -38,7 +38,7 @@ policy = "fixed"
 default_mode = "fixed"
 max_total_actors = 5
 [stages.analysis]
-organ = "reason"
+organ = "reasoning"
 inputs = ["path:task.md"]
 outputs = ["observation", "decision"]
 [stages.analysis.actors]
@@ -61,7 +61,7 @@ roles = ["UTIL", "DEONT", "TOC", "REVERS", "CASES"]
 `flow.toml`:
 ```toml
 [stages.verify]
-organ = "reason"
+organ = "reasoning"
 inputs = ["stage:analysis"]
 outputs = ["observation", "question"]
 [stages.verify.actors]
@@ -70,7 +70,7 @@ count = 2
 roles = ["FALSIFY", "COUNTER"]
 
 [stages.adjudication]
-organ = "reason"
+organ = "reasoning"
 inputs = ["stage:verify"]
 outputs = ["observation", "decision"]
 [stages.adjudication.actors]
@@ -95,7 +95,7 @@ cycles = 3
 cycle_stages = ["analysis"]
 
 [stages.analysis]
-organ = "reason"
+organ = "reasoning"
 inputs = ["path:task.md", "stage:analysis"]   # 自己/相互参照で denoise
 outputs = ["observation", "question", "decision"]
 [stages.analysis.actors]
@@ -125,7 +125,7 @@ enabled = true
 cycles = 3
 cycle_stages = ["analysis"]
 [stages.analysis]
-organ = "reason"
+organ = "reasoning"
 inputs = ["path:task.md", "stage:analysis"]   # 自分の過去のみ継承
 outputs = ["stance"]
 [stages.analysis.actors]
