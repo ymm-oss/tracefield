@@ -1,6 +1,6 @@
 ---
 name: tracefield-operator
-description: Tracefield Rust CLIでシナリオ作成、consult実行、JSONL永続化、retract検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「retractして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。
+description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続化、retract検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「retractして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。
 ---
 
 # Tracefield Operator
@@ -21,32 +21,55 @@ tracefield doctor
 2. For a new task, scaffold a scenario:
 
 ```sh
-tracefield new <name>
+tracefield new <name> --profile consult
+tracefield new <name> --profile deep_investigation
 ```
 
-Edit `scenarios/<name>/task.md`, `agents.json`, and `private/*.md`. For the exact
-format and agent-design rules, read [references/scenario-format.md](references/scenario-format.md).
+Edit `scenarios/<name>/task.md`, `agents.json`, `flow.toml`, `inputs/*`, and
+`private/*.md`. For the exact format and agent-design rules, read
+[references/scenario-format.md](references/scenario-format.md).
+
+Fetch web pages into Field Runner inputs when URLs are part of the task:
+
+```sh
+tracefield web-input --scenario-dir scenarios/<name> --url https://example.com/source
+```
 
 3. Run a model-free smoke first:
 
 ```sh
-tracefield consult --scenario-dir scenarios/<name> --adapter mock
+tracefield run --scenario-dir scenarios/<name>
 ```
 
 4. Run a live adapter only after the mock path works:
 
-```sh
-tracefield consult --scenario-dir scenarios/<name> --adapter ollama --model <model>
+Set `[organs.reasoning]` in `scenarios/<name>/flow.toml`:
+
+```toml
+[organs.reasoning]
+adapter = "ollama"
+model = "<model>"
 ```
 
-Use `--adapter cli` for local CLI models or `--adapter openrouter` when
-`OPENROUTER_API_KEY` is set.
+```sh
+tracefield run --scenario-dir scenarios/<name>
+```
+
+Use `adapter = "cli"` for local CLI models or `adapter = "openrouter"` when
+`OPENROUTER_API_KEY` is set. `TRACEFIELD_CLI_COMMAND=claude|codex` remains valid
+as a prefix to `tracefield run` for CLI-backed flows.
 
 5. Persist when provenance or later retraction matters:
 
 ```sh
-tracefield consult --scenario-dir scenarios/<name> --adapter mock --persist runs/<name>.jsonl
+tracefield run --scenario-dir scenarios/<name> --persist runs/<name>.jsonl
 ```
+
+For `tracefield run`, `--persist` also resumes from an existing JSONL store.
+Configured artifacts write both the exported file and a `.manifest.json` sidecar
+with source entry ids.
+`deep_investigation` includes source discovery, deterministic source clustering,
+per-input extraction, analysis, audit, report, and deck artifact stages.
 
 6. Retract by entry id and inspect the downstream closure:
 
@@ -71,5 +94,5 @@ longer available.
 ## Troubleshooting
 
 Read [references/troubleshooting.md](references/troubleshooting.md) when
-`doctor`, `consult`, `ollama`, `openrouter`, `cli`, JSONL persistence, or
+`doctor`, `run`, `ollama`, `openrouter`, `cli`, JSONL persistence, or
 retraction fails.

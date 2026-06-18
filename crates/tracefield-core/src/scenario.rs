@@ -100,6 +100,15 @@ pub fn load(dir: impl AsRef<Path>) -> Result<Scenario> {
 }
 
 pub fn scaffold(name: &str, dir: Option<&Path>, force: bool) -> Result<PathBuf> {
+    scaffold_with_profile(name, dir, force, "default")
+}
+
+pub fn scaffold_with_profile(
+    name: &str,
+    dir: Option<&Path>,
+    force: bool,
+    profile: &str,
+) -> Result<PathBuf> {
     let base = dir
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("scenarios").join(name));
@@ -112,6 +121,8 @@ pub fn scaffold(name: &str, dir: Option<&Path>, force: bool) -> Result<PathBuf> 
     }
 
     fs::create_dir_all(base.join("private"))
+        .with_context(|| format!("failed to create {}", base.display()))?;
+    fs::create_dir_all(base.join("inputs"))
         .with_context(|| format!("failed to create {}", base.display()))?;
 
     write_if_allowed(
@@ -140,8 +151,410 @@ pub fn scaffold(name: &str, dir: Option<&Path>, force: bool) -> Result<PathBuf> 
         "Private lens for A2.\n",
         force,
     )?;
+    write_if_allowed(
+        &base.join("inputs").join("example.md"),
+        "Replace this with source material, issue text, logs, or other flow inputs.\n",
+        force,
+    )?;
+    write_if_allowed(
+        &base.join("flow.toml"),
+        flow_template(profile).with_context(|| format!("unknown flow profile {profile:?}"))?,
+        force,
+    )?;
 
     Ok(base)
+}
+
+fn flow_template(profile: &str) -> Option<&'static str> {
+    match profile {
+        "default" => Some(
+            r#"[flow]
+profile = "default"
+policy = "fixed"
+budget = 20
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+
+[organs.reasoning]
+adapter = "mock"
+
+[stages.collect]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["observation"]
+
+[stages.collect.actors]
+mode = "per_input"
+max = 2
+
+[stages.analyze]
+organ = "reasoning"
+inputs = ["stage:collect"]
+outputs = ["synthesis", "question"]
+
+[stages.analyze.actors]
+mode = "fixed"
+count = 1
+
+	[artifacts.summary]
+	format = "markdown"
+	from_stage = "analyze"
+	path = "outputs/summary.md"
+	"#,
+        ),
+        "consult" => Some(
+            r#"[flow]
+profile = "consult"
+policy = "fixed"
+budget = 20
+
+[long_run]
+enabled = true
+cycles = 2
+cycle_stages = ["deliberate"]
+
+[actor_scaling]
+default_mode = "per_agent"
+max_parallel_actors = 1
+
+[organs.reasoning]
+adapter = "mock"
+
+[stages.deliberate]
+organ = "reasoning"
+outputs = ["claim", "question", "observation", "decision"]
+
+[stages.deliberate.actors]
+mode = "per_agent"
+"#,
+        ),
+        "deep_investigation" => Some(
+            r#"[flow]
+	profile = "deep_investigation"
+policy = "fixed"
+budget = 200
+max_feedback_cycles = 2
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 24
+max_parallel_actors = 4
+
+[process]
+enabled = true
+organ = "reasoning"
+mode = "deep_investigation"
+agent_count = 1
+artifact_after_feedback = true
+artifact_stages = ["artifact_strategy", "report_architecture", "report_draft", "report_critique", "report_finalize", "deck_storyline", "slide_spec", "slide_draft", "deck_critique", "deck_finalize"]
+
+[process.gates]
+enforce_artifact_gate = true
+allow_conditional_artifacts = false
+require_citations = true
+require_evidence_quotes = true
+block_publish_on_open_questions = true
+block_publish_on_quality_warnings = false
+require_manifest = true
+
+[process.stop]
+max_cycles = 3
+max_feedback_cycles = 8
+stop_when = ["no_high_priority_recollection", "audit_passed", "artifact_publishable"]
+
+[feedback]
+enabled = true
+max_requests_per_cycle = 8
+dedupe_by = ["normalized_request", "target_entry", "stage"]
+
+[[feedback.edge]]
+from = ["hypothesis", "lens_analysis", "audit"]
+to = "source_extract"
+entry_types = ["question", "audit"]
+trigger_when = ["needs_evidence", "needs_refutation", "low_evidence_coverage"]
+
+[feedback_entries]
+enabled = true
+kind = "tracefield_feedback"
+accepted_types = ["change", "requirement", "question", "audit"]
+status_field = "status"
+max_requests_per_cycle = 8
+dedupe_by = ["target", "action", "normalized_request"]
+
+[[feedback_entries.route]]
+target_prefix = "input.web"
+to = "source_discovery"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "flow.stage.source_discovery"
+to = "source_discovery"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "flow.stage.source_extract"
+to = "source_extract"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "flow."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "artifact."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "gates."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[[feedback_entries.route]]
+target_prefix = "profile."
+to = "feedback_triage"
+entry_types = ["change", "requirement", "question", "audit"]
+
+[organs.data]
+adapter = "cli"
+command = "/Users/rizumita/Workspace/github/ds4/ds4"
+model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+max_tokens = 400
+timeout_seconds = 1200
+
+[organs.reasoning]
+adapter = "cli"
+command = "codex"
+model = "codex"
+
+[stages.source_discovery]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["question", "observation"]
+budget = 20
+
+[stages.source_discovery.actors]
+mode = "auto"
+min = 1
+max = 4
+scale_by = ["input_count", "open_questions"]
+roles = ["source_discovery"]
+
+[stages.source_cluster]
+inputs = ["kind:input"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.source_cluster.clustering]
+enabled = true
+by = ["path_parent", "path"]
+max_clusters = 12
+
+[stages.source_cluster.actors]
+mode = "none"
+roles = ["source_clusterer"]
+
+[stages.source_extract]
+organ = "data"
+inputs = ["kind:input"]
+outputs = ["observation", "question"]
+budget = 40
+
+[stages.source_extract.actors]
+mode = "per_input"
+min = 1
+max = 12
+roles = ["data_actor"]
+
+[stages.hypothesis]
+organ = "reasoning"
+inputs = ["stage:source_discovery", "stage:source_cluster", "stage:source_extract"]
+outputs = ["hypothesis", "question"]
+budget = 40
+
+[stages.hypothesis.actors]
+mode = "auto"
+min = 2
+max = 6
+scale_by = ["budget", "input_count", "open_questions"]
+
+[stages.lens_analysis]
+organ = "reasoning"
+inputs = ["stage:hypothesis", "stage:source_cluster", "stage:source_extract"]
+outputs = ["synthesis", "audit", "question"]
+budget = 40
+
+[stages.lens_analysis.actors]
+mode = "fixed"
+count = 4
+roles = ["market", "technical", "risk", "operations"]
+
+[stages.audit]
+organ = "reasoning"
+inputs = ["stage:lens_analysis", "stage:hypothesis"]
+outputs = ["audit", "question"]
+budget = 30
+
+[stages.audit.actors]
+mode = "fixed"
+count = 2
+roles = ["artifact_critic", "citation_auditor"]
+
+[stages.feedback_triage]
+organ = "reasoning"
+inputs = ["kind:tracefield_feedback", "stage:audit", "stage:lens_analysis"]
+outputs = ["change", "requirement", "decision", "question"]
+budget = 15
+
+[stages.feedback_triage.actors]
+mode = "fixed"
+count = 1
+roles = ["feedback_router"]
+
+[stages.artifact_strategy]
+organ = "reasoning"
+inputs = ["stage:feedback_triage", "stage:audit", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.artifact_strategy.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_strategist"]
+
+[stages.report_architecture]
+organ = "reasoning"
+inputs = ["stage:artifact_strategy", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.report_architecture.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_architect"]
+
+[stages.report_draft]
+organ = "reasoning"
+inputs = ["stage:report_architecture", "stage:lens_analysis", "stage:audit"]
+outputs = ["synthesis", "decision"]
+budget = 30
+
+[stages.report_draft.actors]
+mode = "auto"
+min = 1
+max = 4
+scale_by = ["budget", "input_count"]
+roles = ["artifact_writer"]
+
+[stages.report_critique]
+organ = "reasoning"
+inputs = ["stage:report_draft"]
+outputs = ["audit"]
+budget = 10
+
+[stages.report_critique.actors]
+mode = "fixed"
+count = 2
+roles = ["artifact_critic", "citation_auditor"]
+
+[stages.report_finalize]
+organ = "reasoning"
+inputs = ["stage:report_draft", "stage:report_critique"]
+outputs = ["synthesis", "decision"]
+budget = 15
+
+[stages.report_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.report_finalize.artifact]
+kind = "executive_report"
+format = "markdown"
+audience = "executive"
+require_citations = true
+
+[stages.deck_storyline]
+organ = "reasoning"
+inputs = ["stage:artifact_strategy", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.deck_storyline.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_strategist"]
+
+[stages.slide_spec]
+organ = "reasoning"
+inputs = ["stage:deck_storyline", "stage:lens_analysis"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.slide_spec.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_architect"]
+
+[stages.slide_draft]
+organ = "reasoning"
+inputs = ["stage:slide_spec", "stage:lens_analysis", "stage:audit"]
+outputs = ["synthesis"]
+budget = 30
+
+[stages.slide_draft.actors]
+mode = "auto"
+min = 2
+max = 6
+scale_by = ["budget", "input_count"]
+roles = ["artifact_writer"]
+
+[stages.deck_critique]
+organ = "reasoning"
+inputs = ["stage:slide_draft"]
+outputs = ["audit"]
+budget = 10
+
+[stages.deck_critique.actors]
+mode = "fixed"
+count = 2
+roles = ["artifact_critic", "citation_auditor"]
+
+[stages.deck_finalize]
+organ = "reasoning"
+inputs = ["stage:slide_draft", "stage:deck_critique"]
+outputs = ["synthesis"]
+budget = 15
+
+[stages.deck_finalize.actors]
+mode = "fixed"
+count = 1
+roles = ["artifact_editor"]
+
+[stages.deck_finalize.artifact]
+kind = "strategy_deck"
+format = "slides_markdown"
+audience = "executive"
+require_citations = true
+
+[artifacts.executive_report]
+format = "markdown"
+from_stage = "report_finalize"
+path = "outputs/report.md"
+
+[artifacts.strategy_deck]
+format = "slides_markdown"
+from_stage = "deck_finalize"
+path = "outputs/deck.md"
+"#,
+        ),
+        _ => None,
+    }
 }
 
 fn load_private_docs(dir: &Path) -> Result<BTreeMap<String, String>> {
@@ -375,6 +788,61 @@ Review procedure
         );
         assert_eq!(agent_skills[0].body, "# Review\n\nReview procedure");
         assert_eq!(agent_skills[0].raw_content, raw_skill);
+    }
+
+    #[test]
+    fn scaffold_creates_flow_runner_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("flow-smoke");
+        let scenario_dir = scaffold("flow-smoke", Some(&target), false).unwrap();
+
+        assert!(scenario_dir.join("task.md").exists());
+        assert!(scenario_dir.join("agents.json").exists());
+        assert!(scenario_dir.join("flow.toml").exists());
+        assert!(scenario_dir.join("inputs").join("example.md").exists());
+        assert!(scenario_dir.join("private").join("lens1.md").exists());
+
+        let flow = fs::read_to_string(scenario_dir.join("flow.toml")).unwrap();
+        assert!(flow.contains("[stages.collect]"));
+        assert!(flow.contains("[artifacts.summary]"));
+    }
+
+    #[test]
+    fn scaffold_can_create_deep_investigation_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("deep");
+        let scenario_dir =
+            scaffold_with_profile("deep", Some(&target), false, "deep_investigation").unwrap();
+        let flow = fs::read_to_string(scenario_dir.join("flow.toml")).unwrap();
+
+        assert!(flow.contains("profile = \"deep_investigation\""));
+        assert!(flow.contains("command = \"/Users/rizumita/Workspace/github/ds4/ds4\""));
+        assert!(flow.contains("model = \"/Users/rizumita/Workspace/github/ds4/ds4flash.gguf\""));
+        assert!(flow.contains("command = \"codex\""));
+        assert!(flow.contains("[process]"));
+        assert!(flow.contains("artifact_after_feedback = true"));
+        assert!(flow.contains("[stages.source_discovery]"));
+        assert!(flow.contains("[stages.source_cluster.clustering]"));
+        assert!(flow.contains("[feedback_entries]"));
+        assert!(flow.contains("[stages.feedback_triage]"));
+        assert!(flow.contains("[stages.report_finalize]"));
+        assert!(flow.contains("[stages.deck_finalize]"));
+        assert!(flow.contains("[artifacts.strategy_deck]"));
+    }
+
+    #[test]
+    fn scaffold_can_create_consult_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("consult");
+        let scenario_dir =
+            scaffold_with_profile("consult", Some(&target), false, "consult").unwrap();
+        let flow = fs::read_to_string(scenario_dir.join("flow.toml")).unwrap();
+
+        assert!(flow.contains("profile = \"consult\""));
+        assert!(flow.contains("[long_run]"));
+        assert!(flow.contains("cycle_stages = [\"deliberate\"]"));
+        assert!(flow.contains("[stages.deliberate]"));
+        assert!(flow.contains("mode = \"per_agent\""));
     }
 
     #[test]

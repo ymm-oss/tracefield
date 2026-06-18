@@ -11,6 +11,9 @@
 ### 行き先② コンサル業務サポート（近い・先に獲る）
 - **形**: 複数レンズ（業界・財務・技術・顧客…）のエージェントが、クライアント文書・社内知見（私的文書）を
   土台に**引用付き**で発想・分析・リスクレビューする。住宅デモがまさにこの形だった。
+- **発展形**: [`design-field-runner.md`](./design-field-runner.md) の Field Runner。`tracefield run` と
+  `flow.toml` で stage / actor scaling / organ routing / feedback / gate を汎用化し、長時間調査や開発/QAフローを
+  Reference/citation/retract の統治下で行う。
 - **tracefield が与える独自価値**:
   - **来歴つき提案**: 「この提言は事実Xに基づく」が引用で示せる（成果物の説明責任）。
   - **訂正の波及管理**: クライアント情報の訂正（= B型汚染の撤回）→ 提案のどこが影響を受けるか即座に特定。

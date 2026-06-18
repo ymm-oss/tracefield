@@ -14,7 +14,7 @@
 
 | 文書 | 内容 | こんなときに読む |
 | --- | --- | --- |
-| [`user-guide.md`](./user-guide.md) | Rust CLI の使い方。インストール、scenario 作成、agent/private/skill 設定、consult、persist、retract、トラブルシュート | Tracefield を実際に動かしたい |
+| [`user-guide.md`](./user-guide.md) | Rust CLI の使い方。インストール、scenario 作成、agent/private/skill 設定、run/flow、persist、retract、トラブルシュート | Tracefield を実際に動かしたい |
 | [`overview.md`](./overview.md) | 概念的背景・設計空白の主張・中核価値・EGI の双方向構造 | まず全体像を掴みたい |
 | [`experiment-plan.md`](./experiment-plan.md) | 実験計画書A 本文（全17節）。目的・仮説・接地真実・8条件・指標・成功/失敗基準 | 実験設計の正典を参照したい |
 | [`glossary.md`](./glossary.md) | 用語集（Field Actor / provenance / EGI / PCE gate / 各種指標 など） | 用語の定義を確認したい |
@@ -31,6 +31,7 @@
 | [`design-cluster.md`](./design-cluster.md) | **クラスタ設計**。エージェント集合の単位と接続（projection/absorption・撤回の越境・メタ場）。半溶解性の再帰=スケールフリー化 | 複数チーム/案件横断の構想を知りたい |
 | [`design-genesis.md`](./design-genesis.md) | **析出設計**。クラスタの自動生成（attractor検出・出生証明・ゲート・endowment・ライフサイクル）。EGI上り(Frame Revision)の組織スケール操作化 | クラスタが『発生する』機構を知りたい |
 | [`design-pipeline.md`](./design-pipeline.md) | **開発パイプライン設計（最優先目標）**。Issue詳細化→設計→実装→QA+HITL gate。端到端provenance・HUMAN=第一級著者・ギャップ分析・brief 24-27計画 | AI駆動開発の完遂計画を知りたい |
+| [`design-field-runner.md`](./design-field-runner.md) | **Field Runner設計**。`tracefield run`、`flow.toml`、stage、actor scaling、organ routing、feedback、gateを持つ汎用ステージ実行器。長時間調査はprofileの一例 | 長時間調査、開発、QA、コンサル分析を同じ実行基盤で扱いたい |
 | `mvp-impl-brief*.md` / `../RUNNING.md` / [`rust-port.md`](./rust-port.md) | codex への実装ブリーフ群、Rust CLI の実行手順、現在の実装範囲 | 実装の詳細・動かし方を知りたい |
 | [`pre-registration.md`](./pre-registration.md) | 事前登録書（記入式）。`[未定]` パラメータと採点基準・分析計画、設計レビュー由来の追加項目（DR-*）を凍結する | 実験を始める前に確定事項を埋める |
 
