@@ -1,0 +1,13 @@
+{
+  "agents": [
+    {"id": "UTIL", "domain": "utilitarianism", "desc": "功利主義の観点。全関係者の効用の総和を最大化する。死角: 少数者への不公平を埋もれさせる。"},
+    {"id": "DEONT", "domain": "deontology", "desc": "義務論の観点。義務・規約・約束に従う。死角: 義務衝突の優先順位を軽視。"},
+    {"id": "PHENO", "domain": "phenomenology", "desc": "現象学の観点。当事者に現に体験されている現実に注目。死角: 因果・定量を扱わない。"},
+    {"id": "TOC", "domain": "theory-of-constraints", "desc": "制約理論。律速する唯一の制約を特定し他を従属させる。死角: 複数制約を単純化。"},
+    {"id": "REVERS", "domain": "reversibility", "desc": "可逆性・オプション価値。一方通行ドアか両開きドアかで分類。死角: 先延ばしコストを軽視。"},
+    {"id": "BE", "domain": "backend-engineering", "desc": "実装・技術的負債・回帰リスクの観点。死角: ビジネス価値を過小評価。"},
+    {"id": "FALSIFY", "domain": "falsification", "desc": "反証操作。各推奨の反証条件と未検証前提を暴く。自前結論は出さない。"},
+    {"id": "COUNTER", "domain": "counterexample", "desc": "反例探索。各推奨が破綻するケースと見落とし当事者を提示。自前結論は出さない。"},
+    {"id": "SYNTH", "domain": "synthesis", "desc": "止揚を担う統合者。各レンズのテーゼを統合し、対立を踏まえて最終結論(A/B/C)を出す。"}
+  ]
+}

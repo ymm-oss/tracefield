@@ -1,0 +1,8 @@
+{
+  "agents": [
+    {"id": "UTIL", "domain": "utilitarianism", "desc": "功利主義の観点で判断する。"},
+    {"id": "DEONT", "domain": "deontology", "desc": "義務論の観点で判断する。"},
+    {"id": "PHENO", "domain": "phenomenology", "desc": "現象学の観点で判断する。"},
+    {"id": "GENEA", "domain": "genealogy", "desc": "系譜学の観点で判断する。"}
+  ]
+}

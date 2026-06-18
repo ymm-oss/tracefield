@@ -1,0 +1,46 @@
+[flow]
+profile = "lens_ctrl_large_synth"
+policy = "fixed"
+budget = 30
+max_feedback_cycles = 0
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 12
+max_parallel_actors = 1
+[feedback]
+enabled = false
+[feedback_entries]
+enabled = false
+[organs.reason]
+adapter = "cli"
+command = "claude"
+model = "claude-sonnet-4-6"
+max_tokens = 1500
+timeout_seconds = 600
+[stages.analysis]
+organ = "reason"
+inputs = ["path:task.md"]
+outputs = ["observation", "decision"]
+budget = 18
+[stages.analysis.actors]
+mode = "fixed"
+count = 6
+roles = ["UTIL", "DEONT", "PHENO", "TOC", "REVERS", "BE"]
+[stages.verify]
+organ = "reason"
+inputs = ["stage:analysis"]
+outputs = ["question"]
+budget = 6
+[stages.verify.actors]
+mode = "fixed"
+count = 2
+roles = ["FALSIFY", "COUNTER"]
+[stages.synthesis]
+organ = "reason"
+inputs = ["stage:analysis", "stage:verify"]
+outputs = ["observation", "decision"]
+budget = 4
+[stages.synthesis.actors]
+mode = "fixed"
+count = 1
+roles = ["SYNTH"]
