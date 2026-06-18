@@ -79,8 +79,9 @@ cargo build --release
 ### Verify
 
 ```sh
-tracefield doctor                                   # or ./target/release/tracefield doctor
-tracefield run --scenario-dir scenarios/generic-smoke   # mock run; needs nothing else
+tracefield doctor                       # or ./target/release/tracefield doctor
+tracefield new smoke                    # scaffolds scenarios/smoke with a mock flow.toml
+tracefield run --scenario-dir scenarios/smoke   # mock run; needs no model or key
 ```
 
 `doctor` reports adapter availability:
