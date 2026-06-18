@@ -467,7 +467,11 @@ fn wait_for_response(
 
 fn cap(mut text: String) -> String {
     if text.len() > OUTPUT_CAP {
-        text.truncate(OUTPUT_CAP);
+        let mut end = OUTPUT_CAP;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
         text.push_str("\n…(truncated)");
     }
     text
