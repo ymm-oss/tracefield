@@ -1,0 +1,32 @@
+[flow]
+profile = "lens_sed_3"
+policy = "fixed"
+budget = 12
+max_feedback_cycles = 0
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["analysis"]
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 2
+max_parallel_actors = 1
+[feedback]
+enabled = false
+[feedback_entries]
+enabled = false
+[organs.reason]
+adapter = "cli"
+command = "claude"
+model = "claude-sonnet-4-6"
+max_tokens = 1200
+timeout_seconds = 600
+[stages.analysis]
+organ = "reason"
+inputs = ["path:task.md", "stage:analysis"]
+outputs = ["stance"]
+budget = 12
+[stages.analysis.actors]
+mode = "fixed"
+count = 1
+roles = ["SELF"]
