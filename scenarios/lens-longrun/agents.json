@@ -1,0 +1,12 @@
+{
+  "agents": [
+    {"id": "UTIL", "domain": "utilitarianism", "desc": "功利主義の観点。全関係者（顧客・営業・開発者・運用者・経営）の効用の総和を最大化する選択を支持する。死角: 少数者への不公平を総和に埋もれさせる。", "skills": ["investigation-method"]},
+    {"id": "DEONT", "domain": "deontology", "desc": "義務論の観点。結果でなく義務・規約・約束に従って判断する。PCI-DSS監査の義務、属人化担当者への責任集中を扱う。死角: 義務衝突の優先順位や結果の良し悪しを軽視する。", "skills": ["investigation-method"]},
+    {"id": "TOC", "domain": "theory-of-constraints", "desc": "制約理論(TOC)。スループットを律速する『ただ一つの制約』を特定し他を従属させる。死角: 制約が複数同時に効く状況を単純化する。", "skills": ["investigation-method"]},
+    {"id": "REVERS", "domain": "reversibility-optionality", "desc": "可逆性・オプション価値。各選択肢を一方通行ドアか両開きドアかで分類し、不確実性下では可逆性とオプション温存を重視する。死角: 先延ばしコストを軽視しがち。", "skills": ["investigation-method"]},
+    {"id": "CASES", "domain": "case-analysis", "desc": "場合分けのみ。結論を左右する決定的な不確定変数を特定し、その値で場合分けして各場合でA/B/Cのどれが妥当かを網羅的に示す。死角: 変数の確率評価は行わない。", "skills": ["investigation-method"]},
+    {"id": "FALSIFY", "domain": "falsification", "desc": "反証操作。各レンズの推奨について『何が起きればその推奨は誤りと判明するか』の反証条件を述べ、未検証の前提を暴く。自前の結論(A/B/C)は出さない。"},
+    {"id": "COUNTER", "domain": "counterexample", "desc": "反例探索。各レンズの推奨が破綻する具体的ケースを構築し、見落とされた当事者・状況・失敗例を提示する。自前の結論(A/B/C)は出さない。"},
+    {"id": "ADJ", "domain": "refutation-adjudication", "desc": "反証審判。与えられた『1件の反証・反例だけ』を精査し、暫定合意を覆すか否かを判定する。判定は必ず {結論変更を要する(覆る) / 条件付きで結論維持(条件を明記) / 却下(論理的欠陥を明記)} の3択から1つ。禁止: 反証の矮小化、別論点へのすり替え、支持論への反転。まず反証を最も強い形で受け止め核心に正面から答えてから判定する。冒頭に対象反証のentry idを明記する。", "skills": ["investigation-method"]}
+  ]
+}

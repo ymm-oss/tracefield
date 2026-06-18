@@ -1,0 +1,60 @@
+[flow]
+profile = "lens_longrun_investigation"
+policy = "fixed"
+budget = 60
+max_feedback_cycles = 0
+
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["analysis"]
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 16
+max_parallel_actors = 1
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.reason]
+adapter = "cli"
+command = "claude"
+model = "claude-sonnet-4-6"
+max_tokens = 1500
+timeout_seconds = 600
+
+[stages.analysis]
+organ = "reason"
+inputs = ["path:task.md", "stage:analysis"]
+outputs = ["observation", "question", "decision"]
+budget = 30
+
+[stages.analysis.actors]
+mode = "fixed"
+count = 5
+roles = ["UTIL", "DEONT", "TOC", "REVERS", "CASES"]
+
+[stages.verify]
+organ = "reason"
+inputs = ["stage:analysis"]
+outputs = ["observation", "question"]
+budget = 10
+
+[stages.verify.actors]
+mode = "fixed"
+count = 2
+roles = ["FALSIFY", "COUNTER"]
+
+[stages.adjudication]
+organ = "reason"
+inputs = ["stage:verify"]
+outputs = ["observation", "decision"]
+budget = 12
+
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
