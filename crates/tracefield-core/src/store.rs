@@ -136,26 +136,77 @@ impl ReferenceStore {
         if self.get(id).is_none() {
             bail!("cannot retract unknown entry {id}");
         }
+        Ok(self.mark_closure(
+            id,
+            None,
+            EntryStatus::Retracted,
+            "retracted_by",
+            Value::String(author.to_string()),
+        ))
+    }
 
-        let affected_ids = self.downstream_closure(id);
-        let affected_set = affected_ids.iter().cloned().collect::<BTreeSet<_>>();
+    /// Supersede `id` (and its downstream citation closure) with replacement
+    /// `new_id`: the closure is marked `Superseded` with `superseded_by = new_id`,
+    /// while `new_id` stays `Active`. Symmetric to `retract` (citation-closure
+    /// withdrawal) but records *what replaced* the entry instead of *who pulled
+    /// it*, so a changed question/claim is a first-class, provenance-linked event
+    /// rather than a silent new run. The read path (input selectors, aggregate,
+    /// serve) already filters `Active`, so superseded entries leave the live flow
+    /// with no further wiring.
+    pub fn supersede(&mut self, id: &str, new_id: &str) -> Result<Vec<Entry>> {
+        if id == new_id {
+            bail!("cannot supersede {id} with itself");
+        }
+        if self.get(id).is_none() {
+            bail!("cannot supersede unknown entry {id}");
+        }
+        if self.get(new_id).is_none() {
+            bail!("cannot supersede {id} with unknown replacement {new_id}");
+        }
+        Ok(self.mark_closure(
+            id,
+            Some(new_id),
+            EntryStatus::Superseded,
+            "superseded_by",
+            Value::String(new_id.to_string()),
+        ))
+    }
+
+    /// Mark `id` and its downstream citation closure with `status`, stamping
+    /// `(meta_key, meta_value)` on each. `keep` (if set) is held `Active` even
+    /// when it sits inside the closure — used by `supersede` so a replacement
+    /// that cites the old entry is not buried with it. Returns the affected
+    /// closure entries (the kept replacement excluded), mirroring the closure
+    /// the human must see (no silent drop).
+    fn mark_closure(
+        &mut self,
+        id: &str,
+        keep: Option<&str>,
+        status: EntryStatus,
+        meta_key: &str,
+        meta_value: Value,
+    ) -> Vec<Entry> {
+        let affected_set: BTreeSet<String> = self
+            .downstream_closure(id)
+            .into_iter()
+            .filter(|affected| keep != Some(affected.as_str()))
+            .collect();
 
         for entry in &mut self.entries {
+            if keep == Some(entry.id.as_str()) {
+                continue;
+            }
             if entry.id == id || affected_set.contains(&entry.id) {
-                entry.status = EntryStatus::Retracted;
-                entry.meta.insert(
-                    "retracted_by".to_string(),
-                    Value::String(author.to_string()),
-                );
+                entry.status = status.clone();
+                entry.meta.insert(meta_key.to_string(), meta_value.clone());
             }
         }
 
-        Ok(self
-            .entries
+        self.entries
             .iter()
             .filter(|entry| affected_set.contains(&entry.id))
             .cloned()
-            .collect())
+            .collect()
     }
 
     pub fn downstream_closure(&self, id: &str) -> Vec<String> {
@@ -276,6 +327,50 @@ mod tests {
         assert_eq!(store.get(&e2.id).unwrap().status, EntryStatus::Retracted);
         assert_eq!(store.get(&e3.id).unwrap().status, EntryStatus::Retracted);
         assert_eq!(store.get(&e4.id).unwrap().status, EntryStatus::Active);
+    }
+
+    #[test]
+    fn supersede_marks_closure_and_keeps_replacement_active() {
+        let mut store = ReferenceStore::new();
+        let q1 = store.push(NewEntry::new(EntryType::Question, "a", "old question"), "a");
+        let d1 = store.push(
+            NewEntry::new(EntryType::Decision, "b", "answer to old")
+                .with_citations(vec![q1.id.clone()]),
+            "b",
+        );
+        // Replacement question cites the old one (the reframe chain) — it sits
+        // inside the closure but must stay Active.
+        let q2 = store.push(
+            NewEntry::new(EntryType::Question, "c", "reframed question")
+                .with_citations(vec![q1.id.clone()]),
+            "c",
+        );
+
+        let affected = store.supersede(&q1.id, &q2.id).unwrap();
+        // Closure report excludes the kept replacement; only the stale answer.
+        assert_eq!(
+            affected
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![d1.id.as_str()]
+        );
+        assert_eq!(store.get(&q1.id).unwrap().status, EntryStatus::Superseded);
+        assert_eq!(store.get(&d1.id).unwrap().status, EntryStatus::Superseded);
+        assert_eq!(
+            store.get(&d1.id).unwrap().meta.get("superseded_by").unwrap(),
+            &Value::String(q2.id.clone())
+        );
+        // Replacement stays live despite citing the superseded question.
+        assert_eq!(store.get(&q2.id).unwrap().status, EntryStatus::Active);
+    }
+
+    #[test]
+    fn supersede_rejects_unknown_or_self_replacement() {
+        let mut store = ReferenceStore::new();
+        let q1 = store.push(NewEntry::new(EntryType::Question, "a", "q"), "a");
+        assert!(store.supersede(&q1.id, "e999").is_err());
+        assert!(store.supersede(&q1.id, &q1.id).is_err());
     }
 
     #[test]

@@ -57,8 +57,16 @@ analysis（直交レンズのパネル） → verify（FALSIFY/COUNTER） → ad
 - 多サイクル精製は `[long_run] cycles=3 cycle_stages=["analysis"]` ＋ `inputs=["path:task.md","stage:analysis"]`（自己/相互参照）。**約3サイクルがスイート**（cycle1粗→cycle2立場ロック→cycle3二次精製、cycle4で飽和）。ピア反復は mode collapse しない（内部 finding・外部未検証）。
 - **沈殿した経路依存の立場**を育てるなら、単一 agent＋最小 seed＋自己参照サイクル。既定アトラクタに逆らう種でも保持・自己強化する（確証済み）。
 
-### 検証可能性（retract）
-- provenance が要る/後で覆す可能性があるなら `--persist <jsonl>`。load-bearing 前提を `tracefield retract` するとクロージャ伝播で依存結論が `Retracted` にマークされる（伝播は決定論）。**再集約は自動でなく手動**: `tracefield aggregate` を再実行すると `Retracted` 分が除外されて基盤が再計算される。手動なのは設計判断で、黙って再集約すると「結論が変わった」事実が silent recompute に消えるため、閉包を人間に見せる（鉄則の no-silent-drop の裏返し）。
+### 問いの扱い（立てる・増やす・差し替える）
+問い(task.md)は seed 1回で固定の不変 entry（サイクルをまたいでも再 seed されない）。だが問いは3通りに動かせる:
+- **立てる/増やす**: 「問いを立てる前段」は analysis 型の任意ステージ。入力解決は `path:` と `stage:` を同格に扱う（どちらも Active entry の meta フィルタ違い）ので、前段が吐いた問い(`EntryType::Question`)を後続の `inputs=["stage:前段"]` で渡せる。`source_discovery` 系の変種がこれ。
+- **差し替える**: 思考途中で問いそのものが変わったら `tracefield supersede`（下記）。seed の置換でなく「旧問いを退場させ新問いへ再アンカー」を一級イベントにする。
+
+### 検証可能性（retract / supersede）
+- provenance が要る/後で覆す可能性があるなら `--persist <jsonl>`。**retract と supersede は同一プリミティブ**（id＋citation 閉包を終端ステータスにマークし、原因を指す meta を打つ）。差は「撤回(前提が誤り)」か「差し替え(より良い後継へ)」か。
+- **retract（前提が誤り）**: load-bearing 前提を `tracefield retract` するとクロージャ伝播で依存結論が `Retracted` にマークされる（伝播は決定論、meta `retracted_by`）。
+- **supersede（問い/主張が変わった）**: `tracefield supersede --entry <旧> --with <新>` で旧 entry＋下流閉包を `Superseded`（`superseded_by=<新>`）にし、後継 entry は Active に残す（後継が旧を cite していても埋もれない）。古い問いに答えた結論群が閉包ごと退場し、新しい問いの下で再調査できる。
+- **再集約は自動でなく手動**: 読み取り経路（入力セレクタ・`tracefield aggregate`・serve）は全て `Active` 限定なので、retract/supersede 後に `aggregate` を再実行すると除外分が落ちて基盤が再計算される。手動なのは設計判断で、黙って再集約すると「結論が変わった」事実が silent recompute に消えるため、閉包を人間に見せる（鉄則の no-silent-drop の裏返し）。
 
 ## 設計に効く制約（運用機構は tracefield-operator）
 - **モデルは合成の頑健性に効く設計変数**。弱いモデルは大入力で合成が激しく崩れる（レンズ脱落・結論反転）→ 鉄則2「小規模域に留める」を一層厳守。例: `adapter="cli" command="claude" model="claude-sonnet-4-6"`（adapter/model の権威ある設定・mock検証・ビルド済みバイナリ等の運用は operator 参照）。

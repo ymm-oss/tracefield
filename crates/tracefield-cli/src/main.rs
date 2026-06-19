@@ -68,6 +68,15 @@ enum Command {
         #[arg(long, default_value = "operator")]
         author: String,
     },
+    /// Supersede an entry with a replacement in a persisted JSONL store.
+    Supersede {
+        #[arg(long, value_name = "JSONL")]
+        store: PathBuf,
+        #[arg(long)]
+        entry: String,
+        #[arg(long, value_name = "ENTRY")]
+        with: String,
+    },
     /// Mechanically aggregate adjudication verdicts in a persisted JSONL store.
     Aggregate {
         #[arg(long, value_name = "JSONL")]
@@ -194,7 +203,25 @@ async fn main() -> Result<()> {
                 .write_jsonl(&store)
                 .with_context(|| format!("failed to persist retraction to {}", store.display()))?;
 
-            print_retract_report(&entry, &affected)?;
+            print_closure_report(&format!("retracted {entry}"), &affected)?;
+        }
+        Command::Supersede {
+            store,
+            entry,
+            with,
+        } => {
+            ensure_file(&store, "--store")?;
+
+            let mut reference = tracefield_core::ReferenceStore::from_jsonl_path(&store)
+                .with_context(|| format!("failed to load persisted store {}", store.display()))?;
+            let affected = reference
+                .supersede(&entry, &with)
+                .with_context(|| format!("failed to supersede entry {entry} with {with}"))?;
+            reference
+                .write_jsonl(&store)
+                .with_context(|| format!("failed to persist supersession to {}", store.display()))?;
+
+            print_closure_report(&format!("superseded {entry} by {with}"), &affected)?;
         }
         Command::Aggregate { store, stage, json } => {
             ensure_file(&store, "--store")?;
@@ -506,7 +533,7 @@ fn print_aggregate_report(report: &AggregateReport) {
     }
 }
 
-fn print_retract_report<T>(entry: &str, affected: &T) -> Result<()>
+fn print_closure_report<T>(headline: &str, affected: &T) -> Result<()>
 where
     T: serde::Serialize,
 {
@@ -522,7 +549,7 @@ where
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("retracted {entry} -> closure {count} entries");
+    println!("{headline} -> closure {count} entries");
     if affected.as_array().is_some_and(Vec::is_empty) {
         return Ok(());
     }

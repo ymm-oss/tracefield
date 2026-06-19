@@ -91,11 +91,20 @@ Reports `maintained` (with the union of conditions), `changed` (any overturning
 verdict), or `indeterminate` (an unclassifiable verdict is surfaced, never
 dropped). Add `--stage <id>` if the adjudication stage is named otherwise.
 
-7. Retract by entry id and inspect the downstream closure:
+7. Retract or supersede by entry id and inspect the downstream closure (same
+   primitive: mark id + citation closure with a terminal status). Retract when a
+   premise is **wrong**; supersede when a question/claim is **replaced**:
 
 ```sh
 tracefield retract --store runs/<name>.jsonl --entry e3
+tracefield supersede --store runs/<name>.jsonl --entry e3 --with e9
 ```
+
+`supersede` marks the old entry and its downstream closure `Superseded`
+(`superseded_by=<new>`) while keeping the replacement `Active` — making a
+changed question a first-class, provenance-linked event. Re-run `aggregate`
+afterward: the read path filters `Active`, so the stale closure drops out and
+the basis is recomputed (no silent recompute — the closure is shown).
 
 ## Output Policy
 
