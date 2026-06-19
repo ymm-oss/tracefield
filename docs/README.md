@@ -25,6 +25,7 @@
 | [`conclusions.md`](./conclusions.md) | **総括**。founding question への回答（両翼とも条件付き成立）、統一原理（構造×契約の自覚）、資産・限界・次段、追試（n=6 再現） | プログラム全体の結論を読みたい |
 | [`frame-problem.md`](./frame-problem.md) | **フレーム問題と tracefield**（概念整理）。frame は2つ（研究期 Frame Revision=null／開発期 動的ギャップ検出）・frame を器官の外に持つ・relevance>diversity・古典通信の不足・クラスタ規模の分野 | フレーム問題の観点と AI駆動開発への含意を知りたい |
 | [`findings-contrastive-serve.md`](./findings-contrastive-serve.md) | **contrastive serve の検証結果**。差延＝`serve :contrastive` は genuine 発見を surface 多様性とトレード（diversity theater・net-negative）→棚上げ。theater 検出ハーネスの設計も | 「偏りの関係的強化」を試した結末を知りたい |
+| [`findings-continuity-vs-diffusion.md`](./findings-continuity-vs-diffusion.md) | **連続性 vs 拡散**。narrow-answer 実タスク（匿名）で直交レンズは単一強モデルに answer で並ばれる→「拡散で分岐発見→単一の連続深掘り」交互織りが盲検で優位。勝因は観点でなく文脈の隔離（同じレンズpromptを1文脈に詰めた単一Wはむしろ劣化）。連続性ステージ/立場トーナメントの製品化提言 | パネルが単一に勝つ条件・観点vs隔離の切り分けを知りたい |
 | [`roadmap.md`](./roadmap.md) | **ロードマップ**。検証完了後の計画: 実用ツール化(モード/実データ/verify/撤回E2E)→統治ループ完成→残研究→プロダクト化、判定ゲート付き | これからの計画を知りたい |
 | [`design-reference.md`](./design-reference.md) | **Reference 設計**。ドキュメント接地＋検証可能な引用で C5 の過剰隔離(precision)を解決する再設計。Field Actor の sensitivity profile 具体化、段階的スコープ（静的→生きた） | C5 を実用化する次設計を知りたい |
 | [`design-agent.md`](./design-agent.md) | **Agent 境界の再定義**。Agent=状態+手続きの主体、LLM=無状態の器官。溶解の2次元化（状態×手続き）と統治の手続き拡張、OTP写像 | エージェントの主体モデルを知りたい |
