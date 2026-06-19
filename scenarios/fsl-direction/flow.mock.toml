@@ -1,0 +1,92 @@
+[flow]
+profile = "ideation-grounded-then-initiatives"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 60
+max_parallel_actors = 3
+
+[organs.reasoning]
+adapter = "mock"
+
+# 施策の連続深掘り専用（大予算・蒸留ブリーフのみ読む）
+[organs.deep]
+adapter = "mock"
+
+# フェーズ-1: データ（ファイル）ステージ。FSL の実証拠を per_input で digest
+[stages.evidence]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["observation"]
+[stages.evidence.actors]
+mode = "per_input"
+roles = ["EVIDENCE"]
+
+# フェーズ0: 問いを立てる。問いの哲学(直交)＋FW のパネルが証拠に接地して真の問いを起こす
+[stages.framing]
+organ = "reasoning"
+inputs = ["path:task.md", "stage:evidence"]
+outputs = ["question", "observation"]
+[stages.framing.actors]
+mode = "fixed"
+count = 5
+roles = ["QANSWER", "PROBLEMATIZE", "POSE", "ASCEND", "JTBD"]
+
+# フェーズ1: 直交生成レンズで両立しない戦略方向を発散（証拠＋立てた問いを受ける）
+[stages.directions]
+organ = "reasoning"
+inputs = ["path:task.md", "stage:evidence", "stage:framing"]
+outputs = ["decision"]
+[stages.directions.actors]
+mode = "fixed"
+count = 6
+roles = ["CORE", "ADJACENT", "GENEALOGY", "INVERT", "PULL", "ANALOGY"]
+
+# 各方向を隔離採点
+[stages.judge]
+organ = "reasoning"
+inputs = ["stage:directions"]
+outputs = ["decision"]
+[stages.judge.actors]
+mode = "per_input"
+roles = ["JUDGE"]
+
+# 独立赤チームが全方向を破壊
+[stages.critique]
+organ = "reasoning"
+inputs = ["stage:directions"]
+outputs = ["observation", "question"]
+[stages.critique.actors]
+mode = "fixed"
+count = 2
+roles = ["FALSIFY", "COUNTER"]
+
+# 反証1件=1審判
+[stages.adjudication]
+organ = "reasoning"
+inputs = ["stage:critique"]
+outputs = ["decision"]
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+# 統合の前段: 勝ち方向＋生き残り条件を簡潔なブリーフへ蒸留（firehose を畳む）
+[stages.select]
+organ = "reasoning"
+inputs = ["stage:directions", "stage:judge", "stage:adjudication"]
+outputs = ["synthesis"]
+[stages.select.actors]
+mode = "fixed"
+count = 1
+roles = ["SELECT"]
+
+# フェーズ2: 蒸留ブリーフだけを足場に、専用の連続パスで施策を深掘り（拡散と分離）
+[stages.initiatives]
+organ = "deep"
+inputs = ["stage:select"]
+outputs = ["synthesis", "decision"]
+[stages.initiatives.actors]
+mode = "fixed"
+count = 1
+roles = ["INITIATIVES"]
