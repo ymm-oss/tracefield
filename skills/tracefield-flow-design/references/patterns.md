@@ -134,6 +134,50 @@ count = 1
 roles = ["SELF"]
 ```
 
+## 5. 拡散→連続の交互織り（narrow-answer 決定問題）
+
+死角照射でなく**答えの空間が狭い戦略決定**向け（findings-continuity-vs-diffusion）。両立しない立場で発散→隔離審判→**蒸留→専用の連続深掘りパス**。フル実例は `scenarios/fsl-direction/`（問いを立てる `framing` 前段つき）。要点だけ:
+
+```toml
+# 連続深掘り専用 organ（大予算）
+[organs.deep]
+adapter = "codex-app-server"
+max_tokens = 6000
+
+# 発散: 両立しない戦略方向（立場トーナメント＝再収束を防ぎ overturn を生む）
+[stages.directions]
+organ = "reasoning"
+inputs = ["path:task.md"]
+outputs = ["decision"]
+[stages.directions.actors]
+mode = "fixed"
+count = 6
+roles = ["CORE", "ADJACENT", "GENEALOGY", "INVERT", "PULL", "ANALOGY"]
+# → judge(per_input) → critique(FALSIFY/COUNTER) → adjudication(per_input ADJ)  ※パターン2と同じ
+
+# 蒸留: firehose を勝ち方向＋生き残り条件の簡潔ブリーフへ畳む
+[stages.select]
+organ = "reasoning"
+inputs = ["stage:directions", "stage:judge", "stage:adjudication"]
+outputs = ["synthesis"]
+[stages.select.actors]
+mode = "fixed"
+count = 1
+roles = ["SELECT"]
+
+# 連続性パス: 蒸留ブリーフだけを足場に1 actor で深掘り（発散と分離）
+[stages.initiatives]
+organ = "deep"
+inputs = ["stage:select"]
+outputs = ["synthesis", "decision"]
+[stages.initiatives.actors]
+mode = "fixed"
+count = 1
+roles = ["INITIATIVES"]
+```
+
+連続性パスを発散と同一文脈に畳むと劣化する（de-risk が最初に崩れる）。必ず別 organ・別ステージに分離し、`select` で firehose を畳んでから渡す。
+
 ## 入力セレクタ早見
 
 - `path:<file>` … task.md 等（meta.path 一致）
