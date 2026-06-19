@@ -21,7 +21,8 @@ surface.
 | Emit compact JSON | add `--json` |
 | Write pretty JSON report | add `--out <file>` |
 | Persist reference store | add `--persist <file>.jsonl` to `run` |
-| Retract an entry | `tracefield retract --store <file>.jsonl --entry <id>` |
+| Retract an entry (premise wrong) | `tracefield retract --store <file>.jsonl --entry <id>` |
+| Supersede an entry (question/claim replaced) | `tracefield supersede --store <file>.jsonl --entry <old> --with <new>` |
 | Aggregate adjudication verdicts | `tracefield aggregate --store <file>.jsonl [--stage adjudication]` |
 
 `aggregate` deterministically folds per-refutation adjudication verdicts (no
