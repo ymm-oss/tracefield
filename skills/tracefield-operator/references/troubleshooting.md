@@ -102,14 +102,16 @@ Then improve:
 - `agents.json`: make `domain` and `desc` distinct.
 - `private/*.md`: add factual constraints, observations, and known tradeoffs.
 
-## Retraction Fails
+## Retraction / Supersession Fails
 
-Confirm the store and id:
+Confirm the store and id(s):
 
 ```sh
 head -5 runs/<name>.jsonl
 tracefield retract --store runs/<name>.jsonl --entry e3
+tracefield supersede --store runs/<name>.jsonl --entry e3 --with e9
 ```
 
-If the id is absent, rerun `tracefield run` with `--persist` and use an id from
-that store.
+If an id is absent, rerun `tracefield run` with `--persist` and use an id from
+that store. For `supersede` the replacement `--with <id>` must also exist in the
+store (and differ from `--entry`).

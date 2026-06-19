@@ -1,6 +1,6 @@
 ---
 name: tracefield-operator
-description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続化、機械的集約(aggregate)、retract検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「flowを実行して」「集約して/aggregateして」「retractして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。flow.toml/agents.jsonの設計判断は tracefield-flow-design を使う。
+description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続化、機械的集約(aggregate)、retract/supersede検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「flowを実行して」「集約して/aggregateして」「retractして」「問いを差し替えて/supersedeして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。flow.toml/agents.jsonの設計判断は tracefield-flow-design を使う。
 ---
 
 # Tracefield Operator
