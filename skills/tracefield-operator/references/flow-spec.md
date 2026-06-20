@@ -73,7 +73,24 @@
 - `fixed`：`count` 個（roles を循環割当）。
 - `per_input`：入力エントリ**1件＝1 actor**（反証ごと独立審判に使う）。`roles` 長1なら全 actor が同一 lens。
 - `per_agent`：agents.json の数だけ。`per_source` / `per_cluster`：source/cluster 単位。
-- `auto`：入力規模から `min`〜`max` で自動。`none`：actor 0（ステージをスキップ）。
+- `auto`：入力規模から `min`〜`max` で自動。`none`：actor 0（`command`/`clustering` 併用時はそれが走る、無ければスキップ）。
+
+サブテーブル `[stages.<id>.command]`（任意・決定論コマンドステージ＝probe）:
+
+LLM actor の代わりに外部コマンドを1回実行し stdout を1エントリに畳む決定論ステージ。
+**レンズ（解釈）でなくセンサ（計測）**。`fslc` / `cargo test` / linter 等で主張を接地する。
+
+| key | 型 | 既定 | 説明 |
+| --- | --- | --- | --- |
+| `program` | string | （必須） | 実行するプログラム |
+| `args` | string[] | `[]` | 引数。`{input}` は選択エントリを書いた一時ファイルのパスに置換される |
+| `cwd` | string | scenario dir | 作業ディレクトリ（scenario dir からの相対） |
+| `timeout_seconds` | int | `600` | タイムアウト |
+
+- 併用必須 `[stages.<id>.actors] mode = "none"`（LLM actor と排他。`clustering` とも排他）。
+- `inputs` の選択エントリ本文が `\n\n` 連結で一時ファイルに書かれ、`args` 内の `{input}` がそのパスに置換される（`{input}` を使わなければ静的コマンド）。fence 抽出など**道具固有の整形はコマンド文字列側**に置く（例 `program="bash"`, `args=["-lc","awk '...' \"$0\" > \"$0.fsl\"; fslc verify \"$0.fsl\"","{input}"]`）。stdin は渡さない（必要なら `< {input}`）。
+- 結果は1エントリ（`outputs` 先頭型・既定 `observation`）。stdout が本文、exit code は `meta.exit_code`、選択エントリを**引用**する（retract 閉包に入る）。**非ゼロ終了はエラーでなく所見**として記録（spawn 失敗・timeout のみ run を止める）。
+- ⚠ サンドボックス無し: tracefield の権限でそのまま走る。read-only / no network は著者責任。
 
 ## 入力セレクタ（`inputs`）
 
