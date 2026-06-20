@@ -168,7 +168,13 @@ pub struct StageConfig {
     pub context: Option<StageContextConfig>,
     pub actors: ActorConfig,
     pub clustering: Option<StageClusteringConfig>,
+    pub command: Option<StageCommandConfig>,
     pub artifact: Option<StageArtifactConfig>,
+    /// When set, after this stage runs its adjudication verdicts are folded
+    /// mechanically: any claim a `overturn` verdict's refutation names in
+    /// `meta.refutes` is retracted (status-driven), so a later assembler sees
+    /// only survivors. Keeps the verdict fold out of the LLM (invariant #1).
+    pub retract_overturned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +201,17 @@ pub struct StageClusteringConfig {
     pub by: Vec<String>,
     pub min_cluster_size: Option<usize>,
     pub max_clusters: Option<usize>,
+}
+
+/// A deterministic stage that runs an external command instead of LLM actors
+/// (a probe/sensor, not a lens). Selected entries are materialized to a temp
+/// file whose path replaces `{input}` in `args`; stdout/exit become one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageCommandConfig {
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +409,38 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
             options.persist_path.as_deref(),
         )
         .await?;
+
+        // Mechanical verdict fold (invariant #1): retract claims this stage's
+        // adjudication overturned so a later assembler sees only survivors. The
+        // retract closure is logged — never silently dropped.
+        if config.stages[work_item.stage_index].retract_overturned {
+            let reconcile = store.reconcile_overturned(&stage_result.entries);
+            for (claim, affected) in &reconcile.retracted {
+                log_flow_progress(
+                    &config,
+                    format!(
+                        "stage={} cycle={} reconcile overturned-claim={} retracted closure={}",
+                        stage_id,
+                        work_item.cycle,
+                        claim,
+                        affected.len()
+                    ),
+                );
+            }
+            if !reconcile.unactioned.is_empty() {
+                log_flow_progress(
+                    &config,
+                    format!(
+                        "stage={} cycle={} reconcile UNACTIONED overturns={} verdicts={:?} \
+                         (overturn but no meta.refutes target — claim survives; verdict↔artifact gap, human must reconcile)",
+                        stage_id,
+                        work_item.cycle,
+                        reconcile.unactioned.len(),
+                        reconcile.unactioned
+                    ),
+                );
+            }
+        }
 
         let feedback_work = feedback_work_items(
             &config,
@@ -636,6 +685,9 @@ impl FlowConfig {
             let clustering = document
                 .table(&format!("stages.{id}.clustering"))
                 .map(parse_stage_clustering);
+            let command = document
+                .table(&format!("stages.{id}.command"))
+                .map(parse_stage_command);
             let artifact = document
                 .table(&format!("stages.{id}.artifact"))
                 .map(parse_stage_artifact);
@@ -652,7 +704,9 @@ impl FlowConfig {
                 context,
                 actors,
                 clustering,
+                command,
                 artifact,
+                retract_overturned: bool_value(&values, "retract_overturned").unwrap_or(false),
             });
         }
 
@@ -757,6 +811,20 @@ impl FlowConfig {
                     stage.id
                 );
             }
+            if let Some(command) = &stage.command {
+                if command.program.trim().is_empty() {
+                    bail!("stage {} command.program must not be empty", stage.id);
+                }
+                if stage.clustering.is_some() {
+                    bail!("stage {} cannot combine command with clustering", stage.id);
+                }
+                if stage.actors.mode != "none" {
+                    bail!(
+                        "stage {} with a command must set [actors] mode = \"none\"",
+                        stage.id
+                    );
+                }
+            }
             if let Some(context) = &stage.context {
                 validate_stage_context_mode(&context.mode)
                     .with_context(|| format!("invalid context mode in stage {}", stage.id))?;
@@ -860,6 +928,39 @@ async fn execute_stage(
                 config,
                 format!(
                     "stage={} cycle={} deterministic_cluster resume entries={}",
+                    stage.id,
+                    work_item.cycle,
+                    existing.len()
+                ),
+            );
+            stage_entries.extend(existing);
+        }
+    }
+
+    if let Some(command) = stage.command.as_ref() {
+        let existing =
+            existing_work_item_entries(store, stage, work_item, None, Some("flow-command"));
+        if existing.is_empty() {
+            let new_entries = run_stage_command(
+                scenario,
+                config,
+                stage,
+                command,
+                budget_step,
+                &selected,
+                &scaling,
+            )
+            .await?;
+            let new_entries = apply_core_gates(new_entries, store, config, stage, &selected);
+            let new_entries = attach_work_item_meta(new_entries, work_item);
+            let stored = store.absorb(new_entries, "flow-command");
+            stage_entries.extend(stored);
+            checkpoint_flow_store(store, persist_path)?;
+        } else {
+            log_flow_progress(
+                config,
+                format!(
+                    "stage={} cycle={} command resume entries={}",
                     stage.id,
                     work_item.cycle,
                     existing.len()
@@ -1271,7 +1372,9 @@ fn process_stage_config(config: &FlowConfig, kind: ProcessStageKind) -> StageCon
             roles: vec!["process_manager".to_string()],
         },
         clustering: None,
+        command: None,
         artifact: None,
+        retract_overturned: false,
     }
 }
 
@@ -1660,6 +1763,15 @@ fn parse_stage_clustering(values: &BTreeMap<String, ConfigValue>) -> StageCluste
         by: string_array(values, "by"),
         min_cluster_size: usize_value(values, "min_cluster_size"),
         max_clusters: usize_value(values, "max_clusters"),
+    }
+}
+
+fn parse_stage_command(values: &BTreeMap<String, ConfigValue>) -> StageCommandConfig {
+    StageCommandConfig {
+        program: string_value(values, "program").unwrap_or_default(),
+        args: string_array(values, "args"),
+        cwd: string_value(values, "cwd"),
+        timeout_seconds: usize_value(values, "timeout_seconds").map(|value| value as u64),
     }
 }
 
@@ -3074,6 +3186,134 @@ fn normalize_feedback_entry_meta(entry: &mut NewEntry, config: &FlowConfig) {
             .entry(feedback.status_field.clone())
             .or_insert_with(|| json!("proposed"));
     }
+}
+
+/// Run a stage's external command and fold its result into one entry. The
+/// command runs deterministically (no LLM): selected entries are materialized to
+/// a temp file whose path replaces `{input}` in the args; stdout (or stderr when
+/// stdout is empty) becomes the entry text, the exit code lands in meta, and the
+/// selected entries are cited so the probe stays inside the retract closure.
+async fn run_stage_command(
+    scenario: &Scenario,
+    config: &FlowConfig,
+    stage: &StageConfig,
+    command: &StageCommandConfig,
+    budget_step: usize,
+    selected: &[Entry],
+    scaling: &ActorScalingDecision,
+) -> Result<Vec<NewEntry>> {
+    let needs_input = command.args.iter().any(|arg| arg.contains("{input}"));
+    let input_path = if needs_input {
+        let path = std::env::temp_dir().join(format!(
+            "tracefield-cmd-{}-{}.txt",
+            std::process::id(),
+            stage.id
+        ));
+        let content = selected
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        fs::write(&path, content)
+            .with_context(|| format!("failed to write command input {}", path.display()))?;
+        Some(path)
+    } else {
+        None
+    };
+    let input_arg = input_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let args = command
+        .args
+        .iter()
+        .map(|arg| arg.replace("{input}", &input_arg))
+        .collect::<Vec<_>>();
+
+    let cwd = match &command.cwd {
+        Some(cwd) => scenario.dir.join(cwd),
+        None => scenario.dir.clone(),
+    };
+    let timeout = Duration::from_secs(command.timeout_seconds.unwrap_or(600));
+
+    let spawned = tokio::process::Command::new(&command.program)
+        .args(&args)
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn command {}", command.program));
+
+    let output = match spawned {
+        Ok(child) => tokio::time::timeout(timeout, child.wait_with_output())
+            .await
+            .with_context(|| format!("command {} timed out", command.program))?
+            .with_context(|| format!("command {} failed", command.program))?,
+        Err(error) => {
+            if let Some(path) = &input_path {
+                let _ = fs::remove_file(path);
+            }
+            return Err(error);
+        }
+    };
+    if let Some(path) = &input_path {
+        let _ = fs::remove_file(path);
+    }
+
+    let cap = |text: &str, limit: usize| -> String {
+        if text.chars().count() > limit {
+            text.chars().take(limit).collect::<String>() + "…"
+        } else {
+            text.to_string()
+        }
+    };
+    let exit_code = output.status.code();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let command_line = std::iter::once(command.program.clone())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let exit_label = exit_code
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "signal".to_string());
+    let text = if stdout.is_empty() {
+        format!("command exited {exit_label}\n{}", cap(&stderr, 4000))
+    } else {
+        cap(&stdout, 8000)
+    };
+
+    let mut meta = Map::new();
+    add_flow_meta(
+        &mut meta,
+        config,
+        stage,
+        stage.organ.as_deref().unwrap_or("command"),
+        None,
+        budget_step,
+        1,
+        scaling,
+    );
+    meta.insert("kind".to_string(), json!("command"));
+    meta.insert("command".to_string(), json!(command_line));
+    meta.insert("exit_code".to_string(), json!(exit_code));
+    if !stderr.is_empty() {
+        meta.insert("stderr".to_string(), json!(cap(&stderr, 4000)));
+    }
+
+    let entry_type = stage
+        .outputs
+        .first()
+        .cloned()
+        .unwrap_or(EntryType::Observation);
+    let citations = selected
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    let mut entry = NewEntry::new(entry_type, "flow-command", text).with_citations(citations);
+    entry.meta = meta;
+    Ok(vec![entry])
 }
 
 fn deterministic_cluster_entries(
@@ -4967,7 +5207,9 @@ mod tests {
                 roles: roles.into_iter().map(ToOwned::to_owned).collect(),
             },
             clustering: None,
+            command: None,
             artifact: None,
+            retract_overturned: false,
         };
         (scenario, stage)
     }
@@ -5372,6 +5614,74 @@ path = "outputs/report.md"
         assert!(first_entry.get("trace_span").is_some());
         assert!(first_entry.get("retraction").is_some());
         assert!(first_entry.get("rerun").is_some());
+    }
+
+    #[tokio::test]
+    async fn run_flow_command_stage_probes_upstream_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("task.md"), "Investigate probes.\n").unwrap();
+        fs::write(
+            dir.path().join("agents.json"),
+            r#"{"agents":[{"id":"A1","domain":"analysis","desc":"Analyze evidence."}]}"#,
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("inputs")).unwrap();
+        fs::write(dir.path().join("inputs").join("source.md"), "Source fact.").unwrap();
+        fs::write(
+            dir.path().join("flow.toml"),
+            r#"
+[flow]
+profile = "command_flow"
+policy = "fixed"
+
+[organs.reasoning]
+adapter = "mock"
+
+[stages.collect]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["observation"]
+
+[stages.collect.actors]
+mode = "per_input"
+max = 1
+
+[stages.probe]
+inputs = ["stage:collect"]
+outputs = ["observation"]
+
+[stages.probe.actors]
+mode = "none"
+
+[stages.probe.command]
+program = "sh"
+args = ["-c", "echo PROBE_MARKER; cat \"$1\"", "sh", "{input}"]
+"#,
+        )
+        .unwrap();
+
+        let result = run_flow(FlowRunOptions {
+            scenario_dir: dir.path().to_path_buf(),
+            config_path: None,
+            budget: None,
+            persist_path: None,
+        })
+        .await
+        .unwrap();
+
+        let probe = result
+            .entries
+            .iter()
+            .find(|entry| entry.meta.get("kind").and_then(Value::as_str) == Some("command"))
+            .expect("command stage produced an entry");
+        assert_eq!(probe.author, "flow-command");
+        assert_eq!(probe.meta.get("exit_code").and_then(Value::as_i64), Some(0));
+        // stdout proves the command ran; the echoed input proves the upstream
+        // entry was materialized into {input} and fed to the command.
+        assert!(probe.text.contains("PROBE_MARKER"), "text: {}", probe.text);
+        assert!(probe.text.contains("round"), "text: {}", probe.text);
+        // the probe cites what it measured, so it stays in the retract closure.
+        assert!(!probe.citations.is_empty());
     }
 
     #[tokio::test]
@@ -5877,6 +6187,34 @@ count = 1
     }
 
     #[test]
+    fn flow_config_rejects_command_stage_with_actors() {
+        let error = FlowConfig::parse(
+            r#"
+[flow]
+profile = "bad"
+policy = "fixed"
+
+[stages.probe]
+outputs = ["observation"]
+
+[stages.probe.actors]
+mode = "fixed"
+count = 1
+
+[stages.probe.command]
+program = "sh"
+args = ["-c", "echo hi"]
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("must set [actors] mode = \"none\""),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn flow_config_rejects_invalid_references() {
         let error = FlowConfig::parse(
             r#"
@@ -6142,7 +6480,9 @@ outputs = ["change", "decision"]
                 roles: vec!["data_actor".to_string()],
             },
             clustering: None,
+            command: None,
             artifact: None,
+            retract_overturned: false,
         };
 
         assert_eq!(

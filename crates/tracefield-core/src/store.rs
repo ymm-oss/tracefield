@@ -7,6 +7,38 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
+/// Classify one adjudication verdict from its explicit `判定` label, looking only
+/// at the head of that label so downstream prose (which may quote 覆す/維持) cannot
+/// contaminate the class. Anchors on the labelled "判定:" / "判定：" colon.
+pub fn classify_verdict(text: &str) -> &'static str {
+    let anchor = text.find("判定:").or_else(|| text.find("判定："));
+    let head: String = match anchor {
+        Some(idx) => text[idx..].chars().take(24).collect(),
+        None => return "unclassified",
+    };
+    if head.contains("却下") {
+        "reject"
+    } else if head.contains("条件付き") {
+        "conditional"
+    } else if head.contains("結論変更") {
+        "overturn"
+    } else if head.contains("維持") {
+        "maintain"
+    } else {
+        "unclassified"
+    }
+}
+
+/// Outcome of [`ReferenceStore::reconcile_overturned`]: claims actually retracted
+/// (with their closures) and overturn verdicts that found *no* retractable target
+/// (`meta.refutes` missing, or the target already gone) — surfaced so an
+/// overturned conclusion never silently leaves the artifact untouched.
+#[derive(Debug, Default)]
+pub struct ReconcileReport {
+    pub retracted: Vec<(String, Vec<Entry>)>,
+    pub unactioned: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ReferenceStore {
     entries: Vec<Entry>,
@@ -143,6 +175,53 @@ impl ReferenceStore {
             "retracted_by",
             Value::String(author.to_string()),
         ))
+    }
+
+    /// Mechanically retract the claims that overturned adjudication verdicts
+    /// target. For each verdict in `verdicts` classified `overturn`, follow its
+    /// cited refutation's `meta.refutes` (the *attacked* claim, not the context /
+    /// endorsement citations) and retract those claims. This is the verdict fold
+    /// invariant #1 demands — kept out of any LLM assembler so an overturned claim
+    /// cannot survive into the artifact, and precise (refutes-targeted) so a
+    /// refutation's endorsed-context citations are not over-retracted. An overturn
+    /// whose refutation declared *no* retractable target is reported in
+    /// [`ReconcileReport::unactioned`] (never silently ignored) so a human
+    /// reconciles the verdict↔artifact gap.
+    pub fn reconcile_overturned(&mut self, verdicts: &[Entry]) -> ReconcileReport {
+        let mut report = ReconcileReport::default();
+        for verdict in verdicts {
+            if classify_verdict(&verdict.text) != "overturn" {
+                continue;
+            }
+            let mut targets: Vec<String> = Vec::new();
+            for refutation_id in &verdict.citations {
+                if let Some(refutation) = self.get(refutation_id) {
+                    if let Some(ids) = refutation.meta.get("refutes").and_then(Value::as_array) {
+                        targets.extend(ids.iter().filter_map(Value::as_str).map(String::from));
+                    }
+                }
+            }
+            // A verdict is "actioned" if at least one target is now gone (retracted
+            // here, or already terminal = intent satisfied). No target / only bogus
+            // ids => the overturn changed nothing: surface it.
+            let mut acted = false;
+            for id in targets {
+                match self.get(&id).map(|entry| entry.status.clone()) {
+                    None => {}
+                    Some(status) if status != EntryStatus::Active => acted = true,
+                    Some(_) => {
+                        if let Ok(affected) = self.retract(&id, "reconcile") {
+                            report.retracted.push((id, affected));
+                            acted = true;
+                        }
+                    }
+                }
+            }
+            if !acted {
+                report.unactioned.push(verdict.id.clone());
+            }
+        }
+        report
     }
 
     /// Supersede `id` (and its downstream citation closure) with replacement
@@ -327,6 +406,70 @@ mod tests {
         assert_eq!(store.get(&e2.id).unwrap().status, EntryStatus::Retracted);
         assert_eq!(store.get(&e3.id).unwrap().status, EntryStatus::Retracted);
         assert_eq!(store.get(&e4.id).unwrap().status, EntryStatus::Active);
+    }
+
+    #[test]
+    fn reconcile_retracts_only_the_refuted_target_not_context() {
+        let mut store = ReferenceStore::new();
+        let target =
+            store.push(NewEntry::new(EntryType::Decision, "spec", "status always Active"), "spec");
+        let context = store.push(
+            NewEntry::new(EntryType::Decision, "spec", "closure traverses Active edges"),
+            "spec",
+        );
+        // Refutation attacks `target`, only *references* `context`; it names the
+        // attacked claim in meta.refutes so reconcile targets precisely.
+        let refutation = store.push(
+            NewEntry::new(EntryType::Observation, "CONTRACT", "from_new copies status")
+                .with_citations(vec![target.id.clone(), context.id.clone()])
+                .with_meta("refutes", serde_json::json!([target.id.clone()])),
+            "CONTRACT",
+        );
+        let overturn = store.push(
+            NewEntry::new(EntryType::Decision, "ADJ", "判定: 結論変更を要する（当該主張を撤回）。")
+                .with_citations(vec![refutation.id.clone()]),
+            "ADJ",
+        );
+        let conditional = store.push(
+            NewEntry::new(EntryType::Decision, "ADJ", "判定: 条件付きで結論維持。")
+                .with_citations(vec![refutation.id.clone()]),
+            "ADJ",
+        );
+
+        let report = store.reconcile_overturned(&[overturn]);
+        assert_eq!(report.retracted.len(), 1);
+        assert_eq!(report.retracted[0].0, target.id);
+        assert!(report.unactioned.is_empty());
+        // Only the refuted target is retracted; the endorsed context survives.
+        assert_eq!(store.get(&target.id).unwrap().status, EntryStatus::Retracted);
+        assert_eq!(store.get(&context.id).unwrap().status, EntryStatus::Active);
+        // A conditional verdict retracts nothing and is not an unactioned overturn.
+        let r2 = store.reconcile_overturned(&[conditional]);
+        assert!(r2.retracted.is_empty() && r2.unactioned.is_empty());
+    }
+
+    #[test]
+    fn reconcile_surfaces_overturn_with_no_retractable_target() {
+        let mut store = ReferenceStore::new();
+        let claim = store.push(NewEntry::new(EntryType::Decision, "spec", "some claim"), "spec");
+        // Refutation WITHOUT meta.refutes (the lens forgot to declare its target).
+        let refutation = store.push(
+            NewEntry::new(EntryType::Observation, "INVARIANT", "this claim is wrong")
+                .with_citations(vec![claim.id.clone()]),
+            "INVARIANT",
+        );
+        let overturn = store.push(
+            NewEntry::new(EntryType::Decision, "ADJ", "判定: 結論変更を要する。")
+                .with_citations(vec![refutation.id.clone()]),
+            "ADJ",
+        );
+
+        let report = store.reconcile_overturned(&[overturn.clone()]);
+        // Nothing retracted, but the overturn is surfaced — not silently dropped.
+        assert!(report.retracted.is_empty());
+        assert_eq!(report.unactioned, vec![overturn.id]);
+        // The claim survives (no target), so a human must reconcile.
+        assert_eq!(store.get(&claim.id).unwrap().status, EntryStatus::Active);
     }
 
     #[test]

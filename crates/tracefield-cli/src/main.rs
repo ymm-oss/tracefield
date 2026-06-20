@@ -414,30 +414,6 @@ struct AggregateReport {
     records: Vec<VerdictRecord>,
 }
 
-/// Classify one adjudication verdict from its explicit `判定` label, looking only
-/// at the head of that label so downstream prose (which may quote 覆す/維持) cannot
-/// contaminate the class.
-fn classify_verdict(text: &str) -> &'static str {
-    // Anchor on the explicit verdict label "判定:" / "判定：" (with a colon) so a bare
-    // "判定" inside prose (e.g. "準拠判定を保留") cannot be mistaken for the label.
-    let anchor = text.find("判定:").or_else(|| text.find("判定："));
-    let head: String = match anchor {
-        Some(idx) => text[idx..].chars().take(24).collect(),
-        None => return "unclassified",
-    };
-    if head.contains("却下") {
-        "reject"
-    } else if head.contains("条件付き") {
-        "conditional"
-    } else if head.contains("結論変更") {
-        "overturn"
-    } else if head.contains("維持") {
-        "maintain"
-    } else {
-        "unclassified"
-    }
-}
-
 /// Deterministically fold per-refutation adjudication verdicts into a standing
 /// conclusion: any overturn changes the conclusion; an unclassified verdict blocks
 /// a clean fold; otherwise the conclusion is maintained under the union of the
@@ -457,7 +433,7 @@ fn aggregate_verdicts(reference: &tracefield_core::ReferenceStore, stage: &str) 
         records.push(VerdictRecord {
             id: entry.id.clone(),
             author: entry.author.clone(),
-            class: classify_verdict(&entry.text).to_string(),
+            class: tracefield_core::classify_verdict(&entry.text).to_string(),
             text: entry.text.clone(),
         });
     }
@@ -637,7 +613,7 @@ fn find_on_path(binary: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::classify_verdict;
+    use tracefield_core::classify_verdict;
 
     #[test]
     fn classifies_canonical_labels() {

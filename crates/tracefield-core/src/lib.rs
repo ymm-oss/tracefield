@@ -10,5 +10,5 @@ pub mod web_input;
 pub use entry::{Entry, EntryStatus, EntryType, NewEntry};
 pub use flow::{ArtifactExportResult, FlowRunOptions, FlowRunResult, StageRunResult, run_flow};
 pub use scenario::{AgentSpec, Scenario};
-pub use store::ReferenceStore;
+pub use store::{ReferenceStore, classify_verdict};
 pub use web_input::{WebInputOptions, WebInputPage, WebInputResult, ingest_web_inputs};
