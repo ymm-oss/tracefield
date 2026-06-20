@@ -1,0 +1,90 @@
+# 実験: substrate-hetero。adjudication（反証1件=隔離判定）だけ ollama gemma4:26b、
+# 他は codex。狙い: 低コンテキスト・独立・3択出力の易しいレンズをローカル小モデルが担えるか。
+# 制約: ollama 経路はファイルを開けない（llm.rs）。だから一次資料を再オープンする
+#       evidence/spec_draft/verify/assemble は codex のまま。ADJ は渡された反証文脈だけで判定できる。
+# 前提: `ollama serve` 稼働＋`ollama pull gemma4:26b`、かつ codex 利用可。
+[flow]
+profile = "code-to-fsl-grounded-extraction"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 40
+max_parallel_actors = 3
+
+[organs.reasoning]
+adapter = "codex-app-server"
+timeout_seconds = 600
+
+# 易しい隔離レンズ専用のローカル organ
+[organs.judge]
+adapter = "ollama"
+model = "gemma4:26b"
+timeout_seconds = 900
+max_tokens = 2000
+
+[stages.evidence]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["observation"]
+[stages.evidence.actors]
+mode = "per_input"
+roles = ["EVIDENCE"]
+
+[stages.spec_draft]
+organ = "reasoning"
+inputs = ["stage:evidence"]
+outputs = ["decision"]
+[stages.spec_draft.actors]
+mode = "per_input"
+roles = ["SPEC"]
+
+[stages.verify]
+organ = "reasoning"
+inputs = ["stage:spec_draft"]
+outputs = ["observation", "question"]
+[stages.verify.actors]
+mode = "fixed"
+count = 4
+roles = ["INVARIANT", "TRANSITION", "CONTRACT", "COVERAGE"]
+
+[stages.gate_grounding]
+organ = "reasoning"
+inputs = ["stage:spec_draft"]
+outputs = ["observation"]
+[stages.gate_grounding.actors]
+mode = "fixed"
+count = 1
+roles = ["GROUND"]
+
+# 段5: 反証1件 = 隔離審判1 を ollama gemma4:26b で。判定は渡された反証文脈のみで行う（ファイル不要）
+# retract_overturned: 結論変更の判定が指す反証の meta.refutes 主張を機械的に retract（生存判定を LLM から剥がす＝不変条件①）
+[stages.adjudication]
+organ = "judge"
+inputs = ["stage:verify"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+[stages.assemble]
+organ = "reasoning"
+inputs = ["path:task.md", "stage:spec_draft", "stage:verify", "stage:gate_grounding", "stage:adjudication"]
+outputs = ["synthesis"]
+[stages.assemble.actors]
+mode = "fixed"
+count = 1
+roles = ["ASSEMBLE"]
+
+# 段7: fslc ゲート（決定論コマンドステージ。LLM 不使用）。assemble の ```fsl を抽出し fslc check→verify。
+# 結果は assemble を引用する observation（retract 閉包内・exit を meta.exit_code）。非ゼロは所見で run は止まらない。
+[stages.fslc_gate]
+inputs = ["stage:assemble"]
+outputs = ["observation"]
+[stages.fslc_gate.actors]
+mode = "none"
+[stages.fslc_gate.command]
+program = "bash"
+args = ["-lc", "awk 'BEGIN{f=0}/^```fsl/{f=1;next}/^```/{f=0;next}f' \"$0\" > \"$0.fsl\" && echo '== fslc check ==' && fslc check \"$0.fsl\" && echo '== fslc verify ==' && fslc verify \"$0.fsl\"", "{input}"]
+timeout_seconds = 600

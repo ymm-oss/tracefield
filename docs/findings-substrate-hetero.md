@@ -105,3 +105,61 @@ gemma 同系列 H1 と**同じ符号**（hetero 最下位）が、**本物の異
 ### 決定
 - **substrate 軸は確定的に promote しない**（同系列 H1 ＋ 異系列 H1b の二重反証）。攻めのテーゼは §14（構造×自覚）で確定。
 - cursor-agent 統一の cross-family ハーネスは健全・安全・再利用可（将来 H2 高天井シナリオでの再検や、別タスクでの cross-family 比較に使える）。
+
+---
+
+## H1c — ステージ委譲: 隔離判定をローカル小モデルへ（再接地が決定性を律速）(2026-06-20)
+
+H1/H1b は「混成が横断**発見**を増やすか」（＝陰性）。本節は**別軸**: organ がステージ単位である強みを使い、
+**易しく独立で低コンテキストなレンズ（adjudication＝反証1件=隔離判定）をローカル小モデル（gemma4:26b）に委譲できるか**。
+混成で何かを増やす話ではなく、**どの段を安く回せるか／その失敗様式は何か**の task-allocation 問い。
+
+- シナリオ: `scenarios/fsl-codespec`（コード→FSL 形式仕様の抽出）。adjudication は per_input・3択出力（`判定:`）・反証1件のみ受領＝まさに低コンテキスト・独立・難しくない。
+- 構成: `flow.ollama-adj.toml`（`[organs.judge] adapter=ollama model=gemma4:26b`、他5段は codex-app-server）。
+- **決定的制約**: tracefield の ollama 経路はファイルを開けない（`read_skill`/`run_skill_script` のみ。`llm.rs`）。だから一次資料を再オープンする evidence/spec_draft/verify/assemble は codex のまま。ADJ は渡された反証文脈だけで完結するので委譲可。
+
+### 結果A — フル走 A/B（上流も別モデルで非決定＝交絡あり、判定のみ集計）
+
+| 審判 | 結論変更 | 条件付き維持 | 却下 | 無ラベル | 再接地 |
+| --- | --- | --- | --- | --- | --- |
+| gemma4:26b | 1 | 9 | 2 | 0 | 反証の引用のみ |
+| codex | 7 | 5 | 0 | （92=`codex_command` provenance＝rg/cat 再読、判定でない） | entry.rs/store.rs を実際に再読 |
+
+- **format は gemma 12/12 が canonical `判定:` ラベル**（相互運用の要を完璧に充足）。codex の「無ラベル92」は判定でなく**コード再オープンの provenance**。
+- gemma の推論は実質的（ある却下で「規範的要請(ガードが必要) vs 忠実性(コードを写す)」を弁別して却下＝筋の良い判断）。
+- ただし上流の反証が両走で別物（codex 非決定）＝**交絡**。→ ペアで統制。
+
+### 結果B — ペア統制（上流固定: codex 走の grounded な同一12反証を入力に、codex/gemma で隔離判定）
+
+`scenarios/adj-paired`（experiment fixture, gitignore）。各反証は自己完結（攻撃対象の主張＋`file:line` 証拠を引用）。`max_parallel=1`＋反証IDエコーで R01..R12 をペア対応。
+
+| 審判 | 結論変更(覆) | 条件付き維持(維) | 却下 | 再接地 |
+| --- | --- | --- | --- | --- |
+| **codex** | **10** | 2 | 0 | **46 コマンド**（rg/cat で実コード再読） |
+| **gemma4:26b** | **1** | 11 | 0 | **0**（ファイル不可） |
+
+ペア: `R01覆≠維 R02覆≠維 R03覆≠維 R04維＝維 R05覆≠維 R06覆≠維 R07維＝維 R08覆≠維 R09覆≠維 R10覆≠維 R11覆＝覆 R12覆≠維`。
+**一致 3/12 = 25%。分岐9件は全て同方向（codex 覆す / gemma 維持）。**
+
+### 判定 — ヘッジは上流由来でなく審判差。機構は再接地
+
+上流を固定しても codex 10 覆・gemma 1 覆＝**差は審判 organ のみ**。機構:
+- **codex は 46回 rg/cat でコードを再オープン**→反証を確認→**決定的に覆す**。
+- **gemma はファイルを開けず、引用された証拠を独立確認できない**→`条件付き維持（要再検証）`へ倒す。
+- 重要: 反証は**証拠(file:line)を引用済**なのに gemma は覆さない。「証拠が無い」のでなく「**証拠を検証できない**」のがヘッジの源。
+  さらに ADJ desc の『引用を特定できない反証は条件付き維持に倒せ』という健全な規則が、ファイル不可の organ では全件ヘッジへ増幅＝**再接地能力 × 規則の相互作用で instructable**。
+
+→ **隔離判定の「覆し」決定性は再接地能力に律速される。** これは [`findings-citation-precision.md`](./findings-citation-precision.md) の「引用行を再オープンして接地照合」が precision を上げた機構が、**審判段でも**効くことの統制実証（再接地テーゼの審判への拡張）。
+
+### 運用的結論
+- **overturn-critical な adjudication をファイル不可 organ に載せてはいけない。** gemma は format完璧・推論実質・隔離良好だが、**「コードに照らして誤った主張を殺す」決定性が出ない**（10→1）。
+- 既定 `flow.toml` が adjudication を **codex に置く設計は正しい**。ollama 委譲は format/トリアージ/隔離向き、overturn-critical 段は**再接地 organ 必須**。
+- **対処（probe で接地）**: ファイル不可審判の覆し弱化は、判定の後段に**決定論コマンドステージ**（`[stages.<id>.command]`＋`mode="none"`、`fslc`/`rg`/`cargo test`）を置けば機械で接地できる——LLM の「反証されたと*思う*」を probe の「事実として反証」に替える。`scenarios/fsl-codespec` の段7 `fslc_gate` がその実装（BMC 反例は LLM が握り潰せない究極の FALSIFY。結果は引用つき＝retract 閉包内・`meta.exit_code`）。**ファイル不可の安い審判 ＋ 決定論 probe の組合せ**が、再接地できない弱点を段で補える筋。
+- H1/H1b（混成で発見は増えない）と本節（委譲は format◯/overturn×）は別軸だが、いずれも「**substrate を変えるなら、何が effに効き何が効かないかを段ごとに見よ**」を補強。
+
+### 限界
+- n=12・単一シナリオ・単一走・gemma4:26b のみ（同harnessで `model=` を差せば gemma4:31b/qwen3.6:27b 等も測れるが未実施）。
+- codex の10覆が全て正しい前提（grounded だが、近接反証 R01/R04/R10 で codex 自身に覆↔維のブレ1件）。
+- ヘッジの一部は ADJ desc の「未確認→条件付き」規則由来（純モデル効果ではなく instructional）。規則を外せば gemma は引用を鵜呑みに覆しうるが、それは未検証の引用を信じる劣化＝どちらにせよファイル不可審判は grounded な覆しができない。
+- `fslc` ゲートは本環境に未インストールで未実走（本軸と直交）。
+- provenance: `scenarios/fsl-codespec/flow.ollama-adj.toml`・`scenarios/adj-paired/`（gitignore）、runs は `/tmp/*.jsonl`（揮発）。
