@@ -82,7 +82,15 @@ analysis（直交レンズのパネル） → verify（FALSIFY/COUNTER） → ad
 - **効き所**: コード/文書の**読み取り段**（analysis / evidence / spec_draft / verify）の主張捏造を機械検出。`relies_on` の真偽を初めて機械検証する。**文書**は store チャンク（in-store 照合）、**コード**は disk 上ファイル（actor が `meta.source_path`/`source_line` を申告し on-disk 照合）。
 - **接地プローブ（下記）との別**: ゲートは**主張単位の忠実性**（引用行が主張を支持するか）、プローブは**組み上がった成果物の整合性/外部裁定**（fslc/cargo test）。両者は直交＝併用する（fsl-codespec は verify を grounded、assemble 後段に fslc_gate プローブ）。
 - **粒度の注意**: 照合は **entry 単位**（1エントリ＝1 evidence_quote）。複合エントリ（領域 digest・多主張 fragment）は anchor 照合（丸ごと捏造の検出）に留まる ── per-claim full 接地は**反証/事実が atomic な段**（verify 等）で成立。digest 段は grounded にせず下流で再接地する。
-- レンズは grounded にしてよいが、**操作系（止揚/反証/審判）の段**は出力が引用の逐語写しでない（verdict・合成）ので grounded 対象外。`source_`/`web`/`data` を id/organ/role に含む段は従来通り自動で grounded（明示 flag が推奨・脆い名前依存を脱する）。
+- レンズは grounded にしてよい。**審判/止揚の verdict 本文**は引用の逐語写しでないので grounded 対象外だが、**composer（synthesis/施策化）の*事実前提*は接地できる**（下記 govern the composer）。`source_`/`web`/`data` を id/organ/role に含む段は従来通り自動で grounded（明示 flag 推奨・脆い名前依存を脱する）。
+
+### govern the composer（生成側ハルシネーション抑制・findings-grounded-generation）
+読み取り（抽出）でなく**生成**（設計/施策/統合＝答えが一意でない）で効かせる版。生成のハルシネーション＝*自由な賭け(commitment)*の中に紛れた**偽の事実前提**。直すべきは賭けでなく前提＝**composer（最終統合・施策化ステージ）を起草者と同じ grounded→verify→adjudicate→retract の規律に入れる**。composer は「合成して*発明*でき、かつ verify の後段にあるため無検査で成果物化する」という最悪面なので狙う。
+- **G（接地）**: 最終 composer 段を `grounded = true`。各生成主張の*事実前提*を `meta.evidence_quote`＋`source_path:source_line` で一次資料の実ファイルに照合（読み取りの on-disk ゲートを*そのまま*転用＝同じ機構を別ステージに当てるだけ）。**commitment には evidence_quote を要求せず事実前提にのみ要求**（自由な賭けと事実を物理分離）。composer は主張を*個別エントリ*で出す（後段が主張単位で攻撃/retract できるよう atomic 化。narrative は別途 synthesis で anchor 照合）。
+- **V（再反証）**: composer の**新規**主張（最初の verify が見ていない）を独立赤チームで再攻撃する verify→adjudication 段を**後段に増設**（`retract_overturned`）。**G が偽の事実を、V が偽の推論を**殺す（直交。findings-lens-type/diffusion §5 の「鋭い中央合成は未検証の推論的飛躍を運ぶ」を composer に対しても殺す）。
+- **R**: 一次 adjudication にも `retract_overturned`。覆された前提は status で消え、composer は生存集合だけを見る（「生存」を指示順守でなく status で機械化）。
+- **continuity との両立**: composer が連続深掘りパスでも、on-disk 照合は必要ファイルだけ read-only で開くので文脈を膨らませない（arm W＝全部入り単一文脈＝最低スコア、を再現しない）。
+- 実例: `scenarios/fsl-direction`（`initiatives` を grounded＋`verify_init`/`adjudicate_init` 増設＋一次 adjudication に retract_overturned）。fsl-codespec（抽出）の双子＝同じ FSL 題材の生成側。
 
 ### 接地プローブ（probe＝決定論コマンドステージ・findings-command-probe）
 レンズ（解釈）の対極の**センサ（計測）**。`[stages.<id>.command]` ＋ `[actors] mode="none"` で外部コマンドを1回走らせ stdout を1エントリに畳む（設定は operator の flow-spec）。LLM を介さない＝**confab 原理ゼロの最も忠実な器官**（鉄則2の極限点）で、決定論・exit/JSON・provenance 化が `aggregate` の機械集約哲学と同型。

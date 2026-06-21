@@ -1,0 +1,120 @@
+# gemma4:26b 変種: 弱いモデルで composer の*事実捏造*を自然発生させ、接地ゲート(G)が捕えるか測る。
+# 根拠: findings-lens-type §6.6「合成忠実性は入力規模で劣化し、弱いモデルほど激しい」。codex は明示 quote に忠実で
+# 捏造が自然発生しなかった（findings-grounded-generation §6.4）。弱モデルは捏造の発生源として適切。
+# 基板適応: ollama はファイルを開けないので、composer は evidence を*文脈で*受け CitedStore 経路で接地する
+# （codex の on-disk 再オープンと等価な別経路。reading ゲートの「文書=in-store / コード=on-disk」の前者）。
+[flow]
+profile = "ideation-grounded-gemma-fabrication-probe"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 60
+max_parallel_actors = 2
+
+[organs.reasoning]
+adapter = "ollama"
+model = "gemma4:26b"
+timeout_seconds = 900
+max_tokens = 2500
+
+[organs.deep]
+adapter = "ollama"
+model = "gemma4:26b"
+timeout_seconds = 900
+max_tokens = 4000
+
+[stages.evidence]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["observation"]
+[stages.evidence.actors]
+mode = "per_input"
+roles = ["EVIDENCE"]
+
+[stages.framing]
+organ = "reasoning"
+inputs = ["path:task.md", "stage:evidence"]
+outputs = ["question", "observation"]
+[stages.framing.actors]
+mode = "fixed"
+count = 5
+roles = ["QANSWER", "PROBLEMATIZE", "POSE", "ASCEND", "JTBD"]
+
+[stages.directions]
+organ = "reasoning"
+inputs = ["path:task.md", "stage:evidence", "stage:framing"]
+outputs = ["decision"]
+[stages.directions.actors]
+mode = "fixed"
+count = 6
+roles = ["CORE", "ADJACENT", "GENEALOGY", "INVERT", "PULL", "ANALOGY"]
+
+[stages.judge]
+organ = "reasoning"
+inputs = ["stage:directions"]
+outputs = ["decision"]
+[stages.judge.actors]
+mode = "per_input"
+roles = ["JUDGE"]
+
+[stages.critique]
+organ = "reasoning"
+inputs = ["stage:directions"]
+outputs = ["observation", "question"]
+[stages.critique.actors]
+mode = "fixed"
+count = 2
+roles = ["FALSIFY", "COUNTER"]
+
+# retract_overturned: 覆された方向を機械 retract（生存を status で機械化）
+[stages.adjudication]
+organ = "reasoning"
+inputs = ["stage:critique"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+[stages.select]
+organ = "reasoning"
+inputs = ["stage:directions", "stage:judge", "stage:adjudication"]
+outputs = ["synthesis"]
+[stages.select.actors]
+mode = "fixed"
+count = 1
+roles = ["SELECT"]
+
+# G: composer 接地。ollama は file を開けないので evidence を文脈で受け、CitedStore 経路で照合する
+# （quote ∈ 引用 evidence エントリ本文。弱モデルが evidence に無い FSL 事実を主張すれば evidence_quote_not_found）
+[stages.initiatives]
+organ = "deep"
+inputs = ["stage:select", "stage:evidence"]
+outputs = ["synthesis", "decision"]
+grounded = true
+[stages.initiatives.actors]
+mode = "fixed"
+count = 1
+roles = ["INITIATIVES"]
+
+# V: composer 再反証。evidence を文脈で受け、施策の未接地前提を突く
+[stages.verify_init]
+organ = "reasoning"
+inputs = ["stage:initiatives", "stage:evidence"]
+outputs = ["observation", "question"]
+grounded = true
+[stages.verify_init.actors]
+mode = "fixed"
+count = 2
+roles = ["INIT_FALSIFY", "INIT_COUNTER"]
+
+# 施策反証1件=1隔離審判。結論変更の指す施策を機械 retract
+[stages.adjudicate_init]
+organ = "reasoning"
+inputs = ["stage:verify_init"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudicate_init.actors]
+mode = "per_input"
+roles = ["ADJ"]

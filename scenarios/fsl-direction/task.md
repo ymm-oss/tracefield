@@ -26,4 +26,17 @@
 - **なぜ効くか**（因果）、**どの FSL 事実に依拠するか**。
 - **最初の一手**と**順序**、**成功/失敗を分ける条件**。
 
+## composer の統治（生成ハルシネーション抑制の骨子）
+このシナリオは発想（divergent）だが、**最終 composer（施策の深掘り `initiatives`）こそハルシネーションが集中する**:
+合成して*発明*でき、しかも従来は verify(`critique`) の後段にあるため無検査で成果物化していた。手法 *govern the
+composer* は composer を起草者と同じ規律に入れる（詳細は `docs/findings-grounded-generation.md`）:
+- **G 接地**: `initiatives` は `grounded=true`。各施策の*事実前提*（依拠 FSL 事実）を `inputs/*.md` の実ファイルに
+  `meta.evidence_quote`＋`source_path:source_line` で機械照合。inputs に無い「FSL は X ができる」を per-claim で
+  検出（retract 閉包内）。**自由な賭け(commitment)には接地を要求せず、事実前提にのみ要求する。**
+- **V 再反証**: composer が新規に生んだ施策前提を `verify_init`（INIT_FALSIFY/INIT_COUNTER）が攻撃し、
+  `adjudicate_init`（反証1件=1隔離審判, `retract_overturned`）が結論変更の指す施策を機械 retract。
+- **R 生存の機械化**: 一次 `adjudication` も `retract_overturned`。覆された方向は status で消え、`select`/
+  `initiatives` は生存方向だけを見る（「生存」を指示順守でなく status で機械化）。
+両次元の分担: **G が偽の事実を、V が偽の推論を**殺す。再集約は手動 `tracefield aggregate`（機械・LLM 不使用）。
+
 賛辞・一般論・言い換えは書くな。具体・因果・FSL の事実依拠を要求する。日本語で書け。

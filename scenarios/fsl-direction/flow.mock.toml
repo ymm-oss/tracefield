@@ -62,11 +62,12 @@ mode = "fixed"
 count = 2
 roles = ["FALSIFY", "COUNTER"]
 
-# 反証1件=1審判
+# 反証1件=1審判。retract_overturned: 結論変更判定の指す方向を機械 retract→ select は生存方向だけを見る（「生存」を SELECT の指示順守でなく status で機械化＝不変条件①）
 [stages.adjudication]
 organ = "reasoning"
 inputs = ["stage:critique"]
 outputs = ["decision"]
+retract_overturned = true
 [stages.adjudication.actors]
 mode = "per_input"
 roles = ["ADJ"]
@@ -82,11 +83,35 @@ count = 1
 roles = ["SELECT"]
 
 # フェーズ2: 蒸留ブリーフだけを足場に、専用の連続パスで施策を深掘り（拡散と分離）
+# grounded: composer 接地ゲート。各施策が依拠する FSL 事実を inputs/*.md 実ファイルに機械照合（reading の on-disk evidence-quote 接地を生成側の前提検証へ転用）。捏造 FSL 事実を per-claim 検出。各施策は個別 decision エントリ、narrative は複合 synthesis（evidence_quote は最 load-bearing アンカー）
 [stages.initiatives]
 organ = "deep"
 inputs = ["stage:select"]
 outputs = ["synthesis", "decision"]
+grounded = true
 [stages.initiatives.actors]
 mode = "fixed"
 count = 1
 roles = ["INITIATIVES"]
+
+# フェーズ3: composer 再接地検証（第二の敵対パス）。critique は directions を攻撃済みだが、initiatives が新規に生んだ施策の前提（FSL事実依拠・因果・最初の一手）は未検査のまま成果物化する＝「鋭い中央合成は未検証の推論的飛躍を運ぶ」(findings-lens-type/diffusion §5) を composer に対しても殺す
+# grounded: 反証も meta.evidence_quote＋source_path:source_line を要求（接地不能な指摘＝市場/不在は question へ）
+[stages.verify_init]
+organ = "reasoning"
+inputs = ["stage:initiatives"]
+outputs = ["observation", "question"]
+grounded = true
+[stages.verify_init.actors]
+mode = "fixed"
+count = 2
+roles = ["INIT_FALSIFY", "INIT_COUNTER"]
+
+# 施策反証1件=1隔離審判。結論変更判定の指す施策(meta.refutes)を機械 retract＝composer の発明を生存判定から剥がす（不変条件①）。生存施策だけが status 駆動で serve（②）。再集約は手動 `tracefield aggregate`（③）
+[stages.adjudicate_init]
+organ = "reasoning"
+inputs = ["stage:verify_init"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudicate_init.actors]
+mode = "per_input"
+roles = ["ADJ"]
