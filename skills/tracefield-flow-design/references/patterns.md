@@ -178,6 +178,41 @@ roles = ["INITIATIVES"]
 
 連続性パスを発散と同一文脈に畳むと劣化する（de-risk が最初に崩れる）。必ず別 organ・別ステージに分離し、`select` で firehose を畳んでから渡す。
 
+## 6. 仕様を問う（spec interrogation — 複雑×新規で*二次*の盲点を発見）
+
+**対象は*仕様/要件*（開いたもの）。テスト等の閉じた下流を問うのは摂動で新次元を生まない。** 効くのは
+**複雑*かつ*新規**（priors が薄い独自ルール）なドメイン。馴染み(EC/認証/CRUD)・cued な仕様は単一強モデルで足りる。
+発見されるのは単一の整合的1パスが素通りする**二次の盲点**（規則間の*適用順序*・*迂回*・*gaming*・全順序公理のような性質）。
+実例: `scenarios/spec-probe-{semver,checkout,approval}`。根拠 `docs/findings-bet2-overturn.md`。
+
+`task.md`: 「`inputs/spec.md` を*問え*: 何を暗黙に前提にし・何を書き落とし・現実で何が壊れるか（特に複数の部分が*相互作用*する箇所）。仕様の再説明はするな」。
+`inputs/spec.md`: 対象仕様。`agents.json`: lens-catalog「仕様インタロゲーション用レンズ」の5本。
+
+```toml
+[flow]
+profile = "spec-interrogation"
+policy = "fixed"
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 10
+max_parallel_actors = 3
+[organs.reasoning]
+adapter = "codex-app-server"   # 散文の指摘でよい（コード成果物でないので codex で可）
+timeout_seconds = 600
+[stages.interrogate]
+organ = "reasoning"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["observation", "question"]   # 各レンズが隔離文脈で仕様の沈黙を列挙
+[stages.interrogate.actors]
+mode = "fixed"
+count = 5
+roles = ["QANSWER", "PROBLEMATIZE", "INVERT", "HARM", "ASCEND"]
+```
+
+5レンズの出力（observation/question）の和集合が発見された盲点。**価値検証するなら**単一ベースライン
+（同 task を `count=1`・観点なし、または同5観点を1文脈に渡した版）と並べ、O だけが拾った*二次*盲点を数える。
+射程の正直: frontier 相手では edge は増分（単一も一次の交互作用は拾う／O が二次を数個追加）。弱モデルで増分大。
+
 ## 入力セレクタ早見
 
 - `path:<file>` … task.md 等（meta.path 一致）
