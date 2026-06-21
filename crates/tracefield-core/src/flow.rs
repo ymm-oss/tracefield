@@ -250,7 +250,6 @@ struct ActorScalingDecision {
 struct ActorRunOutput {
     actor_index: usize,
     actor_id: String,
-    selected: Vec<Entry>,
     entries: Vec<NewEntry>,
 }
 
@@ -922,8 +921,7 @@ async fn execute_stage(
                 &selected,
                 &scaling,
             );
-            let new_entries =
-                apply_core_gates(new_entries, store, config, stage, &scenario.dir, &selected);
+            let new_entries = apply_core_gates(new_entries, store, config, stage, &scenario.dir);
             let new_entries = attach_work_item_meta(new_entries, work_item);
             let stored = store.absorb(new_entries, "flow-cluster");
             stage_entries.extend(stored);
@@ -956,8 +954,7 @@ async fn execute_stage(
                 &scaling,
             )
             .await?;
-            let new_entries =
-                apply_core_gates(new_entries, store, config, stage, &scenario.dir, &selected);
+            let new_entries = apply_core_gates(new_entries, store, config, stage, &scenario.dir);
             let new_entries = attach_work_item_meta(new_entries, work_item);
             let stored = store.absorb(new_entries, "flow-command");
             stage_entries.extend(stored);
@@ -1053,14 +1050,8 @@ async fn execute_stage(
                     work_item,
                 )
                 .await?;
-                let new_entries = apply_core_gates(
-                    new_entries,
-                    store,
-                    config,
-                    stage,
-                    &scenario.dir,
-                    &actor_selected,
-                );
+                let new_entries =
+                    apply_core_gates(new_entries, store, config, stage, &scenario.dir);
                 let new_entries = attach_work_item_meta(new_entries, work_item);
                 let stored = store.absorb(new_entries, &actor_id);
                 log_flow_progress(
@@ -1082,14 +1073,7 @@ async fn execute_stage(
         let existing = existing_work_item_entries(store, stage, work_item, Some(0), Some("flow"));
         if existing.is_empty() {
             let new_entry = deterministic_stage_marker(config, stage, budget_step, &scaling);
-            let new_entry = apply_core_gates(
-                vec![new_entry],
-                store,
-                config,
-                stage,
-                &scenario.dir,
-                &selected,
-            );
+            let new_entry = apply_core_gates(vec![new_entry], store, config, stage, &scenario.dir);
             let new_entry = attach_work_item_meta(new_entry, work_item);
             stage_entries.extend(store.absorb(new_entry, "flow"));
             checkpoint_flow_store(store, persist_path)?;
@@ -1219,7 +1203,6 @@ async fn execute_stage_actors_parallel(
                 Ok::<_, anyhow::Error>(ActorRunOutput {
                     actor_index,
                     actor_id,
-                    selected: actor_selected,
                     entries,
                 })
             });
@@ -1231,14 +1214,8 @@ async fn execute_stage_actors_parallel(
         let actor_output = join_result
             .context("actor task failed to join")?
             .context("actor task failed")?;
-        let new_entries = apply_core_gates(
-            actor_output.entries,
-            store,
-            config,
-            stage,
-            &scenario.dir,
-            &actor_output.selected,
-        );
+        let new_entries =
+            apply_core_gates(actor_output.entries, store, config, stage, &scenario.dir);
         let new_entries = attach_work_item_meta(new_entries, work_item);
         let stored = store.absorb(new_entries, &actor_output.actor_id);
         log_flow_progress(
@@ -1339,8 +1316,7 @@ async fn execute_process_stage(
             &work_item,
         )
         .await?;
-        let new_entries =
-            apply_core_gates(new_entries, store, config, &stage, &scenario.dir, &selected);
+        let new_entries = apply_core_gates(new_entries, store, config, &stage, &scenario.dir);
         let new_entries = attach_work_item_meta(new_entries, &work_item);
         let stored = store.absorb(new_entries, &actor_id);
         log_flow_progress(
@@ -2654,7 +2630,6 @@ fn apply_core_gates(
     config: &FlowConfig,
     stage: &StageConfig,
     scenario_dir: &Path,
-    selected: &[Entry],
 ) -> Vec<NewEntry> {
     let active_ids = store
         .all()
@@ -2662,12 +2637,6 @@ fn apply_core_gates(
         .filter(|entry| entry.status == EntryStatus::Active)
         .map(|entry| entry.id.as_str())
         .collect::<BTreeSet<_>>();
-    let fallback_citations = selected
-        .iter()
-        .filter(|entry| entry.status == EntryStatus::Active)
-        .take(5)
-        .map(|entry| entry.id.clone())
-        .collect::<Vec<_>>();
 
     entries
         .into_iter()
@@ -2689,12 +2658,7 @@ fn apply_core_gates(
             entry
                 .citations
                 .retain(|citation| active_ids.contains(citation.as_str()));
-            if entry.citations.is_empty() && !fallback_citations.is_empty() {
-                entry.citations = fallback_citations.clone();
-                entry
-                    .meta
-                    .insert("citations_repaired".to_string(), json!(true));
-            } else if entry.citations != before {
+            if entry.citations != before {
                 entry
                     .meta
                     .insert("invalid_citations_dropped".to_string(), json!(true));
@@ -6396,7 +6360,7 @@ outputs = ["not_a_type"]
     #[test]
     fn core_gates_coerce_output_type_and_repair_citations() {
         let mut store = ReferenceStore::new();
-        let source = store.push(
+        store.push(
             NewEntry::new(EntryType::Chunk, "scenario", "source"),
             "scenario",
         );
@@ -6430,15 +6394,14 @@ outputs = ["observation"]
             &config,
             stage,
             Path::new("."),
-            std::slice::from_ref(&source),
         );
 
         assert_eq!(gated[0].entry_type, EntryType::Observation);
-        assert_eq!(gated[0].citations, vec![source.id.clone()]);
+        assert_eq!(gated[0].citations, Vec::<String>::new());
         assert_eq!(
             gated[0]
                 .meta
-                .get("citations_repaired")
+                .get("invalid_citations_dropped")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -6491,7 +6454,6 @@ outputs = ["observation"]
             &feedback_config,
             feedback_stage,
             Path::new("."),
-            std::slice::from_ref(&source),
         );
 
         assert_eq!(feedback_gated[0].entry_type, EntryType::Change);
@@ -7095,7 +7057,6 @@ outputs = ["observation", "question"]
             &config,
             stage,
             Path::new("."),
-            std::slice::from_ref(&source),
         );
 
         assert_eq!(gated[0].entry_type, EntryType::Question);
@@ -7169,7 +7130,6 @@ outputs = ["observation", "question"]
             &config,
             stage,
             Path::new("."),
-            std::slice::from_ref(&source),
         );
 
         assert_eq!(
@@ -7232,7 +7192,6 @@ outputs = ["observation", "question"]
             &config,
             stage,
             Path::new("."),
-            std::slice::from_ref(&source),
         );
 
         assert_eq!(gated.len(), 1);
@@ -7315,7 +7274,6 @@ outputs = ["observation"]
             &grounded_config,
             &grounded_config.stages[0],
             Path::new("."),
-            std::slice::from_ref(&source),
         );
         let ungrounded = apply_core_gates(
             vec![entry],
@@ -7323,7 +7281,6 @@ outputs = ["observation"]
             &ungrounded_config,
             &ungrounded_config.stages[0],
             Path::new("."),
-            std::slice::from_ref(&source),
         );
 
         assert!(entry_has_quality_warning(
@@ -7398,7 +7355,6 @@ outputs = ["observation"]
             &config,
             stage,
             dir.path(),
-            std::slice::from_ref(&pointer),
         );
 
         assert!(!entry_has_quality_warning(
@@ -7480,7 +7436,6 @@ outputs = ["observation"]
             &config,
             stage,
             &scenario_dir,
-            std::slice::from_ref(&pointer),
         );
 
         assert!(!entry_has_quality_warning(
@@ -7546,7 +7501,6 @@ outputs = ["observation"]
             &config,
             stage,
             dir.path(),
-            std::slice::from_ref(&pointer),
         );
 
         assert!(entry_has_quality_warning(
