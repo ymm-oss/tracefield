@@ -115,3 +115,42 @@ tracefield supersede --store runs/<name>.jsonl --entry e3 --with e9
 If an id is absent, rerun `tracefield run` with `--persist` and use an id from
 that store. For `supersede` the replacement `--with <id>` must also exist in the
 store (and differ from `--entry`).
+
+## Aggregate Shows Fewer Overturns Than Fired
+
+`tracefield aggregate --stage <s>` counts only **Active** verdicts. With
+`retract_overturned = true`, an `overturn` verdict sits in the *downstream closure
+of the claim it overturns* (verdict → cites refutation → `meta.refutes` target), so
+`reconcile_overturned` retracts the verdict **together with** the target. The final
+store can therefore show `overturn=0` even though overturns fired. To count what
+actually fired, read the reconcile log, not `aggregate`:
+
+```sh
+tracefield run --scenario-dir scenarios/<name> --persist runs/<name>.jsonl > runs/<name>.log 2>&1
+grep -c "overturned-claim" runs/<name>.log     # how many fired
+grep    "overturned-claim" runs/<name>.log     # which claim ids
+```
+
+Also: overturn *count* does not by itself separate a real problem from manufactured
+drama (a position tournament always overturns something). Judge by *what axis* was
+overturned, not how many.
+
+## Agent Returns Prose Instead Of A Code/File Artifact
+
+`codex-app-server` is read-only and records the agent's reasoning; for a "produce
+this code" task it often returns a **prose summary, not a runnable code block** (fine
+for analysis/judgement, unusable when you must extract and run the output). For
+artifacts you execute (e.g. generated test suites), use an `ollama` organ — raw text
+returns reliable fenced code:
+
+```toml
+[organs.deep]
+adapter = "ollama"
+model = "qwen3.6:27b"
+timeout_seconds = 600
+```
+
+Run ollama flows **sequentially** (one `tracefield run` at a time; `max_parallel_actors = 1`
+for heavy models) — concurrent requests to a single ollama server time out on large
+models. Raw `codex exec` as a one-shot judge can hang; prefer the in-harness
+`codex-app-server` path for *reasoning/prose*, and `ollama` for *code artifacts*.
