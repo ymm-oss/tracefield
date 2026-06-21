@@ -12,6 +12,7 @@ adapter = "codex-app-server"
 timeout_seconds = 600
 
 # 段1: 証拠抽出。1 actor = 1 領域ポインタ。実コードを再オープンし領域マップ＋出典付き生事実を出す
+# （digest は領域ごと1観測の中間足場。事実は spec_draft/verify で実コードに再接地されるため digest 自体は grounded にしない）
 [stages.evidence]
 organ = "reasoning"
 inputs = ["kind:input"]
@@ -22,19 +23,23 @@ roles = ["EVIDENCE"]
 
 # 段2: 仕様起草（read 時の再接地）。1 actor = 1 領域ダイジェスト。当該領域を再オープンし FSL 主張を relies_on 付きで書く
 # inputs は stage:evidence のみ（per_input のシャード軸を領域ダイジェストに揃える。task.md を入れると task が1シャードになる）
+# grounded: fragment は複合エントリのため meta.evidence_quote は load-bearing 主張の逐語アンカー（entry 単位＝丸ごと捏造 fragment の検出）。主張単位の照合は verify が担う
 [stages.spec_draft]
 organ = "reasoning"
 inputs = ["stage:evidence"]
 outputs = ["decision"]
+grounded = true
 [stages.spec_draft.actors]
 mode = "per_input"
 roles = ["SPEC"]
 
 # 段3: verify（reject 時の再接地）。直交アスペクトの反証。各 actor が引用行を再オープンして攻撃
+# grounded: 反証も meta.evidence_quote＋source_path:source_line を要求。「コードを引かない指摘」が機械で接地不能になる
 [stages.verify]
 organ = "reasoning"
 inputs = ["stage:spec_draft"]
 outputs = ["observation", "question"]
+grounded = true
 [stages.verify.actors]
 mode = "fixed"
 count = 4

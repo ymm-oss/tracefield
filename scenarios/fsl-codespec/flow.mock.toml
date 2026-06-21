@@ -22,6 +22,7 @@ roles = ["EVIDENCE"]
 organ = "reasoning"
 inputs = ["stage:evidence"]
 outputs = ["decision"]
+grounded = true
 [stages.spec_draft.actors]
 mode = "per_input"
 roles = ["SPEC"]
@@ -30,6 +31,7 @@ roles = ["SPEC"]
 organ = "reasoning"
 inputs = ["stage:spec_draft"]
 outputs = ["observation", "question"]
+grounded = true
 [stages.verify.actors]
 mode = "fixed"
 count = 4

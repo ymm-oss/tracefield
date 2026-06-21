@@ -12,8 +12,10 @@
 ## 2つの直交した機械的接地（設計の骨子）
 | 誤り | 「仕様 ⇄ コード」 | 機械的接地 |
 |---|---|---|
-| 読み取り誤り＋ハルシネーション | 仕様がこのコードに**忠実か** | `relies_on` 引用（`file:line`）＋ verify 段（引用行を再オープンして非接地を棄却） |
-| 内部不整合・非整形 | 仕様が**形式的に整合か** | **`fslc` 自身**（BMC/JSON、LLM 不使用。フロー後の手動裁定） |
+| 読み取り誤り＋ハルシネーション | 仕様がこのコードに**忠実か** | **接地ゲート（エンジン・LLM 不使用）**: `grounded=true` ステージの各主張の `meta.evidence_quote` を `meta.source_path:source_line` の*実ファイル*に機械照合し、引用行に無い quote を `evidence_quote_not_found`（needs_review）として per-claim で検出（retract 閉包内）。＋ verify 段（LLM が引用行を再オープンして非接地を棄却＝二重化） |
+| 内部不整合・非整形 | 仕様が**形式的に整合か** | **`fslc` 自身**（BMC/JSON、LLM 不使用。段7 fslc_gate がフロー内で裁定） |
+
+両次元とも機械裁定を持つ（忠実性＝接地ゲートの逐語照合、整合性＝fslc の BMC）。接地ゲートは「引用行を再オープンして主張と差分照合する」という再接地テーゼ（`docs/findings-citation-precision.md` で precision 0.40→1.00、`docs/findings-substrate-hetero.md` H1c で審判の覆し決定性を律速）を、LLM でなくエンジンの決定論照合で per-claim・retract 閉包内に行う。これにより `relies_on` の真偽が初めて機械検証される（従来は LLM レンズのみ）。grounded ステージのレンズは各主張に逐語 `meta.evidence_quote`＋`meta.source_path`（領域ポインタの `path:` 値＝scenario 相対）＋`meta.source_line` を付す。
 
 ## 一次資料の再参照（最重要の運用則）
 PDF 読解の実測知見の写像: **レンズは自分の粒度で一次資料を再参照すると読み取り精度が格段に上がる。要約越しに書くな。**

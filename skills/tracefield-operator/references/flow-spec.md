@@ -47,6 +47,8 @@
 | `organ` | string | `"mock"` | 使う `[organs.<id>]` の id |
 | `inputs` | string[] | （空なら task＋retrieval） | 入力セレクタ（下表） |
 | `outputs` | string[] | — | このステージが出すエントリ型（下表） |
+| `grounded` | bool | `false` | 接地ゲートを有効化。各非 question 主張に `meta.evidence_quote`（引用元の逐語部分文字列）を要求し、それを**引用 store エントリ本文 ∪ `meta.source_path`(+`source_line`) の実ファイル**に機械照合する。外れたら `evidence_quote_not_found`＋`evidence_strength=needs_review`（per-claim・retract 閉包内・no-silent-drop）。`source_`/`web`/`data` を含む id/organ/role でも自動 true（既存ヒューリスティック）。読み取り正準骨格・コード抽出での捏造検出に使う |
+| `retract_overturned` | bool | `false` | このステージ後に `reconcile_overturned` を走らせ、`判定: 結論変更…` の verdict が指す `meta.refutes` 主張を機械 retract（adjudication 段に置く） |
 | `budget` | int | — | このステージのエントリ予算 |
 
 サブテーブル `[stages.<id>.actors]`:

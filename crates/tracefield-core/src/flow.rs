@@ -175,6 +175,9 @@ pub struct StageConfig {
     /// `meta.refutes` is retracted (status-driven), so a later assembler sees
     /// only survivors. Keeps the verdict fold out of the LLM (invariant #1).
     pub retract_overturned: bool,
+    /// Opt in to source-grounding discipline (evidence-quote contract + machine verification)
+    /// regardless of stage/organ/role naming. See is_source_grounded_stage.
+    pub grounded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -707,6 +710,7 @@ impl FlowConfig {
                 command,
                 artifact,
                 retract_overturned: bool_value(&values, "retract_overturned").unwrap_or(false),
+                grounded: bool_value(&values, "grounded").unwrap_or(false),
             });
         }
 
@@ -918,7 +922,8 @@ async fn execute_stage(
                 &selected,
                 &scaling,
             );
-            let new_entries = apply_core_gates(new_entries, store, config, stage, &selected);
+            let new_entries =
+                apply_core_gates(new_entries, store, config, stage, &scenario.dir, &selected);
             let new_entries = attach_work_item_meta(new_entries, work_item);
             let stored = store.absorb(new_entries, "flow-cluster");
             stage_entries.extend(stored);
@@ -951,7 +956,8 @@ async fn execute_stage(
                 &scaling,
             )
             .await?;
-            let new_entries = apply_core_gates(new_entries, store, config, stage, &selected);
+            let new_entries =
+                apply_core_gates(new_entries, store, config, stage, &scenario.dir, &selected);
             let new_entries = attach_work_item_meta(new_entries, work_item);
             let stored = store.absorb(new_entries, "flow-command");
             stage_entries.extend(stored);
@@ -1047,8 +1053,14 @@ async fn execute_stage(
                     work_item,
                 )
                 .await?;
-                let new_entries =
-                    apply_core_gates(new_entries, store, config, stage, &actor_selected);
+                let new_entries = apply_core_gates(
+                    new_entries,
+                    store,
+                    config,
+                    stage,
+                    &scenario.dir,
+                    &actor_selected,
+                );
                 let new_entries = attach_work_item_meta(new_entries, work_item);
                 let stored = store.absorb(new_entries, &actor_id);
                 log_flow_progress(
@@ -1070,7 +1082,14 @@ async fn execute_stage(
         let existing = existing_work_item_entries(store, stage, work_item, Some(0), Some("flow"));
         if existing.is_empty() {
             let new_entry = deterministic_stage_marker(config, stage, budget_step, &scaling);
-            let new_entry = apply_core_gates(vec![new_entry], store, config, stage, &selected);
+            let new_entry = apply_core_gates(
+                vec![new_entry],
+                store,
+                config,
+                stage,
+                &scenario.dir,
+                &selected,
+            );
             let new_entry = attach_work_item_meta(new_entry, work_item);
             stage_entries.extend(store.absorb(new_entry, "flow"));
             checkpoint_flow_store(store, persist_path)?;
@@ -1217,6 +1236,7 @@ async fn execute_stage_actors_parallel(
             store,
             config,
             stage,
+            &scenario.dir,
             &actor_output.selected,
         );
         let new_entries = attach_work_item_meta(new_entries, work_item);
@@ -1319,7 +1339,8 @@ async fn execute_process_stage(
             &work_item,
         )
         .await?;
-        let new_entries = apply_core_gates(new_entries, store, config, &stage, &selected);
+        let new_entries =
+            apply_core_gates(new_entries, store, config, &stage, &scenario.dir, &selected);
         let new_entries = attach_work_item_meta(new_entries, &work_item);
         let stored = store.absorb(new_entries, &actor_id);
         log_flow_progress(
@@ -1375,6 +1396,7 @@ fn process_stage_config(config: &FlowConfig, kind: ProcessStageKind) -> StageCon
         command: None,
         artifact: None,
         retract_overturned: false,
+        grounded: false,
     }
 }
 
@@ -2631,6 +2653,7 @@ fn apply_core_gates(
     store: &ReferenceStore,
     config: &FlowConfig,
     stage: &StageConfig,
+    scenario_dir: &Path,
     selected: &[Entry],
 ) -> Vec<NewEntry> {
     let active_ids = store
@@ -2694,10 +2717,15 @@ fn apply_core_gates(
                 if entry.entry_type != EntryType::Question {
                     if let Some(quote) = evidence_quote(&entry.meta) {
                         let mut checked_quote = quote.clone();
-                        let quote_found =
-                            evidence_quote_found_in_citations(store, &entry.citations, &quote);
+                        let quote_found = quote_grounded(
+                            store,
+                            scenario_dir,
+                            &entry.citations,
+                            &entry.meta,
+                            &quote,
+                        );
                         if (weak_evidence_quote(&quote) || !quote_found)
-                            && repair_evidence_quote(store, &mut entry, &quote)
+                            && repair_evidence_quote(store, scenario_dir, &mut entry, &quote)
                             && let Some(repaired) = evidence_quote(&entry.meta)
                         {
                             checked_quote = repaired;
@@ -2710,16 +2738,29 @@ fn apply_core_gates(
                                 .entry("evidence_strength".to_string())
                                 .or_insert_with(|| json!("needs_review"));
                         }
-                        if !evidence_quote_found_in_citations(
+                        match quote_grounding(
                             store,
+                            scenario_dir,
                             &entry.citations,
+                            &entry.meta,
                             &checked_quote,
                         ) {
-                            add_data_quality_warning(&mut entry.meta, "evidence_quote_not_found");
-                            entry
-                                .meta
-                                .entry("evidence_strength".to_string())
-                                .or_insert_with(|| json!("needs_review"));
+                            Some(QuoteGrounding::OnDisk) => {
+                                entry
+                                    .meta
+                                    .insert("evidence_grounded".to_string(), json!("on_disk"));
+                            }
+                            Some(QuoteGrounding::CitedStore) => {}
+                            None => {
+                                add_data_quality_warning(
+                                    &mut entry.meta,
+                                    "evidence_quote_not_found",
+                                );
+                                entry
+                                    .meta
+                                    .entry("evidence_strength".to_string())
+                                    .or_insert_with(|| json!("needs_review"));
+                            }
                         }
                     } else {
                         add_data_quality_warning(&mut entry.meta, "missing_evidence_quote");
@@ -2770,6 +2811,9 @@ fn apply_core_gates(
 }
 
 fn is_source_grounded_stage(stage: &StageConfig) -> bool {
+    if stage.grounded {
+        return true;
+    }
     if stage.id.starts_with("source_") || stage.id.contains("web") || stage.id.contains("data") {
         return true;
     }
@@ -2830,8 +2874,100 @@ fn evidence_quote_found_in_citations(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuoteGrounding {
+    CitedStore,
+    OnDisk,
+}
+
+fn quote_grounded(
+    store: &ReferenceStore,
+    scenario_dir: &Path,
+    citations: &[String],
+    meta: &Map<String, Value>,
+    quote: &str,
+) -> bool {
+    quote_grounding(store, scenario_dir, citations, meta, quote).is_some()
+}
+
+fn quote_grounding(
+    store: &ReferenceStore,
+    scenario_dir: &Path,
+    citations: &[String],
+    meta: &Map<String, Value>,
+    quote: &str,
+) -> Option<QuoteGrounding> {
+    if evidence_quote_found_in_citations(store, citations, quote) {
+        return Some(QuoteGrounding::CitedStore);
+    }
+    if quote_found_on_disk(scenario_dir, meta, quote) {
+        return Some(QuoteGrounding::OnDisk);
+    }
+    None
+}
+
+fn quote_found_on_disk(scenario_dir: &Path, meta: &Map<String, Value>, quote: &str) -> bool {
+    let Some(rel) = meta
+        .get("source_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let rel_path = Path::new(rel);
+
+    let quote_parts = evidence_quote_parts(quote);
+    if quote_parts.is_empty() {
+        return false;
+    }
+
+    let path = scenario_dir.join(rel_path);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    let Ok(content) = fs::read_to_string(&path) else {
+        return false;
+    };
+
+    let window = evidence_window_around_source_line(&content, source_line(meta));
+    let haystack = normalize_evidence_text(&window);
+    quote_parts
+        .iter()
+        .all(|part| haystack.contains(&normalize_evidence_text(part)))
+}
+
+fn source_line(meta: &Map<String, Value>) -> Option<usize> {
+    match meta.get("source_line")? {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|line| *line > 0),
+        Value::String(value) => value.trim().parse::<usize>().ok().filter(|line| *line > 0),
+        _ => None,
+    }
+}
+
+fn evidence_window_around_source_line(content: &str, source_line: Option<usize>) -> String {
+    let Some(source_line) = source_line else {
+        return content.to_string();
+    };
+    let lines = content.lines().collect::<Vec<_>>();
+    if source_line == 0 || source_line > lines.len() {
+        return content.to_string();
+    }
+    let center = source_line - 1;
+    let start = center.saturating_sub(40);
+    let end = (center + 41).min(lines.len());
+    lines[start..end].join("\n")
+}
+
 fn repair_evidence_quote(
     store: &ReferenceStore,
+    scenario_dir: &Path,
     entry: &mut NewEntry,
     original_quote: &str,
 ) -> bool {
@@ -2840,7 +2976,13 @@ fn repair_evidence_quote(
     else {
         return false;
     };
-    if !evidence_quote_found_in_citations(store, &entry.citations, &repaired) {
+    if !quote_grounded(
+        store,
+        scenario_dir,
+        &entry.citations,
+        &entry.meta,
+        &repaired,
+    ) {
         return false;
     }
     entry.meta.insert(
@@ -4033,7 +4175,7 @@ fn source_grounding_contract_prompt(stage: &StageConfig) -> String {
             .to_string();
     }
 
-    "SOURCE_GROUNDING_CONTRACT: In source/data stages, extract only facts directly supported by selected CONTEXT entries. Do not use outside knowledge and do not turn source content into Tracefield design recommendations. For every non-question entry, citations must contain the exact CONTEXT entry id that supports the claim, and meta.evidence_quote must be an exact contiguous 8-30 word substring copied from that cited CONTEXT entry. The claim text may only paraphrase what meta.evidence_quote says. Do not stitch a heading and a later paragraph into one quote. Do not use table-of-contents, navigation, isolated heading lists, or ellipsized text as meta.evidence_quote; choose a complete prose sentence or clause. Do not add facts that are merely plausible from the title or navigation. Include meta.claim_role as source_evidence, gap, or low_quality_source. If no exact quote supports the claim, emit type question with meta.action=\"recollect\" instead of observation/requirement. In later long-run cycles, focus on gaps from feedback request entries and avoid restating already extracted evidence unless it resolves a contradiction.".to_string()
+    "SOURCE_GROUNDING_CONTRACT: In source/data stages, extract only facts directly supported by selected CONTEXT entries. Do not use outside knowledge and do not turn source content into Tracefield design recommendations. For every non-question entry, citations must contain the exact CONTEXT entry id that supports the claim, and meta.evidence_quote must be an exact contiguous 8-30 word substring copied from that cited CONTEXT entry. The claim text may only paraphrase what meta.evidence_quote says. Do not stitch a heading and a later paragraph into one quote. Do not use table-of-contents, navigation, isolated heading lists, or ellipsized text as meta.evidence_quote; choose a complete prose sentence or clause. Do not add facts that are merely plausible from the title or navigation. Include meta.claim_role as source_evidence, gap, or low_quality_source. If no exact quote supports the claim, emit type question with meta.action=\"recollect\" instead of observation/requirement. If the claim is grounded in a file you re-opened rather than in inline CONTEXT text, also set meta.source_path to that file's path relative to the scenario directory and meta.source_line to the line number, and copy meta.evidence_quote verbatim from that file. In later long-run cycles, focus on gaps from feedback request entries and avoid restating already extracted evidence unless it resolves a contradiction.".to_string()
 }
 
 fn feedback_schema_prompt(config: &FlowConfig) -> String {
@@ -5210,6 +5352,7 @@ mod tests {
             command: None,
             artifact: None,
             retract_overturned: false,
+            grounded: false,
         };
         (scenario, stage)
     }
@@ -6286,6 +6429,7 @@ outputs = ["observation"]
             &store,
             &config,
             stage,
+            Path::new("."),
             std::slice::from_ref(&source),
         );
 
@@ -6346,6 +6490,7 @@ outputs = ["observation"]
             &store,
             &feedback_config,
             feedback_stage,
+            Path::new("."),
             std::slice::from_ref(&source),
         );
 
@@ -6483,6 +6628,7 @@ outputs = ["change", "decision"]
             command: None,
             artifact: None,
             retract_overturned: false,
+            grounded: false,
         };
 
         assert_eq!(
@@ -6948,6 +7094,7 @@ outputs = ["observation", "question"]
             &store,
             &config,
             stage,
+            Path::new("."),
             std::slice::from_ref(&source),
         );
 
@@ -7021,6 +7168,7 @@ outputs = ["observation", "question"]
             &store,
             &config,
             stage,
+            Path::new("."),
             std::slice::from_ref(&source),
         );
 
@@ -7083,6 +7231,7 @@ outputs = ["observation", "question"]
             &store,
             &config,
             stage,
+            Path::new("."),
             std::slice::from_ref(&source),
         );
 
@@ -7110,6 +7259,307 @@ outputs = ["observation", "question"]
             &[source.id],
             repaired
         ));
+    }
+
+    #[test]
+    fn grounded_flag_enables_evidence_quote_gate() {
+        let mut store = ReferenceStore::new();
+        let source = store.push(
+            NewEntry::new(
+                EntryType::CorpusChunk,
+                "scenario",
+                "This entry documents parser behavior without mentioning review quorum policy.",
+            )
+            .with_meta("kind", json!("input")),
+            "scenario",
+        );
+        let grounded_config = FlowConfig::parse(
+            r#"
+[flow]
+profile = "grounded_flag_test"
+policy = "fixed"
+
+[stages.analysis]
+grounded = true
+outputs = ["observation"]
+"#,
+        )
+        .unwrap();
+        let ungrounded_config = FlowConfig::parse(
+            r#"
+[flow]
+profile = "ungrounded_flag_test"
+policy = "fixed"
+
+[stages.analysis]
+outputs = ["observation"]
+"#,
+        )
+        .unwrap();
+        let entry = NewEntry::new(
+            EntryType::Observation,
+            "agent",
+            "Analysis claims the merge policy requires reviewer quorum.",
+        )
+        .with_citations(vec![source.id.clone()])
+        .with_meta(
+            "evidence_quote",
+            json!(
+                "The fabricated source says a quorum of seven reviewers must approve every merge."
+            ),
+        );
+
+        let grounded = apply_core_gates(
+            vec![entry.clone()],
+            &store,
+            &grounded_config,
+            &grounded_config.stages[0],
+            Path::new("."),
+            std::slice::from_ref(&source),
+        );
+        let ungrounded = apply_core_gates(
+            vec![entry],
+            &store,
+            &ungrounded_config,
+            &ungrounded_config.stages[0],
+            Path::new("."),
+            std::slice::from_ref(&source),
+        );
+
+        assert!(entry_has_quality_warning(
+            &grounded[0],
+            "evidence_quote_not_found"
+        ));
+        assert!(!entry_has_quality_warning(
+            &ungrounded[0],
+            "evidence_quote_not_found"
+        ));
+    }
+
+    #[test]
+    fn on_disk_evidence_quote_grounds_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let quote = "The verifier accepts claims only when a copied evidence quote appears in the source file.";
+        fs::write(
+            dir.path().join("src.rs"),
+            format!("fn unrelated() {{}}\n// {quote}\npub fn grounded_reading() {{}}\n"),
+        )
+        .unwrap();
+
+        let mut store = ReferenceStore::new();
+        let pointer = store.push(
+            NewEntry::new(
+                EntryType::CorpusChunk,
+                "scenario",
+                "path: src.rs\nlines: 2-2",
+            )
+            .with_meta("kind", json!("input")),
+            "scenario",
+        );
+        let config = FlowConfig::parse(
+            r#"
+[flow]
+profile = "on_disk_quote_test"
+policy = "fixed"
+
+[stages.analysis]
+grounded = true
+outputs = ["observation"]
+"#,
+        )
+        .unwrap();
+        let stage = &config.stages[0];
+
+        let gated = apply_core_gates(
+            vec![
+                NewEntry::new(
+                    EntryType::Observation,
+                    "agent",
+                    "The verifier requires copied evidence quotes to appear in source files.",
+                )
+                .with_citations(vec![pointer.id.clone()])
+                .with_meta("source_path", json!("src.rs"))
+                .with_meta("source_line", json!(2))
+                .with_meta("evidence_quote", json!(quote)),
+                NewEntry::new(
+                    EntryType::Observation,
+                    "agent",
+                    "The verifier accepts fabricated source claims.",
+                )
+                .with_citations(vec![pointer.id.clone()])
+                .with_meta("source_path", json!("src.rs"))
+                .with_meta("source_line", json!(2))
+                .with_meta(
+                    "evidence_quote",
+                    json!("The verifier allows fabricated quotes to pass without checking files."),
+                ),
+            ],
+            &store,
+            &config,
+            stage,
+            dir.path(),
+            std::slice::from_ref(&pointer),
+        );
+
+        assert!(!entry_has_quality_warning(
+            &gated[0],
+            "evidence_quote_not_found"
+        ));
+        assert_eq!(
+            gated[0]
+                .meta
+                .get("evidence_grounded")
+                .and_then(Value::as_str),
+            Some("on_disk")
+        );
+        assert!(entry_has_quality_warning(
+            &gated[1],
+            "evidence_quote_not_found"
+        ));
+    }
+
+    #[test]
+    fn on_disk_parent_dir_path_grounds_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let scenario_dir = dir.path().join("scenario");
+        let sibling_dir = dir.path().join("sibling");
+        fs::create_dir(&scenario_dir).unwrap();
+        fs::create_dir(&sibling_dir).unwrap();
+        fs::write(
+            sibling_dir.join("src.rs"),
+            "fn answer() -> u32 { 42 }\nfn unrelated() {}\n",
+        )
+        .unwrap();
+
+        let mut store = ReferenceStore::new();
+        let pointer = store.push(
+            NewEntry::new(
+                EntryType::CorpusChunk,
+                "scenario",
+                "path: ../sibling/src.rs\nlines: 1-1",
+            )
+            .with_meta("kind", json!("input")),
+            "scenario",
+        );
+        let config = FlowConfig::parse(
+            r#"
+[flow]
+profile = "parent_dir_on_disk_quote_test"
+policy = "fixed"
+
+[stages.analysis]
+grounded = true
+outputs = ["observation"]
+"#,
+        )
+        .unwrap();
+        let stage = &config.stages[0];
+
+        let gated = apply_core_gates(
+            vec![
+                NewEntry::new(
+                    EntryType::Observation,
+                    "agent",
+                    "The source defines an answer function returning 42.",
+                )
+                .with_citations(vec![pointer.id.clone()])
+                .with_meta("source_path", json!("../sibling/src.rs"))
+                .with_meta("source_line", json!(1))
+                .with_meta("evidence_quote", json!("answer() -> u32 { 42 }")),
+                NewEntry::new(
+                    EntryType::Observation,
+                    "agent",
+                    "The source defines a fabricated answer.",
+                )
+                .with_citations(vec![pointer.id.clone()])
+                .with_meta("source_path", json!("../sibling/src.rs"))
+                .with_meta("source_line", json!(1))
+                .with_meta("evidence_quote", json!("answer() -> u32 { 43 }")),
+            ],
+            &store,
+            &config,
+            stage,
+            &scenario_dir,
+            std::slice::from_ref(&pointer),
+        );
+
+        assert!(!entry_has_quality_warning(
+            &gated[0],
+            "evidence_quote_not_found"
+        ));
+        assert_eq!(
+            gated[0]
+                .meta
+                .get("evidence_grounded")
+                .and_then(Value::as_str),
+            Some("on_disk")
+        );
+        assert!(entry_has_quality_warning(
+            &gated[1],
+            "evidence_quote_not_found"
+        ));
+    }
+
+    #[test]
+    fn on_disk_missing_source_path_does_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = ReferenceStore::new();
+        let pointer = store.push(
+            NewEntry::new(
+                EntryType::CorpusChunk,
+                "scenario",
+                "path: missing.rs\nlines: 1-1",
+            )
+            .with_meta("kind", json!("input")),
+            "scenario",
+        );
+        let config = FlowConfig::parse(
+            r#"
+[flow]
+profile = "missing_on_disk_quote_test"
+policy = "fixed"
+
+[stages.analysis]
+grounded = true
+outputs = ["observation"]
+"#,
+        )
+        .unwrap();
+        let stage = &config.stages[0];
+
+        let gated = apply_core_gates(
+            vec![
+                NewEntry::new(
+                    EntryType::Observation,
+                    "agent",
+                    "The missing source claims are treated as ungrounded.",
+                )
+                .with_citations(vec![pointer.id.clone()])
+                .with_meta("source_path", json!("missing.rs"))
+                .with_meta("source_line", json!(1))
+                .with_meta(
+                    "evidence_quote",
+                    json!("The missing source says this claim can still be verified."),
+                ),
+            ],
+            &store,
+            &config,
+            stage,
+            dir.path(),
+            std::slice::from_ref(&pointer),
+        );
+
+        assert!(entry_has_quality_warning(
+            &gated[0],
+            "evidence_quote_not_found"
+        ));
+        assert_ne!(
+            gated[0]
+                .meta
+                .get("evidence_grounded")
+                .and_then(Value::as_str),
+            Some("on_disk")
+        );
     }
 
     fn entry_has_quality_warning(entry: &NewEntry, warning: &str) -> bool {
