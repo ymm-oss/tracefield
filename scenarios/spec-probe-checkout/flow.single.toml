@@ -1,0 +1,19 @@
+# Arm S0 — naive 単一: 観点は自分で判断
+[flow]
+profile = "spec-probe-single"
+policy = "fixed"
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+[organs.reasoning]
+adapter = "codex-app-server"
+timeout_seconds = 600
+[stages.interrogate]
+organ = "reasoning"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["observation", "question"]
+[stages.interrogate.actors]
+mode = "fixed"
+count = 1
+roles = ["SINGLE"]
