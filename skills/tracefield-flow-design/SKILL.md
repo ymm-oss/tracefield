@@ -77,6 +77,13 @@ analysis（直交レンズのパネル） → verify（FALSIFY/COUNTER） → ad
 - **supersede（問い/主張が変わった）**: `tracefield supersede --entry <旧> --with <新>` で旧 entry＋下流閉包を `Superseded`（`superseded_by=<新>`）にし、後継 entry は Active に残す（後継が旧を cite していても埋もれない）。古い問いに答えた結論群が閉包ごと退場し、新しい問いの下で再調査できる。
 - **再集約は自動でなく手動**: 読み取り経路（入力セレクタ・`tracefield aggregate`・serve）は全て `Active` 限定なので、retract/supersede 後に `aggregate` を再実行すると除外分が落ちて基盤が再計算される。手動なのは設計判断で、黙って再集約すると「結論が変わった」事実が silent recompute に消えるため、閉包を人間に見せる（鉄則の no-silent-drop の裏返し）。
 
+### 接地ゲート（grounded flag・読み取りハルシネーション抑制・findings-grounded-reading）
+レンズ（解釈）が**読み取った主張を出典に逐語照合**する per-claim ゲート。`[stages.<id>] grounded = true` で、その段の各主張に `meta.evidence_quote`（出典の逐語部分文字列8〜30語）を要求し、**引用 store エントリ本文 ∪ `meta.source_path`(+`source_line`) の実ファイル**に機械照合する（外れたら `evidence_quote_not_found`＋`needs_review`、per-claim・retract 閉包内・no-silent-drop）。LLM 不使用の決定論照合＝再接地テーゼ（citation-precision を 0.40→1.00、H1c で審判の覆し決定性を律速）をエンジン側で実装。
+- **効き所**: コード/文書の**読み取り段**（analysis / evidence / spec_draft / verify）の主張捏造を機械検出。`relies_on` の真偽を初めて機械検証する。**文書**は store チャンク（in-store 照合）、**コード**は disk 上ファイル（actor が `meta.source_path`/`source_line` を申告し on-disk 照合）。
+- **接地プローブ（下記）との別**: ゲートは**主張単位の忠実性**（引用行が主張を支持するか）、プローブは**組み上がった成果物の整合性/外部裁定**（fslc/cargo test）。両者は直交＝併用する（fsl-codespec は verify を grounded、assemble 後段に fslc_gate プローブ）。
+- **粒度の注意**: 照合は **entry 単位**（1エントリ＝1 evidence_quote）。複合エントリ（領域 digest・多主張 fragment）は anchor 照合（丸ごと捏造の検出）に留まる ── per-claim full 接地は**反証/事実が atomic な段**（verify 等）で成立。digest 段は grounded にせず下流で再接地する。
+- レンズは grounded にしてよいが、**操作系（止揚/反証/審判）の段**は出力が引用の逐語写しでない（verdict・合成）ので grounded 対象外。`source_`/`web`/`data` を id/organ/role に含む段は従来通り自動で grounded（明示 flag が推奨・脆い名前依存を脱する）。
+
 ### 接地プローブ（probe＝決定論コマンドステージ・findings-command-probe）
 レンズ（解釈）の対極の**センサ（計測）**。`[stages.<id>.command]` ＋ `[actors] mode="none"` で外部コマンドを1回走らせ stdout を1エントリに畳む（設定は operator の flow-spec）。LLM を介さない＝**confab 原理ゼロの最も忠実な器官**（鉄則2の極限点）で、決定論・exit/JSON・provenance 化が `aggregate` の機械集約哲学と同型。
 - 効き所は **verify/adjudication の接地**: 「LLM が反証されたと*思う*」を「`fslc`/`rg`/`cargo test` が事実として反証」に替える。BMC 反例は LLM が握り潰せない究極の FALSIFY。
