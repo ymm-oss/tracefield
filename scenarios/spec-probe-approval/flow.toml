@@ -1,0 +1,19 @@
+# Arm O — 5つの哲学レンズが各自の文脈で仕様を「問う」(隔離)。出力は散文の指摘。
+[flow]
+profile = "spec-interrogation"
+policy = "fixed"
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 10
+max_parallel_actors = 3
+[organs.reasoning]
+adapter = "codex-app-server"
+timeout_seconds = 600
+[stages.interrogate]
+organ = "reasoning"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["observation", "question"]
+[stages.interrogate.actors]
+mode = "fixed"
+count = 5
+roles = ["QANSWER", "PROBLEMATIZE", "INVERT", "HARM", "ASCEND"]
