@@ -1,0 +1,39 @@
+# Arm O — テスト観点の隔離発見 → 統合。多様な失敗様式ハンターを別々の文脈で立て、
+# 機械集約(=単一の pytest スイート)に畳む。観点発見=オーケストレーションの edge。
+[flow]
+profile = "testgen-perspective-discovery"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 30
+max_parallel_actors = 3
+
+[organs.reasoning]
+adapter = "codex-app-server"
+timeout_seconds = 600
+
+[organs.deep]
+adapter = "codex-app-server"
+timeout_seconds = 900
+max_tokens = 6000
+
+# 5つの直交するテスト観点が、各自の文脈で失敗様式/テストケースを列挙
+[stages.testlenses]
+organ = "reasoning"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["decision"]
+[stages.testlenses.actors]
+mode = "fixed"
+count = 5
+roles = ["T_BOUNDARY", "T_ADVERSARIAL", "T_STRUCTURE", "T_PROPERTY", "T_AMBIGUITY"]
+
+# 全観点を実行可能な単一 pytest スイートに統合(機械集約の人間可読版)
+[stages.testgen]
+organ = "deep"
+inputs = ["stage:testlenses", "path:task.md", "kind:input"]
+outputs = ["synthesis"]
+[stages.testgen.actors]
+mode = "fixed"
+count = 1
+roles = ["T_TESTGEN"]

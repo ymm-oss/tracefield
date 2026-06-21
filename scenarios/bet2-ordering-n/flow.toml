@@ -1,0 +1,73 @@
+# Arm O — 立場トーナメント(構造overturnを表面化できるか)
+# directions(両立しない6設計方向, 1つは素朴な default-attractor) → critique(per_input: 方向ごと1反証, meta.refutes)
+# → adjudication(per_input: 反証1件=1隔離審判, retract_overturned で素朴方向を機械 retract)
+# → select(生存方向を蒸留) → initiatives(最終設計を連続深掘り)
+# 一次指標: `tracefield aggregate --stage adjudication` の conclusion + overturn 集合(どの方向が覆ったか)
+[flow]
+profile = "bet2-position-tournament"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 40
+max_parallel_actors = 3
+
+[organs.reasoning]
+adapter = "codex-app-server"
+timeout_seconds = 600
+
+[organs.deep]
+adapter = "codex-app-server"
+timeout_seconds = 900
+max_tokens = 6000
+
+# 両立しない6つの設計方向を本気でコミットさせる(立場トーナメント)
+[stages.directions]
+organ = "reasoning"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["decision"]
+[stages.directions.actors]
+mode = "fixed"
+count = 6
+roles = ["SHIP", "DATA", "INVERT", "HARM", "LINEAGE", "ANALOGY"]
+
+# 各方向を隔離して1件ずつ全力で反証(per_input)。meta.refutes に攻撃対象方向の id。
+# outputs=observation のみ: 各 critique を必ず meta.refutes 付きの的を持つ反証に強制し、
+# adjudication の fan-out をノイズ question 分だけ削る(overturn 機構に question は不要)。
+[stages.critique]
+organ = "reasoning"
+inputs = ["stage:directions"]
+outputs = ["observation"]
+[stages.critique.actors]
+mode = "per_input"
+roles = ["CRITIQUE"]
+
+# 反証1件=1隔離審判。結論変更判定の指す方向(critique の meta.refutes)を機械 retract
+[stages.adjudication]
+organ = "reasoning"
+inputs = ["stage:critique"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+# 生存方向(retract されていない)を1本に絞り蒸留
+[stages.select]
+organ = "reasoning"
+inputs = ["stage:directions", "stage:adjudication"]
+outputs = ["synthesis"]
+[stages.select.actors]
+mode = "fixed"
+count = 1
+roles = ["SELECT"]
+
+# 蒸留ブリーフだけを足場に最終設計を連続深掘り(盲検審判が採点する成果物)
+[stages.initiatives]
+organ = "deep"
+inputs = ["stage:select"]
+outputs = ["synthesis", "decision"]
+[stages.initiatives.actors]
+mode = "fixed"
+count = 1
+roles = ["INITIATIVES"]

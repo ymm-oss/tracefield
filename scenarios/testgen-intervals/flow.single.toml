@@ -1,0 +1,24 @@
+# Arm S — 最良scaffold単一(neutral)。「テストケースを出し尽くせ、観点は自分で判断」。
+# 観点を渡さない公正なベースライン(bet2 の SINGLE_PLAIN と同方針)。
+[flow]
+profile = "testgen-single-baseline"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+
+[organs.deep]
+adapter = "codex-app-server"
+timeout_seconds = 900
+max_tokens = 6000
+
+[stages.single]
+organ = "deep"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["synthesis"]
+[stages.single.actors]
+mode = "fixed"
+count = 1
+roles = ["SINGLE_TEST"]

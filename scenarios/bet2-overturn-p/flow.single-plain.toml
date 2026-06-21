@@ -1,0 +1,25 @@
+# Arm S' — 非誘導ベースライン(arm Z/Y2 相当)。論点を出し尽くす+完全設計だが
+# 「不可逆損害を分析せよ/de-risk を先頭に」を渡さない(順序は自分で決めさせる)。
+# 私の元 Arm S 足場が overturn を答えとして渡していた交絡を除く公正な単一。
+[flow]
+profile = "bet2-single-neutral"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+
+[organs.deep]
+adapter = "codex-app-server"
+timeout_seconds = 900
+max_tokens = 6000
+
+[stages.single]
+organ = "deep"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["synthesis", "decision"]
+[stages.single.actors]
+mode = "fixed"
+count = 1
+roles = ["SINGLE_PLAIN"]

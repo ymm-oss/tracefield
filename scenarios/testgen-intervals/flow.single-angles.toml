@@ -1,0 +1,24 @@
+# Arm S1 — arm-W 対照。単一に O と*同じ5観点*を1文脈で与える(隔離しない)。
+# O(隔離) vs S1(1文脈に同観点) vs S0(観点なし) で「効くのは観点内容か隔離か」を切り分ける。
+[flow]
+profile = "testgen-single-with-angles"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+
+[organs.deep]
+adapter = "codex-app-server"
+timeout_seconds = 900
+max_tokens = 6000
+
+[stages.single]
+organ = "deep"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["synthesis"]
+[stages.single.actors]
+mode = "fixed"
+count = 1
+roles = ["SINGLE_ANGLES"]

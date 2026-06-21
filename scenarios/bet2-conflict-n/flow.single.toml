@@ -1,0 +1,25 @@
+# Arm S — 最良scaffold単一1パス(ベースライン = continuity-vs-diffusion の arm Z/Y2)
+# 同じ inputs を読み、強い足場(論点を出し尽くす/失敗様式・不可逆損害を分析/de-risk先頭)で
+# 単一の連続パスが構造overturnを独力で出せるか。出せれば K1 発火(edge は instructable)。
+[flow]
+profile = "bet2-single-baseline"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+
+[organs.deep]
+adapter = "codex-app-server"
+timeout_seconds = 900
+max_tokens = 6000
+
+[stages.single]
+organ = "deep"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["synthesis", "decision"]
+[stages.single.actors]
+mode = "fixed"
+count = 1
+roles = ["SINGLE"]

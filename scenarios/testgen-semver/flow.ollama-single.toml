@@ -1,0 +1,25 @@
+# S0 (naive) on ollama qwen3.6:27b — raw text output returns code blocks reliably
+# (codex-app-server returns prose summaries, unusable for code artifacts).
+[flow]
+profile = "testgen-single-ollama"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+
+[organs.deep]
+adapter = "ollama"
+model = "qwen3.6:27b"
+max_tokens = 4000
+timeout_seconds = 600
+
+[stages.single]
+organ = "deep"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["synthesis"]
+[stages.single.actors]
+mode = "fixed"
+count = 1
+roles = ["SINGLE_TEST"]

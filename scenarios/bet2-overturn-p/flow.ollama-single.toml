@@ -1,0 +1,23 @@
+# Arm S（最良scaffold単一）を弱モデル(ローカル gemma4:e4b)で。weak-single が構造解に届くか。
+[flow]
+profile = "bet2-single-baseline-ollama"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 4
+max_parallel_actors = 1
+
+[organs.deep]
+adapter = "ollama"
+model = "gemma4:e4b"
+max_tokens = 4000
+
+[stages.single]
+organ = "deep"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["synthesis", "decision"]
+[stages.single.actors]
+mode = "fixed"
+count = 1
+roles = ["SINGLE"]

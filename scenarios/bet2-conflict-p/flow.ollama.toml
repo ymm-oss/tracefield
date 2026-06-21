@@ -1,0 +1,63 @@
+# Arm O（立場トーナメント）を弱モデル(ローカル gemma4:e4b)で。行き先②(ローカル完結)の edge 検証。
+# 構造は flow.toml と同一、organ だけ ollama。ollama はファイルを開けないが本シナリオは grounded 段なしなので可。
+[flow]
+profile = "bet2-position-tournament-ollama"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 40
+max_parallel_actors = 2
+
+[organs.reasoning]
+adapter = "ollama"
+model = "gemma4:e4b"
+
+[organs.deep]
+adapter = "ollama"
+model = "gemma4:e4b"
+max_tokens = 4000
+
+[stages.directions]
+organ = "reasoning"
+inputs = ["path:task.md", "kind:input"]
+outputs = ["decision"]
+[stages.directions.actors]
+mode = "fixed"
+count = 6
+roles = ["SHIP", "DATA", "INVERT", "HARM", "LINEAGE", "ANALOGY"]
+
+[stages.critique]
+organ = "reasoning"
+inputs = ["stage:directions"]
+outputs = ["observation"]
+[stages.critique.actors]
+mode = "per_input"
+roles = ["CRITIQUE"]
+
+[stages.adjudication]
+organ = "reasoning"
+inputs = ["stage:critique"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+[stages.select]
+organ = "reasoning"
+inputs = ["stage:directions", "stage:adjudication"]
+outputs = ["synthesis"]
+[stages.select.actors]
+mode = "fixed"
+count = 1
+roles = ["SELECT"]
+
+[stages.initiatives]
+organ = "deep"
+inputs = ["stage:select"]
+outputs = ["synthesis", "decision"]
+[stages.initiatives.actors]
+mode = "fixed"
+count = 1
+roles = ["INITIATIVES"]
