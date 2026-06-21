@@ -77,12 +77,13 @@ analysis（直交レンズのパネル） → verify（FALSIFY/COUNTER） → ad
 - **supersede（問い/主張が変わった）**: `tracefield supersede --entry <旧> --with <新>` で旧 entry＋下流閉包を `Superseded`（`superseded_by=<新>`）にし、後継 entry は Active に残す（後継が旧を cite していても埋もれない）。古い問いに答えた結論群が閉包ごと退場し、新しい問いの下で再調査できる。
 - **再集約は自動でなく手動**: 読み取り経路（入力セレクタ・`tracefield aggregate`・serve）は全て `Active` 限定なので、retract/supersede 後に `aggregate` を再実行すると除外分が落ちて基盤が再計算される。手動なのは設計判断で、黙って再集約すると「結論が変わった」事実が silent recompute に消えるため、閉包を人間に見せる（鉄則の no-silent-drop の裏返し）。
 
-### 接地プローブ（probe＝決定論コマンドステージ）
+### 接地プローブ（probe＝決定論コマンドステージ・findings-command-probe）
 レンズ（解釈）の対極の**センサ（計測）**。`[stages.<id>.command]` ＋ `[actors] mode="none"` で外部コマンドを1回走らせ stdout を1エントリに畳む（設定は operator の flow-spec）。LLM を介さない＝**confab 原理ゼロの最も忠実な器官**（鉄則2の極限点）で、決定論・exit/JSON・provenance 化が `aggregate` の機械集約哲学と同型。
 - 効き所は **verify/adjudication の接地**: 「LLM が反証されたと*思う*」を「`fslc`/`rg`/`cargo test` が事実として反証」に替える。BMC 反例は LLM が握り潰せない究極の FALSIFY。
 - 選択エントリを引用するので **retract 閉包に入る**（誤フラグのコマンドは retract で閉包ごと落ちる）。**非ゼロ終了は所見**として記録（spawn 失敗・timeout のみ run を止める）。
 - `{input}` で上流エントリを渡せるが、**LLM 散文を argv に文字列補間しない**（注入・脆い）。内容は一時ファイル／`< {input}` 経由。fence 抽出など道具固有の整形は**コマンド文字列＝データ側**に置き、engine は計測に留める。
 - **粒度の注意**: `fslc` 等の全体検査ツールは*組み上がった成果物*にしか効かない → assemble の後段に置く。断片段（verify 等）に挿せると誤解しない。repair は可視の再実行に留める（自動フィードバックは鉄則3の silent recompute に触れる）。
+- **実測（findings-command-probe）**: fsl-codespec の fslc_gate を実 codex＋実 fslc で検証。判定は closure に乗り、基盤 overturn で stale な fslc 判定が自動退場する（不変条件②）。一方 fslc `verified` は user invariant が無いと型境界のみの**自明 green**になりうる ── ゲートの "no user invariants" 警告がその vacuous green を露出する（`verified` は必要条件であって十分条件でない）。
 
 ## 設計に効く制約（運用機構は tracefield-operator）
 - **モデルは合成の頑健性に効く設計変数**。弱いモデルは大入力で合成が激しく崩れる（レンズ脱落・結論反転）→ 鉄則2「小規模域に留める」を一層厳守。例: `adapter="cli" command="claude" model="claude-sonnet-4-6"`（adapter/model の権威ある設定・mock検証・ビルド済みバイナリ等の運用は operator 参照）。

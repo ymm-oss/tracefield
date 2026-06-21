@@ -46,14 +46,13 @@ ln -s <fsl>/skills/fsl-design scenarios/fsl-codespec/skills/fsl-design
 ```
 （`<fsl>` = ローカルの FSL リポジトリ。）agents.json の `"skills": ["fsl","fsl-design"]` は**この配置のフェイルファスト**（未配置ならシナリオ読み込みが「skill fsl not found」で止まる）と provenance 帰属のためで、codex には本文を自動注入しない（注入は Ollama/OpenRouter 時のみ）。**codex は上記ファイルを cwd 相対で自分で開く**ので、配置さえあれば文法は届く。
 
-## 出力・fslc ゲート・realize（決定的 ＋ 監査つき再実行 repair）
-調査段は read-only。fslc 検証は**段7 `fslc_gate`（決定論コマンドステージ）が flow 内で実行**し、最終 `.fsl` の配置だけ realize で決定的に行う（エージェントにファイルを書かせない＝中核の provenance/監査を壊さない）。
+## 出力・fslc ゲート（決定的 ＋ 監査つき再実行 repair）
+調査段は read-only。fslc 検証は**段7 `fslc_gate`（決定論コマンドステージ）が flow 内で実行**する（エージェントにファイルを書かせない＝中核の provenance/監査を壊さない）。**`.fsl` は使い捨ての検証物**で、fslc_gate が毎 run 一時ファイルに再生成して検証する。正準仕様は **ASSEMBLE synthesis エントリ**（`--persist` した run.jsonl に永続）で、ファイルとして残したい時はそのエントリの ```fsl を取り出す。
 - ASSEMBLE は整合した FSL design 仕様を **```fsl コードフェンス**で出す。各要素の依拠は FSL 行コメント `// relies_on: file:line`。落とした主張（反証・非接地で除外）と repair 注記は**フェンス外**（no-silent-drop）。
 - **段7 fslc_gate（in-flow・第二の機械裁定・LLM 不使用）**: assemble の ```fsl を抽出し `fslc check`→`fslc verify`。結果は assemble を引用する observation（**retract 閉包内・exit を `meta.exit_code`**）。非ゼロ=赤は所見として残り run は止まらない。
-- realize（最終配置のみ・決定的）:
+- 実行（fslc_gate まで1発）:
   ```sh
   tracefield run --scenario-dir scenarios/fsl-codespec --persist scenarios/fsl-codespec/run.jsonl
-  ./scenarios/fsl-codespec/realize.sh scenarios/fsl-codespec/run.jsonl <fsl>/specs/<out>.fsl
   ```
 - **repair は監査つき再実行**: fslc_gate が赤なら、その出力（`fslc_gate` エントリ/`exit_code`）と該当 `// relies_on` を出典に spec を直して**フロー再実行**（各実行は別 provenance＝沈黙の上書きをしない。不変条件③）。
   - 書き換えの根拠は **`file:line` か fslc 診断のみ**。fslc を緑にするため制約を発明するな（緑-by-捏造は最大のハルシネーション源）。
