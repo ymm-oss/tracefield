@@ -163,7 +163,7 @@ fn drive_session(
         &mut writer,
         1,
         "initialize",
-        json!({"clientInfo": {"name": "tracefield", "version": "0.1.0"}}),
+        json!({"clientInfo": {"name": "tracefield", "version": "0.1.0"}, "capabilities": {"experimentalApi": true}}),
     )?;
     wait_for_response(&mut lines, 1).context("initialize failed")?;
 
