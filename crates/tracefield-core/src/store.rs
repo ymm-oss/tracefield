@@ -196,8 +196,16 @@ impl ReferenceStore {
             let mut targets: Vec<String> = Vec::new();
             for refutation_id in &verdict.citations {
                 if let Some(refutation) = self.get(refutation_id) {
-                    if let Some(ids) = refutation.meta.get("refutes").and_then(Value::as_array) {
-                        targets.extend(ids.iter().filter_map(Value::as_str).map(String::from));
+                    // `refutes` may be a JSON array of ids or a single scalar id —
+                    // agents emit both forms; accept either so a scalar-form
+                    // refutation is not silently dropped (which would leave the
+                    // overturn UNACTIONED despite a valid target).
+                    match refutation.meta.get("refutes") {
+                        Some(Value::Array(ids)) => {
+                            targets.extend(ids.iter().filter_map(Value::as_str).map(String::from));
+                        }
+                        Some(Value::String(id)) => targets.push(id.clone()),
+                        _ => {}
                     }
                 }
             }
@@ -446,6 +454,31 @@ mod tests {
         // A conditional verdict retracts nothing and is not an unactioned overturn.
         let r2 = store.reconcile_overturned(&[conditional]);
         assert!(r2.retracted.is_empty() && r2.unactioned.is_empty());
+    }
+
+    #[test]
+    fn reconcile_accepts_scalar_refutes() {
+        // Agents emit meta.refutes as a bare string (not an array) about half the
+        // time; reconcile must action it, else the overturn is silently UNACTIONED.
+        let mut store = ReferenceStore::new();
+        let target =
+            store.push(NewEntry::new(EntryType::Decision, "spec", "claim under attack"), "spec");
+        let refutation = store.push(
+            NewEntry::new(EntryType::Observation, "FRONTIER", "this claim fails")
+                .with_citations(vec![target.id.clone()])
+                .with_meta("refutes", serde_json::json!(target.id.clone())),
+            "FRONTIER",
+        );
+        let overturn = store.push(
+            NewEntry::new(EntryType::Decision, "ADJ", "判定: 結論変更を要する。")
+                .with_citations(vec![refutation.id.clone()]),
+            "ADJ",
+        );
+        let report = store.reconcile_overturned(&[overturn]);
+        assert_eq!(report.retracted.len(), 1);
+        assert_eq!(report.retracted[0].0, target.id);
+        assert!(report.unactioned.is_empty());
+        assert_eq!(store.get(&target.id).unwrap().status, EntryStatus::Retracted);
     }
 
     #[test]

@@ -262,6 +262,18 @@ roles = ["ADJ_AH"]
 
 実例 `scenarios/codegen-econ-reread/flow.codex-debate.toml`。網羅を更に固めるなら rebut を `per_input`＋`inputs=["entry_type:decision"]`（1主張=1反証で見逃す裁量を消す）。**残存限界**: 討論者も審判も同一モデルなら片極の論が弱くなる残存 prior は消えない（覆り数の非対称で可視化）。真の対照は stage 別 `organ` の異種モデル。反 halo＋動機づけ討論は*ほぼ全主張を覆す*過懐疑傾向＝信号は「勝者」でなく「条件分岐の綜合」。
 
+## 8. アイデア出し（拡散）— 発散ループ＋決定論*無落とし*クラスタ＋ディベート組織化
+
+発散的なアイデア生成向け（死角照射でも narrow-answer 決定でもない）。`lens-diffuse-cluster` の scatter→cluster→synthesis を土台に、3つの実測知見を反映。根拠 `docs/findings-bet2-overturn.md`「アイデア出し(拡散)」、実例 `scenarios/qwen-coding-tasks/`。
+
+**(a) 発散は反復ループで定番を破る**: 開放型アイデア出しは単発だと中位モデルが*角度プロンプトを跨いで定番へ収束*する。`[long_run] cycles=3 cycle_stages=["scatter","deepen"]` で scatter（N角度）⇄ deepen（答え＝タスク名を出さず*未踏の領域*だけ名指す批評役）を回すと cycle2-3 が定番の外で具体化する。scatter の `inputs=["path:task.md","stage:scatter","stage:deepen"]` で自己＋未踏角度を累積参照。蓄積文脈が嵩むので**大文脈 organ（codex-app-server）**が要る（qwen の num_ctx=8192 では回らない）。
+
+**(b) 束ねは単一 LLM 圧縮器を使うな → 決定論*無落とし*クラスタ**: 単一の正規化 actor（NORM）は発散在庫を prior（定番）へ再収束させ新領域を*黙って落とす*（実測 48→3）。raw scatter を自命名 `meta.kind` で `flow-cluster` し、**`max_clusters` を distinct kind 数以上**にして `other_sources` に畳まない（落としを*隠す*NORM より、落としを*露出*させ監査可能にする決定論クラスタが上）。
+
+**(c) 最終選別は単一 SYNTH でなく2極ディベート＋機械集約**: 単一統合器は完全在庫を前にしても定番接頭辞へアンカーする。`propose(CONV 定番派 / FRONTIER 固有優位派が在庫から推しタスクを decision)→ rebut(cross-attack, meta.refutes)→ adjudication(per_input 反 halo, retract_overturned)→ run後 aggregate`（＝パターン7の応用）。FRONTIER が新領域を強制投入し、無視→考慮・反証・条件化へ。**MAGI 型3体多数決は使うな**: 同一モデルの多数決は prior を「合意」に偽装し少数を黙殺する（実測9票すべて定番・新領域0＝Condorcet 独立性違反）。集約原理が決め手＝**可謬性（1反証が N 合意を破る）> 多数決（合意）**。**retract の配線**: reconcile は verdict の citations→rebut→`rebut.meta.refutes` で対象を解決する（攻撃を書く CONV/FRONTIER が refutes を持てばよく、審判 verdict 自身の refutes は不要）。reconcile は `meta.refutes` を**配列・スカラ文字列の両方**受ける（agent が両形を出す。tracefield-core 修正済＝旧版は array のみで scalar 形の攻撃が黙って UNACTIONED 化し片極だけ不発の偽非対称を生んでいた）。run 後は `tracefield aggregate`＋`grep overturned-claim run.log` で確認（retract_overturned は overturn verdict を閉包ごと自己 retract するので aggregate は overturn=0 を見せうる）、`UNACTIONED` flag が出たら人手照合。多数決が正当なのは異種 substrate × 独立誤り × 故障耐性（TMR）の別レジームのみ。
+
+実例 `scenarios/qwen-coding-tasks/flow.codex-{loop,debate,magi}.toml`。残: 領域別隔離統合の完全形は `scale_by`（1セレクタでアクタをスケール＋他セレクタを各アクタへ共有文脈として渡す）実装待ち。
+
 ## 入力セレクタ早見
 
 - `path:<file>` … task.md 等（meta.path 一致）
