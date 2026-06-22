@@ -211,7 +211,16 @@ roles = ["QANSWER", "PROBLEMATIZE", "INVERT", "HARM", "ASCEND"]
 
 5レンズの出力（observation/question）の和集合が発見された盲点。**価値検証するなら**単一ベースライン
 （同 task を `count=1`・観点なし、または同5観点を1文脈に渡した版）と並べ、O だけが拾った*二次*盲点を数える。
-射程の正直: frontier 相手では edge は増分（単一も一次の交互作用は拾う／O が二次を数個追加）。弱モデルで増分大。
+射程の正直: frontier 相手では edge は増分（単一も一次の交互作用は拾う／O が二次を数個追加）。
+
+**弱/中位ローカルモデル向け＝反復ループ変種（哲学 ⇄ 検討）**: 中位ローカル(例 qwen3.6:27b)を*隔離レンズ構造*に載せれば
+二次盲点(規則の適用順序)は単発でも届く（効くのは構造で、モデル強度でない）。だが**最 subtle な攻撃/gaming(ジャミング DoS・
+権限横取り・循環 DoS)には反復が要る**。`[long_run] cycles=3 cycle_stages=["interrogate","deepen"]` で
+`interrogate`(inputs に `stage:interrogate`＋`stage:deepen` を足し自己＋検討参照) と `deepen`(批評役 DEEPEN=「答えは出さず
+*未探索の角度*だけ名指せ: 規則の同時/順序の相互作用・ある規則が別を打ち消す経路・既出の穴の*悪用*」)を交互に回す。
+deepen がサイクル間で発見を compound し、中位モデルが frontier 単発 O と同等以上の深さに届く（実例 `scenarios/spec-probe-approval/flow.ollama-loop.toml`）。
+**行き先②(ローカル完結)の含意: frontier 不要＝中位ローカル × 隔離レンズ × 反復。frontier は最後の鋭さ・再接地にだけ薄く。**
+集約は弱 SELECT が稀 signal を落とすので**機械集約**にし、再接地が要る覆しは強モデル(H1c)。弱モデルの使いどころは*単発の賢さ*でなく*反復の実行器官*。
 
 ## 入力セレクタ早見
 

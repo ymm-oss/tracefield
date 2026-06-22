@@ -224,6 +224,24 @@ e13 が `refutes` を出せなかったことが律速だった＝**弱モデル
 
 > **発見 edge の正体（確定）= 単一の整合的1パスが素通りする「subtle な*二次*の次元」(規則間の適用順序・迂回・gaming)を表面化すること。これらは*複雑かつ新規*なドメインで最も密。** ユーザーの「複雑なら有利」は「複雑*かつ*新規・二次次元が多い」へ精緻化された形で成立。
 > 正直な射程: 単一も*一次*交互作用は全部発見＝edge は「O 勝ち単一全滅」でなく「O が*追加で*二次 subtle を数個拾う」**増分**。frontier 相手では発見 edge は増分的だが、複雑×新規では実在する。弱モデルではこの増分がより大きいと予測（弱モデルスレッドと符合）。
+
+### 弱/中位モデルはどこに使えるか（spec-probe-approval を ollama qwen3.6:27b で）
+
+「frontier が要るのか」を行き先②(ローカル完結)向けに実測。
+- **中位ローカル(qwen27b)を*隔離レンズ構造*に載せると、二次盲点(規則の適用順序)を発見**＝codex を*単一*で回したとき逃したもの。**効いたのはモデル強度でなく構造(単一→隔離)**。frontier-O ほど鋭くはない(迂回はぼかし・gaming 未到達)。
+- **反復ループ(`flow.ollama-loop.toml`: interrogate(哲学) ⇄ deepen(検討) を3サイクル)で、中位モデルが最 subtle な*攻撃/gaming*まで到達**: 承認ジャミング DoS(低権限承認で閾値を埋め正当承認をブロック)・委任連鎖の権限横取り/集中・委任循環の無限再帰 DoS。後半サイクルの指摘が*前サイクルの entry id を参照して深掘り*(「e6,e10 を解決する」)＝deepen 批評(「答えは出さず未探索の*角度*だけ名指せ」)がサイクル間で発見を compound した。**単一パス qwen が逃した深さに、反復で到達**(攻撃軸では codex-O と同等以上)。
+
+**役割マップ（このタスクでの弱/中位モデル）**:
+| 役割 | 弱/中位ローカルで可? |
+|---|---|
+| 発見(二次盲点)を*隔離レンズ構造*で | ◯（構造が運ぶ・1レンズ当たり負荷が低い） |
+| 発見(最 subtle な攻撃/gaming) | ◯ *ただし反復ループ(deepen 批評で compound)が要る*（単一パスでは届かない） |
+| format/canonical ラベル/隔離判定/fail-safe 旗立て | ◯（コーパス H1c） |
+| 集約(稀 signal の保持が要る) | △→機械集約(`aggregate`)にせよ（弱 SELECT は稀 signal を落とす） |
+| 再接地/覆しの決定性(ファイル要) | ✗（強モデル必須・H1c） |
+
+**行き先②への結論**: **frontier は不要。中位ローカル × 隔離レンズ × 反復(検討役で compound)** で二次〜三次の攻撃/gaming 盲点まで掘れる。frontier は最後の鋭さ・再接地にだけ薄く。弱モデルの使いどころ＝*単発の賢さ*でなく*反復ループの実行器官*。
+留保: codex/qwen とも n=1・採点は散文の読み・ループは件数増(機会増)・一部思弁的(Sybil 等は射程外気味)。核(ジャミング/権限横取り/循環DoS)は正当で subtle。
 - **clean 確認**: append/ordering の brief から cue を抜いた *uncued 版* で、単一が落ち Arm O が拾うか（cued/uncued が真の変数である最終確認）。
 - 各セル n=1。uncued conflict の single L1 / Arm O L2 は機構が明白（HARM が緊急衝突を逐語で発見 vs 単一が一語も触れず）だが、複数 seed/題材での再現は未。
 - **弱モデル（gemma4:e4b）での uncued 発見＝硬化 critique で解錠（検証済）**: uncued conflict で weak-single も weak-orch（既定 critique）も LEVEL1（緊急を発見できず／e13 が oblique・refutes 無で synthesis に脱落）。だが **CRITIQUE を「この方向が*黙って犠牲にする*明示されない高ステークス目標を必ず名指せ＋refutes 必須」に硬化**すると（`scenarios/bet2-conflict-p-elev`）、weak-orch が **~LEVEL2 に回収**: critique e12/e13/e14 が緊急を crisp に名指し＋refutes 付与 → 1 overturn → SELECT が「医療安全性の確保とトリアージによる制御を最重要制約」と蒸留 → 最終成果物が**トリアージで予約を gate・緊急を self-booking から routing out・TimeSlot を緊急度でタグ分け**（容量を構造的に保護）。

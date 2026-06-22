@@ -1,0 +1,37 @@
+# 反復版: 哲学(interrogate) ⇄ 検討(deepen) を3サイクル。中位モデルが足場を得て二次/三次に届くか。
+[flow]
+profile = "spec-interrogation-loop-ollama"
+policy = "fixed"
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 30
+max_parallel_actors = 1
+[organs.reasoning]
+adapter = "ollama"
+model = "qwen3.6:27b"
+timeout_seconds = 600
+
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["interrogate", "deepen"]
+
+# 哲学レンズ: 仕様 + これまでの指摘(自己参照) + 検討役の「次に問う角度」を見て深掘り
+[stages.interrogate]
+organ = "reasoning"
+inputs = ["path:task.md", "kind:input", "stage:interrogate", "stage:deepen"]
+outputs = ["observation", "question"]
+[stages.interrogate.actors]
+mode = "fixed"
+count = 5
+roles = ["QANSWER", "PROBLEMATIZE", "INVERT", "HARM", "ASCEND"]
+
+# 検討役: 直近の指摘を読み、未探索の*角度*だけを次ラウンドへ(答えは出さない)
+[stages.deepen]
+organ = "reasoning"
+inputs = ["stage:interrogate"]
+outputs = ["question"]
+[stages.deepen.actors]
+mode = "fixed"
+count = 1
+roles = ["DEEPEN"]
