@@ -1,0 +1,39 @@
+# 反復版(ローカル qwen): 哲学(interrogate=7レンズの読み直し) ⇄ 検討(deepen) を3サイクル。
+# 目的: codex 統治フローが収束した「帰責可能性=希少資源」が prior でなく*構造*由来かを、
+# 中位ローカルモデルの反復で再現できるか検証。検証/審判は置かない(収束の有無を見る)。
+[flow]
+profile = "codegen-econ-reread-loop-ollama"
+policy = "fixed"
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 30
+max_parallel_actors = 1
+[organs.reasoning]
+adapter = "ollama"
+model = "qwen3.6:27b"
+timeout_seconds = 900
+
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["interrogate", "deepen"]
+
+# 7レンズが task.md + これまでの読み直し(自己参照) + 検討役の「次に問う角度」を見て深掘り
+[stages.interrogate]
+organ = "reasoning"
+inputs = ["path:task.md", "stage:interrogate", "stage:deepen"]
+outputs = ["observation", "decision"]
+[stages.interrogate.actors]
+mode = "fixed"
+count = 7
+roles = ["TXCOST", "AGENCY", "COMPADV", "JEVONS", "OPTION", "DESIGN", "RESP"]
+
+# 検討役: 直近の読み直しを読み、未探索の*角度*だけを次ラウンドへ(答えは出さない)
+[stages.deepen]
+organ = "reasoning"
+inputs = ["stage:interrogate"]
+outputs = ["question"]
+[stages.deepen.actors]
+mode = "fixed"
+count = 1
+roles = ["DEEPEN"]

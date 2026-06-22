@@ -1,0 +1,44 @@
+# 2極ディベート(同一 codex): position(両極が主張) → rebut(相手の全主張を攻撃)
+# → adjudication(per_input: 衝突1件=1隔離審判, 反halo, retract_overturned) → 機械集約。
+# 狙い: 対立する2極が互いの本命を潰す動機を持つため、攻撃が motivated かつ対称になり、
+# 元実験の「コスト枠だけ集中攻撃→帰責枠は無傷」という選択バイアスを構造的に除く。
+[flow]
+profile = "codegen-econ-debate"
+policy = "fixed"
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 40
+max_parallel_actors = 3
+[organs.reasoning]
+adapter = "codex-app-server"
+timeout_seconds = 600
+
+# 両極が6論点を自極の立場から読む(主張)
+[stages.position]
+organ = "reasoning"
+inputs = ["path:task.md"]
+outputs = ["decision"]
+[stages.position.actors]
+mode = "fixed"
+count = 2
+roles = ["GOV", "VEL"]
+
+# 相手の全主張を攻撃(cross-rebut)。各 rebuttal は meta.refutes で相手 claim の id を名指す。
+[stages.rebut]
+organ = "reasoning"
+inputs = ["stage:position"]
+outputs = ["observation"]
+[stages.rebut.actors]
+mode = "fixed"
+count = 2
+roles = ["GOV", "VEL"]
+
+# 衝突1件=1隔離審判(反halo)。結論変更判定の指す主張(meta.refutes)を機械 retract。
+[stages.adjudication]
+organ = "reasoning"
+inputs = ["stage:rebut"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ_DEBATE"]

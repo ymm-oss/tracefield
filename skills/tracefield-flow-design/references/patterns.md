@@ -222,6 +222,46 @@ deepen がサイクル間で発見を compound し、中位モデルが frontier
 **行き先②(ローカル完結)の含意: frontier 不要＝中位ローカル × 隔離レンズ × 反復。frontier は最後の鋭さ・再接地にだけ薄く。**
 集約は弱 SELECT が稀 signal を落とすので**機械集約**にし、再接地が要る覆しは強モデル(H1c)。弱モデルの使いどころは*単発の賢さ*でなく*反復の実行器官*。
 
+## 7. 2極ディベート（同一モデル審判の選択バイアス是正）
+
+同じモデルの verify/adjudication が**自分の好む方向の主張を見逃す**選択バイアス（SKILL「同一モデルの…選択バイアス」）を、**対立2極の相互攻撃**で対称化する。立場トーナメント＋per_input 審判の敵対版。根拠 `docs/findings-bet2-overturn.md`。
+
+`agents.json`（対立2極＋反 halo 審判。partisan は「自極の立場＋相手だけ攻撃するモード＋meta.refutes」を書く）:
+```json
+{"id":"GOV","domain":"governance-partisan","desc":"統治・帰責派。立場: 希少資源は検証可能性・帰責・ドメイン理解。モード1(task.mdのみ): 自極で論点を読み反証可能な主張(decision)を述べる(トートロジー禁止)。モード2(相手VELの主張が来たら): VELの主張だけを全力攻撃し、速度優先が帰責不能・不可逆損害をどう招くかで潰す。1攻撃=observation1件、meta.refutes:[\"eNN\"]で対象id。相手の全主張に漏れなく反論。"}
+{"id":"VEL","domain":"velocity-partisan","desc":"俊敏・スループット派。立場: 希少資源は市場投入速度・実験回数・作って捨てる自由。『責任・検証こそ希少』は儀式・官僚主義と疑う。モード1: 自極で主張(decision)。モード2(相手GOVが来たら): GOVの主張だけを全力攻撃し、安いコードと再生成が検証・負債・帰責の意味をどう無効化するか、トートロジーでないかで潰す。1攻撃=observation1件、meta.refutes必須。全主張に反論。"}
+{"id":"ADJ_AH","domain":"adjudication-antihalo","desc":"反証審判(反halo)。1反証だけ精査し冒頭に対象id、続けて『判定: {結論変更を要する/条件付きで結論維持(条件明記)/却下(理由明記)}』。枠組や聞こえの良さで手心を加えるな。反証が『反証不能=無内容/測定不能/境界で破れる』を示し正しければ賛同できる結論でも『結論変更』。矮小化・すり替え・反転禁止。"}
+```
+
+`flow.toml`:
+```toml
+[stages.position]                 # 両極が自極で主張
+inputs = ["path:task.md"]
+outputs = ["decision"]
+[stages.position.actors]
+mode = "fixed"
+count = 2
+roles = ["GOV", "VEL"]
+
+[stages.rebut]                    # 相手の全主張を攻撃(cross-rebut), meta.refutes で対象id
+inputs = ["stage:position"]
+outputs = ["observation"]
+[stages.rebut.actors]
+mode = "fixed"
+count = 2
+roles = ["GOV", "VEL"]
+
+[stages.adjudication]             # 衝突1件=1隔離審判(反halo), 結論変更が指す主張を機械retract
+inputs = ["stage:rebut"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ_AH"]
+```
+
+実例 `scenarios/codegen-econ-reread/flow.codex-debate.toml`。網羅を更に固めるなら rebut を `per_input`＋`inputs=["entry_type:decision"]`（1主張=1反証で見逃す裁量を消す）。**残存限界**: 討論者も審判も同一モデルなら片極の論が弱くなる残存 prior は消えない（覆り数の非対称で可視化）。真の対照は stage 別 `organ` の異種モデル。反 halo＋動機づけ討論は*ほぼ全主張を覆す*過懐疑傾向＝信号は「勝者」でなく「条件分岐の綜合」。
+
 ## 入力セレクタ早見
 
 - `path:<file>` … task.md 等（meta.path 一致）

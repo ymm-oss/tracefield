@@ -1,0 +1,43 @@
+# 統治された読み直し: analysis(経済学/設計/責任の7レンズ) → verify(FALSIFY/COUNTER)
+# → adjudication(per_input: 反証1件=1隔離審判, retract_overturned) → 機械集約。
+# 中央 SYNTH を置かない。覆った読み直しは status 駆動で live から外れる(不変条件)。
+[flow]
+profile = "codegen-econ-reread"
+policy = "fixed"
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 40
+max_parallel_actors = 3
+[organs.reasoning]
+adapter = "codex-app-server"
+timeout_seconds = 600
+
+# 7レンズが task.md を隔離文脈で読み直す。decision = 反証可能な読み直しの主張。
+[stages.analysis]
+organ = "reasoning"
+inputs = ["path:task.md"]
+outputs = ["observation", "decision"]
+[stages.analysis.actors]
+mode = "fixed"
+count = 7
+roles = ["TXCOST", "AGENCY", "COMPADV", "JEVONS", "OPTION", "DESIGN", "RESP"]
+
+# 独立赤チームが各主張を破壊。各反証は meta.refutes で攻撃対象の decision id を名指す。
+[stages.verify]
+organ = "reasoning"
+inputs = ["stage:analysis"]
+outputs = ["observation"]
+[stages.verify.actors]
+mode = "fixed"
+count = 2
+roles = ["FALSIFY", "COUNTER"]
+
+# 反証1件=1隔離審判。結論変更判定の指す主張(meta.refutes)を機械 retract→ 覆った読み直しは live から外れる。
+[stages.adjudication]
+organ = "reasoning"
+inputs = ["stage:verify"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ"]
