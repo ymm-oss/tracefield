@@ -1,0 +1,92 @@
+# 反復＋ディベート統合(codex): upstream は loop と同一(scatter ⇄ deepen ×3 → 決定論*無落とし*クラスタ)。
+#  違いは終端: 単一統合器 SYNTH を撤去し、pattern 7 の2極ディベートで置換 ——
+#  propose(2 partisan が在庫から自極の推しタスクを decision で提案) → rebut(相手の全タスクを cross-attack, meta.refutes)
+#  → adjudication(per_input・反 halo, 1攻撃=1隔離審判, retract_overturned で覆ったタスクを機械retract) → run後 aggregate。
+#  狙い: loop2 で残った「単一統合器が完全在庫を前に定番接頭辞へアンカー」を、動機づけ対立の網羅強制＋機械集約で是正できるか
+#  (新領域を*無視*でなく*考慮・反証・条件付き生存*へ)。中央 LLM 合成ゼロ＝採用は「攻撃を生き延びたか」で決まる。
+[flow]
+profile = "qwen-coding-task-ideation-debate"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 60
+max_parallel_actors = 3
+
+[organs.reason]
+adapter = "codex-app-server"
+max_tokens = 6000
+timeout_seconds = 600
+
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["scatter", "deepen"]
+
+[stages.scatter]
+organ = "reason"
+inputs = ["path:task.md", "stage:scatter", "stage:deepen"]
+outputs = ["observation"]
+
+[stages.scatter.actors]
+mode = "fixed"
+count = 5
+roles = ["SC_LOCAL", "SC_VOLUME", "SC_LOOP", "SC_STRUCTURE", "SC_SCAFFOLD"]
+
+[stages.deepen]
+organ = "reason"
+inputs = ["stage:scatter"]
+outputs = ["question"]
+
+[stages.deepen.actors]
+mode = "fixed"
+count = 1
+roles = ["DEEPEN_IDEAS"]
+
+# 決定論クラスタ(無落とし): raw scatter を自命名 meta.kind で束ね、max_clusters を高くして全テーマ可視。
+[stages.cluster]
+inputs = ["stage:scatter"]
+outputs = ["synthesis"]
+
+[stages.cluster.clustering]
+enabled = true
+by = ["kind"]
+min_cluster_size = 1
+max_clusters = 64
+
+[stages.cluster.actors]
+mode = "none"
+roles = ["clusterer"]
+
+# 提案: 2極が在庫(クラスタ+生アイデア+deepen領域)から自極の推しタスクを各 decision で提案(辺境派が新領域を強制投入)。
+[stages.propose]
+organ = "reason"
+inputs = ["stage:cluster", "stage:scatter", "stage:deepen"]
+outputs = ["decision"]
+
+[stages.propose.actors]
+mode = "fixed"
+count = 2
+roles = ["CONV", "FRONTIER"]
+
+# 反論: 相手の全タスクを cross-attack(meta.refutes で対象id)。1攻撃=observation1件。
+[stages.rebut]
+organ = "reason"
+inputs = ["stage:propose"]
+outputs = ["observation"]
+
+[stages.rebut.actors]
+mode = "fixed"
+count = 2
+roles = ["CONV", "FRONTIER"]
+
+# 審判: 衝突1件=1隔離審判(反 halo)。結論変更が指すタスクを機械retract。run後 tracefield aggregate。
+[stages.adjudication]
+organ = "reason"
+inputs = ["stage:rebut"]
+outputs = ["decision"]
+retract_overturned = true
+
+[stages.adjudication.actors]
+mode = "per_input"
+roles = ["ADJ_AH"]

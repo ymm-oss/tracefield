@@ -1,0 +1,73 @@
+# 反復版アイデア出し(codex 実行器官): scatter ⇄ deepen を3サイクル回してモード崩壊(定番への収束)を破る。
+#  deepen は「答え(タスク名)を出さず未踏の角度だけ名指す」批評役。各サイクルの scatter は
+#  task.md + 自分たちの既出アイデア(stage:scatter) + deepen の未踏角度(stage:deepen)を見て定番の外へ発散する。
+#  3サイクル後に一度だけ cluster(決定論・無落とし)→SYNTH(統合)で束ねる(cycle_stages に入れない=最後に1回)。
+#  NORM(単一LLM圧縮器)は撤去: 前回 48→3 へ再収束させ cycle2-3 の新領域を黙って落としたため(findings-bet2-overturn)。
+#  圧縮は決定論 flow-cluster に任せ(overflow も other_sources に保持=無落とし)、唯一残る統合器 SYNTH には
+#  deepen の領域マップを枠として渡し「上位は領域を跨げ」の被覆契約で prior(定番)への再収束を抑える。
+#  codex を選ぶ理由: サイクル横断で蓄積する文脈が qwen の num_ctx=8192 を超えるため、大文脈の実行器官が要る。
+[flow]
+profile = "qwen-coding-task-ideation-loop"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 40
+max_parallel_actors = 3
+
+[organs.reason]
+adapter = "codex-app-server"
+max_tokens = 6000
+timeout_seconds = 600
+
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["scatter", "deepen"]
+
+[stages.scatter]
+organ = "reason"
+inputs = ["path:task.md", "stage:scatter", "stage:deepen"]
+outputs = ["observation"]
+
+[stages.scatter.actors]
+mode = "fixed"
+count = 5
+roles = ["SC_LOCAL", "SC_VOLUME", "SC_LOOP", "SC_STRUCTURE", "SC_SCAFFOLD"]
+
+[stages.deepen]
+organ = "reason"
+inputs = ["stage:scatter"]
+outputs = ["question"]
+
+[stages.deepen.actors]
+mode = "fixed"
+count = 1
+roles = ["DEEPEN_IDEAS"]
+
+# 決定論クラスタ(無落とし): raw scatter を scatter 時の自命名 meta.kind で束ねる。
+# max_clusters を高くしてラベルドリフト(多 kind)を other_sources に畳まず全テーマを可視化(=新領域を隠さない)。
+[stages.cluster]
+inputs = ["stage:scatter"]
+outputs = ["synthesis"]
+
+[stages.cluster.clustering]
+enabled = true
+by = ["kind"]
+min_cluster_size = 1
+max_clusters = 64
+
+[stages.cluster.actors]
+mode = "none"
+roles = ["clusterer"]
+
+# 唯一残る統合器。deepen の領域マップを枠に、生アイデア全在庫から領域を跨いで選ぶ(定番再収束の抑止は SYNTH desc の被覆契約)。
+[stages.synthesis]
+organ = "reason"
+inputs = ["stage:cluster", "stage:scatter", "stage:deepen"]
+outputs = ["observation", "decision"]
+
+[stages.synthesis.actors]
+mode = "fixed"
+count = 1
+roles = ["SYNTH"]

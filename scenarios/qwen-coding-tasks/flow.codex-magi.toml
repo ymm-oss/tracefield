@@ -1,0 +1,85 @@
+# MAGI 型(3体多数決, codex): upstream は loop/debate と同一(scatter ⇄ deepen ×3 → 決定論*無落とし*在庫)。
+#  違いは終端: 3つの善意の評議体(実務/価値/リスク=Balthasar/Melchior/Casper 相当)が *独立に* 在庫から推しクラスタを
+#  decision で投票(meta.kind=投票先クラスタのラベル) → 多数決を決定論 flow-cluster で機械集約: by=["kind"]・
+#  min_cluster_size=2 で「≥2/3 票=採用、1票=small_sources へ脱落(少数黙殺が可視)」。中央 LLM 合成ゼロ。
+#  狙い: 同一モデル3体の多数決が定番へ収束し新領域(少数票)を黙って落とすか、を debate の条件付きニッチと A/B 比較。
+[flow]
+profile = "qwen-coding-task-ideation-magi"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 40
+max_parallel_actors = 3
+
+[organs.reason]
+adapter = "codex-app-server"
+max_tokens = 6000
+timeout_seconds = 600
+
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["scatter", "deepen"]
+
+[stages.scatter]
+organ = "reason"
+inputs = ["path:task.md", "stage:scatter", "stage:deepen"]
+outputs = ["observation"]
+
+[stages.scatter.actors]
+mode = "fixed"
+count = 5
+roles = ["SC_LOCAL", "SC_VOLUME", "SC_LOOP", "SC_STRUCTURE", "SC_SCAFFOLD"]
+
+[stages.deepen]
+organ = "reason"
+inputs = ["stage:scatter"]
+outputs = ["question"]
+
+[stages.deepen.actors]
+mode = "fixed"
+count = 1
+roles = ["DEEPEN_IDEAS"]
+
+# 投票用紙(ballot): raw scatter を自命名 meta.kind で無落としクラスタ化。評議体はこの CLUSTER:NN を票として参照する。
+[stages.cluster]
+inputs = ["stage:scatter"]
+outputs = ["synthesis"]
+
+[stages.cluster.clustering]
+enabled = true
+by = ["kind"]
+min_cluster_size = 1
+max_clusters = 64
+
+[stages.cluster.actors]
+mode = "none"
+roles = ["clusterer"]
+
+# 評議: 3体が独立に推しクラスタを decision で投票(meta.kind=投票先クラスタの先頭ラベル)。
+[stages.deliberate]
+organ = "reason"
+inputs = ["stage:cluster", "stage:scatter"]
+outputs = ["decision"]
+
+[stages.deliberate.actors]
+mode = "fixed"
+count = 3
+roles = ["MAGI_PRAG", "MAGI_VALUE", "MAGI_RISK"]
+
+# 開票(tally): 票(deliberate decision)を meta.kind で決定論クラスタ。min_cluster_size=2 ＝ 多数決(≥2/3)。
+#  1票のクラスタは small_sources へ落ちる＝少数黙殺が可視。これが MAGI の「採用集合」。
+[stages.vote]
+inputs = ["stage:deliberate"]
+outputs = ["synthesis"]
+
+[stages.vote.clustering]
+enabled = true
+by = ["kind"]
+min_cluster_size = 2
+max_clusters = 64
+
+[stages.vote.actors]
+mode = "none"
+roles = ["talliers"]

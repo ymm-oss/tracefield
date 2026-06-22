@@ -1,0 +1,72 @@
+# アイデア出し(拡散): scatter(5角度で qwen 向きプログラミングタスクを発散)
+#  → norm(タスク種別を正準化) → cluster(meta.kind で決定論クラスタ) → synthesis(代表タスク上位を統合)。
+# 中央 LLM 合成は置かず、テーマ束ねは決定論 flow-cluster。実行器官は qwen(ローカル中位)。
+[flow]
+profile = "qwen-coding-task-ideation"
+policy = "fixed"
+budget = 60
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 8
+max_parallel_actors = 1
+
+[feedback]
+enabled = false
+
+[feedback_entries]
+enabled = false
+
+[organs.reason]
+adapter = "ollama"
+model = "qwen3.6:27b"
+timeout_seconds = 900
+
+[stages.scatter]
+organ = "reason"
+inputs = ["path:task.md"]
+outputs = ["observation"]
+budget = 40
+
+[stages.scatter.actors]
+mode = "fixed"
+count = 5
+roles = ["SC_LOCAL", "SC_VOLUME", "SC_LOOP", "SC_STRUCTURE", "SC_SCAFFOLD"]
+
+[stages.norm]
+organ = "reason"
+inputs = ["stage:scatter"]
+outputs = ["observation"]
+budget = 10
+
+[stages.norm.actors]
+mode = "fixed"
+count = 1
+roles = ["NORM"]
+
+[stages.cluster]
+inputs = ["stage:norm"]
+outputs = ["synthesis"]
+budget = 10
+
+[stages.cluster.clustering]
+enabled = true
+by = ["kind"]
+min_cluster_size = 1
+max_clusters = 8
+
+[stages.cluster.actors]
+mode = "none"
+roles = ["clusterer"]
+
+[stages.synthesis]
+organ = "reason"
+inputs = ["stage:cluster", "stage:scatter"]
+outputs = ["observation", "decision"]
+budget = 10
+
+[stages.synthesis.actors]
+mode = "fixed"
+count = 1
+roles = ["SYNTH"]

@@ -278,3 +278,31 @@ e13 が `refutes` を出せなかったことが律速だった＝**弱モデル
   - **脱バイアス後の答え**: 「帰責 vs 速度」の勝敗でなく、生存した綜合 e4＝**希少資源は*可逆性×損失*で条件分岐**(低可逆・高損失=受入条件を所有する人間、高可逆・低損失=小刻み実験在庫)。
 
 **結論(設計知)**: 同一モデルの裁量 verify は収束を捏造する。是正は強→弱で (1)`per_input`+`entry_type:decision` で全主張に1反証強制 (2)対立2極ディベート＋反 halo 審判(motivated・対称) (3)真の対照は stage 別 `organ` の異種モデル。同一モデルでは 1–2 が*選択バイアス*を消すが*深層の共有 prior*は残り、覆り数の非対称で可視化されるのみ。**反 halo＋動機づけ討論はほぼ全主張を覆す過懐疑傾向**＝信号は「勝者」でなく「両極とも境界限定→条件分岐の綜合」。skill 反映: SKILL「同一モデルの…選択バイアス」/patterns「7. 2極ディベート」/lens-catalog「対立2極」。実例 `scenarios/codegen-econ-reread/`(flow.toml 統治 / flow.ollama-loop.toml 反復 / flow.codex-debate.toml ディベート)。lessons L3。留保: 各 n=1・散文採点。
+
+## アイデア出し(拡散)— 再収束は生成器でなく*組織化器*へ移る（qwen-coding-tasks, 2026-06-23）
+
+「ローカル中位モデル qwen をプログラミングで活かせるタスクを発想する」をアイデア出し題材に、拡散パターン(scatter→cluster→synthesis、`lens-diffuse-cluster` 由来=**エンジン新規ゼロ**)で回した。発散の質と、それを束ねる段の振る舞いを切り分けた。
+
+**(1) qwen 単発は開放型アイデア出しで*定番*へ収束**: scatter を5角度(機密/大量/低遅延/構造化/足場)に分けても、出力はソースコード片の構文変換(型注釈・テスト雛形・正規表現変換・設定形式変換・docstring)へ強く重複収束(NORM が 42→14 に畳むほど)。最も独自な「機密・閉域の実行器官」角度すら定番に溶けた。**中位モデルは*開いた*対象だと角度プロンプトを跨いで無難解へ寄る**(spec-probe の*閉じた*仕様問では構造で二次盲点に届いたのと対照=効くのは対象の開閉)。
+
+**(2) codex 反復ループ(scatter ⇄ deepen ×3)は*生成*の定番を破った**: deepen=「答え(タスク名)を出さず未踏の*領域*だけ名指す」批評役。deepen 入力が 15→30→45 と蓄積し、scatter cycle 2-3 が定番の外で具体化(機密ルール静的検査・エアギャップ依存棚卸し・CI設定正規化・feature flag台帳同期・運用アラート分類・protobuf互換性注釈・codemod後コンパイル修復・property反例縮約…)。**モード崩壊が生成器から消えた**。これは qwen の `num_ctx=8192` では回せない(45件の蓄積を読む)＝**大文脈の codex を選んだ判断が効いた**部分。北極星[[thought-chain-vs-task-chain]]: ループは撤回機構を持たない発散だが、deepen が*領域*を un-think させ続けることで固着([[diffusion-thinking-experiment]] の mode collapse 回避)を破れた。
+
+**(3) だが単一 LLM の NORM が*組織化*で定番へ再収束させた(隠蔽つき)**: 最終段 NORM(1 actor)が 48 アイデアを **3 要約(保存時エラー要約/pre-commit軽微修正/テスト再実行メモ)** に圧縮、cycle 2-3 の新領域 30+ 件を**黙って落とし**、SYNTH の上位5は定番(pre-commit diff・エラー要約・契約差分・ログ→型・再現テスト)へ逆戻り。**L3 と同じ「裁量を持つ単一モデルが prior(定番)へ再収束＋稀信号を落とす」が、verify/adjudication でなく*圧縮器*に再発**。NORM は中央 LLM 合成の縮小版＝反北極星(no central synthesizer / no silent drop)。
+
+**(4) 是正=単一 LLM 圧縮器を撤去し決定論の*無落とし*クラスタへ（検証済）**: NORM を削除、raw scatter を scatter 時の自命名 `meta.kind` で `flow-cluster`(`max_clusters=64` でドリフト多 kind を `other_sources` に畳まず全可視)。結果 **3→31 クラスタの完全在庫**が可視・監査可能になり、新領域(運用/機密/配布/リリース手順/PII/状態遷移/doctest)が全て残った。SYNTH には deepen の領域マップ＋被覆契約(「上位は領域を最低4つ跨げ/1領域から3つ以上選ぶな」)を渡し、上位はスキーマ/契約/PIIテスト/レビュー/依存へ**広がった**(loop1 の同一定番5から改善)。
+
+**(5) 残存=*唯一残る統合器*が完全在庫を前にしても再収束(新たに可視化)**: SYNTH は 31 クラスタを受けながら**冒頭 01–08 しか列挙・採用せず**、09–31(運用/機密/配布)を無視。出力は ≈400 tok ≪ max_tokens=6000＝**トークン制約でなく単一統合器が自ら定番接頭辞へアンカー**。要点: NORM は落としを**隠した**(3テーマで完全に見えた)。決定論クラスタは落としを**露出**させ「31 在庫のうち 8 しか使っていない」と*証明可能*にした。再収束は圧縮器→統合器へ移っただけで、機構が単一 LLM である限り残る。
+
+**(6) 原理的な完全是正はエンジン機能待ち(設計ギャップ)**: 筋の通る是正は「領域ごとに隔離した統合器(deepen の各領域に1 synthesizer)→機械連結」=L3 の per_input 隔離を統合段へ適用。だが現エンジンでは**表現できない**: 隔離モード(`per_input`/`per_cluster`)は*全入力を*シャードし「ある1セレクタでスケールしつつ残りを共有文脈として渡す」ができず、`per_cluster` の鍵も `source_cluster`/`stage` で raw エントリの自命名 `meta.kind` を見ない。同じ制約が「共有語彙へ隔離 relabel する NORM」も阻む。→ **追加すべき機能=「1セレクタでアクタをスケール＋他セレクタを各アクタに共有文脈として渡す」**(`scale_by` の本来の役割)。
+
+**結論(設計知)**: ①アイデア出し=拡散(scatter→cluster→synthesis)はエンジン改変ゼロで成立し、qwen が実行器官になるが*開放型は収束する*。反復(deepen⇄scatter)が*生成*の定番を破る(大文脈器官が要る)。②北極星は一般化する — **生成を束ねる*いかなる*単一 LLM 段(圧縮器 NORM でも統合器 SYNTH でも)もモデルの prior を再賦課し稀信号を落とす**。「中央 LLM 合成を置くな/機械集約せよ/黙って落とすな」が守る当のもの。③圧縮器の崩壊は in-config で是正可(決定論*無落とし*クラスタ=可視化・監査化)。だがアイデア出しの最終選別は判定の機械集約のように畳めない**既約な統合器**で、被覆契約は緩和に留まり(loop2 で部分改善)、**構造的な領域別隔離統合**が原理解で、それは上記エンジン機能を要する。fix 梯子: (1)落とし得る単一 LLM 圧縮器を使うな→決定論無落としクラスタ (2)統合器に発散マップ(deepen)＋被覆契約=部分 (3)領域別隔離統合=原理解(要エンジン拡張)。実例 `scenarios/qwen-coding-tasks/`(flow.toml/flow.mock.toml 単発拡散 / flow.codex-loop.toml 反復＋決定論無落とし)。lessons L4。留保: 各アーム n=1、codex 3サイクル、散文採点。
+
+### 残存統合器の崩壊を組織化器3種で実測比較（同一 upstream, 2026-06-23）
+
+(6) の「原理解=領域別隔離統合は要エンジン拡張」に対し、ユーザー問い「ディベートでも解けないか／MAGI型3体多数決とどちらが良いか」を実測。upstream(scatter⇄deepen×3→無落とし在庫)を固定し、終端の組織化器だけ差し替えて A/B/C。
+
+- **A 単一SYNTH(loop2)**: 31在庫を前に冒頭8クラスタへ自発アンカー、09–31(運用/機密/配布)を無視。=単一統合器の再収束。
+- **B 2極ディベート(propose CONV/FRONTIER→cross-rebut(meta.refutes)→per_input 反halo審判→機械集約)**: FRONTIER が新領域を*強制投入*(6提案中3=機密匿名化/Flaky集約/閉域DB)。反halo審判は**両極とも 5/6 overturn＋1条件付き**(過懐疑=pattern7署名)。FRONTIER の攻撃が**定番(OpenAPI型生成/fixture)を「既存ツールが無料で解決済=採用の限界価値0」と粉砕**(SYNTH/qwen単発が見落とした洞察)。生存=e87 条件付き(lint/IDEが拾えない自然言語ドリフト監査に限定)=「勝者でなく*条件分岐の綜合*」。**機械ギャップ**: 審判の overturn 5件中2件が `meta.refutes` 未伝播→対象が機械retractされず survivor が偽の非対称に。engine は `UNACTIONED overturns ... human must reconcile` で flag(no-silent-drop が機能)。硬化策として当初 ADJ_AH に meta.refutes 構造出力を強制したが**誤診断**だった。**真因(debate2→3 で確定)**: reconcile は verdict の citations→rebut→`rebut.meta.refutes` で対象を解決しており(これは正しく働く。verdict 自身の refutes は読まない)、唯一の不具合は `reconcile_overturned` が `meta.refutes` を**配列でしか受けない**点だった。agent はスカラ文字列でも出す(実測 FRONTIER=`"e87"` / CONV=`["e90"]`)→ scalar 形が `as_array` で黙って落ち、その overturn だけ UNACTIONED＝**FRONTIER 攻撃だけ不発の偽非対称**を生んでいた(`scale_by` とは無関係の単純な parse 不寛容)。**修正**: `store.rs reconcile_overturned`(唯一の reader)を array/scalar 両受けに＋回帰テスト。**debate3 で検証: UNACTIONED 2→0**、scalar 攻撃 e94(`"e91"`)が対象 e91 を正しく retract(旧コードなら脱落)。残る覆りの非対称(FRONTIER 3/CONV 1 retract)は parse 由来でなく**反 halo 過懐疑＋残存 prior の*真の*信号**(pattern7 通り覆り数で可視)。教訓: コードとデータを読む前に「隔離が悪い/scale_by 族」と二度誤診断した＝先に reader を grep すべきだった。
+- **C MAGI型3体多数決(評議3=実務/価値/リスク→決定論flow-cluster `min_cluster_size=2` で多数決)**: 29在庫・**9票すべて5定番クラスタ(CI-log分類/型エラー/テスト生成/コンパイル/snapshot)に着地、新領域に投票ゼロ**。「価値」評議体(qwen固有優位を高評価せよとプロンプト)すら定番を選択=共有priorが評価基準を上書き(Condorcet 独立性違反の具体化)。多数決が選んだ定番は**Bが低価値と覆した当のもの**=合意は相関バイアスを自信に偽装しただけ。少数票(定番ですら)は `small_sources` へ黙殺(可視)。
+
+**設計知(組織化器の序列)**: 同一モデルの判断精製では **debate >> 単一SYNTH > MAGI多数決**。決め手は集約原理: 多数決=**合意**(同一priorで増幅＋少数黙殺)、tracefield/debate=**可謬性**(1反証がN合意を破る defeater-priority=`aggregate_verdicts` の native挙動)。MAGI が正当なのは別レジーム(異種substrate×独立誤り×故障耐性=TMR)のみで discovery 不向き。**数(3v2)は囮**、効く軸は (1)集約器(可謬>多数決) (2)動機づけ(prompted opposition>中立熟議, 同一prior下) (3)異種organ(真のレバー)。ただしアイデア出しの最終選別は (6) の理由で完全隔離がエンジン待ちの**既約な統合段**＝debate は「無視→考慮・反証・条件化」への*緩和の最良手*。skill 反映: patterns「8. アイデア出し(拡散)」。実例 `scenarios/qwen-coding-tasks/flow.codex-{loop,debate,magi}.toml`。留保: 各 n=1、評議体は top3 のみ出力(codex簡潔)だが「最良を選べと言われ全員定番」は収束信号として強い。
