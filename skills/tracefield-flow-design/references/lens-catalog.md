@@ -34,6 +34,10 @@
 {"id":"ASCEND","domain":"ladder-of-abstraction","desc":"抽象の梯子。仕様を1〜2段上げて『何の一例か』を言い換え(例: 全順序比較器/複数資源コミット/時刻依存の重み合意)、上位から見た取りこぼしの兄弟ケース・本来必要な性質(全順序公理・再現性・原子性)を名指す。死角: 抽象化で具体を失う。"}
 ```
 
+## 対立2極（partisan — 同一モデル審判の選択バイアス是正）
+
+死角照射の直交レンズと別に、**1本の軸の両極**を立てて相互攻撃させる（debate）。同じモデルの裁量 refuter が*好む方向を見逃す*バイアスを、両極の motivated な攻撃で対称化する。各 partisan の desc は「自極の立場＋*相手だけ*を攻撃するモード＋`meta.refutes`」。フロー型と paste 可能な GOV/VEL/ADJ_AH は patterns.md「7. 2極ディベート」。根拠 `docs/findings-bet2-overturn.md`。
+
 ## 分析フレームワーク（非自明な再framing）
 
 ```json
