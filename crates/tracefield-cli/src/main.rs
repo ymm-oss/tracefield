@@ -205,11 +205,7 @@ async fn main() -> Result<()> {
 
             print_closure_report(&format!("retracted {entry}"), &affected)?;
         }
-        Command::Supersede {
-            store,
-            entry,
-            with,
-        } => {
+        Command::Supersede { store, entry, with } => {
             ensure_file(&store, "--store")?;
 
             let mut reference = tracefield_core::ReferenceStore::from_jsonl_path(&store)
@@ -217,9 +213,9 @@ async fn main() -> Result<()> {
             let affected = reference
                 .supersede(&entry, &with)
                 .with_context(|| format!("failed to supersede entry {entry} with {with}"))?;
-            reference
-                .write_jsonl(&store)
-                .with_context(|| format!("failed to persist supersession to {}", store.display()))?;
+            reference.write_jsonl(&store).with_context(|| {
+                format!("failed to persist supersession to {}", store.display())
+            })?;
 
             print_closure_report(&format!("superseded {entry} by {with}"), &affected)?;
         }
@@ -617,8 +613,14 @@ mod tests {
 
     #[test]
     fn classifies_canonical_labels() {
-        assert_eq!(classify_verdict("判定: 結論変更を要する(覆る)。根拠..."), "overturn");
-        assert_eq!(classify_verdict("判定: 条件付きで結論維持(B)。条件: ..."), "conditional");
+        assert_eq!(
+            classify_verdict("判定: 結論変更を要する(覆る)。根拠..."),
+            "overturn"
+        );
+        assert_eq!(
+            classify_verdict("判定: 条件付きで結論維持(B)。条件: ..."),
+            "conditional"
+        );
         assert_eq!(classify_verdict("判定: 却下。論理的欠陥は..."), "reject");
     }
 
@@ -635,7 +637,9 @@ mod tests {
         );
         // A bare 判定 in prose ("準拠判定を保留") precedes the real 判定: label.
         assert_eq!(
-            classify_verdict("監査法人が準拠判定を保留する実例は存在する。判定: 条件付き結論維持。条件—..."),
+            classify_verdict(
+                "監査法人が準拠判定を保留する実例は存在する。判定: 条件付き結論維持。条件—..."
+            ),
             "conditional"
         );
     }
