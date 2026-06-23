@@ -1,0 +1,90 @@
+# arm: 先読みを deepen-loop で深掘りする変種（baseline = flow.toml は単発パネル）。
+# 切替: tracefield run --scenario-dir scenarios/meeting-support-probe \
+#         --config scenarios/meeting-support-probe/flow.loop.toml
+# P1(対立抽出)は flow.toml と同一・単発。foresight だけを「刈りながら深める」ループに。
+
+[flow]
+profile = "meeting-support-probe-loop"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_parallel_actors = 3
+
+[organs.reasoning]
+adapter = "mock"
+
+# --- P1: 対立マップ（flow.toml と同一・cycle 対象外＝単発）---
+[stages.stances]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["stance"]
+grounded = true
+[stages.stances.actors]
+mode = "per_input"
+roles = ["STANCE_EXTRACT"]
+
+[stages.verify_stances]
+organ = "reasoning"
+inputs = ["stage:stances"]
+outputs = ["observation", "question"]
+grounded = true
+[stages.verify_stances.actors]
+mode = "per_input"
+roles = ["VALIDITY_FALSIFY"]
+
+[stages.adjudicate_stances]
+organ = "reasoning"
+inputs = ["stage:verify_stances"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudicate_stances.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+# --- P2: 先読み deepen-loop（拡散パネル⇄刈り を3周）---
+# 拡散: 直交レンズ。自己参照(stage:foresight)＋前周の批判(stage:verify_foresight)を読み、毎周深める
+[stages.foresight]
+organ = "reasoning"
+inputs = ["stage:stances", "kind:private", "stage:foresight", "stage:verify_foresight"]
+outputs = ["decision", "question"]
+[stages.foresight.actors]
+mode = "fixed"
+count = 3
+roles = ["STAKEHOLDER", "READINESS", "FRAMING"]
+
+# 刈り(1): generic/接地なしの提案を名指す（meta.refutes に対象）
+[stages.verify_foresight]
+organ = "reasoning"
+inputs = ["stage:foresight"]
+outputs = ["observation", "question"]
+[stages.verify_foresight.actors]
+mode = "fixed"
+count = 1
+roles = ["FORESIGHT_CRITIC"]
+
+# 刈り(2): 反証1件=1審判。覆れば対象提案を retract → 次周は生存提案だけを深める（積むでなく深める）
+[stages.adjudicate_foresight]
+organ = "reasoning"
+inputs = ["stage:verify_foresight"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudicate_foresight.actors]
+mode = "per_input"
+roles = ["FORESIGHT_ADJ"]
+
+[long_run]
+enabled = true
+cycles = 3
+cycle_stages = ["foresight", "verify_foresight", "adjudicate_foresight"]
+
+# --- 終端（flow.toml と同一）---
+[artifacts.contested_map]
+format = "contested_map"
+from_stage = "stances"
+path = "outputs/contested-map.md"
+
+[artifacts.how_to_proceed]
+format = "markdown"
+from_stage = "foresight"
+path = "outputs/how-to-proceed.md"

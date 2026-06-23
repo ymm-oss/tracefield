@@ -1,0 +1,64 @@
+[flow]
+profile = "meeting-support-probe"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_parallel_actors = 3
+
+# smoke は mock（モデル不要）。実出力は本人の codex/claude へ1行で切替（README 参照）:
+#   adapter = "cli"   command = "codex"   model = "..."
+[organs.reasoning]
+adapter = "mock"
+
+# 各会議資料(議事録/チャット)を隔離読みし、論点(matter)ごとの stance を来歴つき抽出
+[stages.stances]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["stance"]
+grounded = true
+[stages.stances.actors]
+mode = "per_input"
+roles = ["STANCE_EXTRACT"]
+
+# stance の *妥当性* だけを反証（誤帰属/陳腐化/出典不支持）。立場の優劣は問わない
+[stages.verify_stances]
+organ = "reasoning"
+inputs = ["stage:stances"]
+outputs = ["observation", "question"]
+grounded = true
+[stages.verify_stances.actors]
+mode = "per_input"
+roles = ["VALIDITY_FALSIFY"]
+
+# 妥当性反証1件=1審判。覆れば対象 stance を retract（誤抽出/陳腐化を除去）。残った stance = 忠実な対立マップ
+[stages.adjudicate_stances]
+organ = "reasoning"
+inputs = ["stage:verify_stances"]
+outputs = ["decision"]
+retract_overturned = true
+[stages.adjudicate_stances.actors]
+mode = "per_input"
+roles = ["ADJ"]
+
+# 生き残った stance ＋ 方針ブリーフ(private)を読み、進め方を提案（生成側・defeasible）
+[stages.foresight]
+organ = "reasoning"
+inputs = ["stage:stances", "kind:private"]
+outputs = ["decision", "question"]
+[stages.foresight.actors]
+mode = "fixed"
+count = 3
+roles = ["STAKEHOLDER", "READINESS", "FRAMING"]
+
+# 終端: 対立を *解決せず* 提示（機械描画・matter別group・無落とし・≥2者で CONTESTED）
+[artifacts.contested_map]
+format = "contested_map"
+from_stage = "stances"
+path = "outputs/contested-map.md"
+
+# 進め方（次に議論すべき点・誰に聞くか・表現・順序）
+[artifacts.how_to_proceed]
+format = "markdown"
+from_stage = "foresight"
+path = "outputs/how-to-proceed.md"
