@@ -135,6 +135,7 @@ LLM actor の代わりに外部コマンドを1回実行し stdout を1エント
 
 `[stages.<id>.artifact]` または top-level `[artifacts.<id>]` で `format` / `from_stage` /
 `path` を指定するとレポート/デッキ等を書き出す（`.manifest.json` に source id を併記）。高度機能。
+描画は機械的（LLM不使用）。`format` は既定 `markdown` / `slides_markdown`（Marp）のほか `contested_map`（`meta.matter` でグループ化し**対立を解決せず提示**＝無落とし＋2者以上で `⚠ CONTESTED`）。
 
 ## 高度: `[feedback]` / `[feedback_entries]` / `[process]`
 

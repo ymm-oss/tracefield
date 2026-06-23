@@ -5021,6 +5021,9 @@ fn render_artifact_markdown(artifact: &ArtifactConfig, entries: &[Entry]) -> Str
     if artifact.format == "slides_markdown" {
         return render_slides_markdown_artifact(artifact, entries);
     }
+    if artifact.format == "contested_map" {
+        return render_contested_map_artifact(artifact, entries);
+    }
 
     let mut output = String::new();
     output.push_str(&format!("# {}\n\n", artifact.id.replace('_', " ")));
@@ -5062,6 +5065,68 @@ fn render_slides_markdown_artifact(artifact: &ArtifactConfig, entries: &[Entry])
                 entry.citations.join(", ")
             ));
         }
+    }
+
+    output
+}
+
+/// Render a stage's Active entries as a **contested map**: grouped by the matter
+/// they concern (`meta.matter`, falling back to the existing cluster key so this
+/// composes with deterministic clustering), every coexisting stance kept with its
+/// author + verbatim evidence, and a matter flagged CONTESTED when two or more
+/// parties hold a position on it. Grouping and the flag are mechanical (no LLM),
+/// so a minority position is never smoothed away — the read path *surfaces* the
+/// disagreement rather than resolving it (peer disagreement is left Active; only
+/// validity refutations retract, upstream). This is the read shape that turns a
+/// flat pile of stance entries into something a human can adjudicate.
+fn render_contested_map_artifact(artifact: &ArtifactConfig, entries: &[Entry]) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("# {}\n\n", artifact.id.replace('_', " ")));
+    output.push_str(&format!("format: {}\n\n", artifact.format));
+    if entries.is_empty() {
+        output.push_str("(no source entries)\n");
+        return output;
+    }
+
+    let mut groups: BTreeMap<String, Vec<&Entry>> = BTreeMap::new();
+    for entry in entries {
+        let key =
+            entry_meta_string(entry, "matter").unwrap_or_else(|| cluster_key_for_entry(entry));
+        groups.entry(key).or_default().push(entry);
+    }
+
+    for (matter, members) in &groups {
+        let mut parties = members
+            .iter()
+            .map(|entry| entry.author.clone())
+            .collect::<Vec<_>>();
+        parties.sort();
+        parties.dedup();
+
+        output.push_str(&format!("## {matter}\n\n"));
+        if parties.len() >= 2 {
+            output.push_str(&format!(
+                "⚠ CONTESTED — {} positions across {} parties ({})\n\n",
+                members.len(),
+                parties.len(),
+                parties.join(", ")
+            ));
+        }
+        for entry in members {
+            output.push_str(&format!(
+                "- **{}** ({}): {}\n",
+                entry.author,
+                entry.id,
+                entry.text.trim()
+            ));
+            if let Some(quote) = entry_meta_string(entry, "evidence_quote") {
+                output.push_str(&format!("  - quote: \"{quote}\"\n"));
+            }
+            if !entry.citations.is_empty() {
+                output.push_str(&format!("  - cites: {}\n", entry.citations.join(", ")));
+            }
+        }
+        output.push('\n');
     }
 
     output
@@ -7592,5 +7657,44 @@ mode = "none"
                 .is_some_and(|value| value.starts_with("CLUSTER:"))
         }));
         assert!(clusters.iter().all(|entry| !entry.citations.is_empty()));
+    }
+
+    #[test]
+    fn contested_map_groups_members_and_flags_divergence() {
+        let artifact = ArtifactConfig {
+            id: "contested_map".to_string(),
+            format: "contested_map".to_string(),
+            from_stage: "stances".to_string(),
+            path: "outputs/contested_map.md".to_string(),
+        };
+        let stance = |id: &str, author: &str, text: &str, matter: &str| {
+            Entry::from_new(
+                id.to_string(),
+                author,
+                NewEntry::new(EntryType::Stance, author, text).with_meta("matter", json!(matter)),
+            )
+        };
+        let entries = vec![
+            stance("e1", "X", "Ship in Q2.", "release-timing"),
+            stance("e2", "Org", "Ship in Q3.", "release-timing"),
+            stance("e3", "Y", "Use Postgres.", "datastore"),
+        ];
+
+        let out = render_contested_map_artifact(&artifact, &entries);
+
+        // Grouped by matter.
+        assert!(out.contains("## release-timing"));
+        assert!(out.contains("## datastore"));
+        // Only the multi-party matter is flagged; the single-party one is not.
+        assert_eq!(out.matches("CONTESTED").count(), 1);
+        let release = out.split("## release-timing").nth(1).unwrap();
+        assert!(release.contains("CONTESTED"));
+        // Non-lossy: every coexisting stance is surfaced with its author.
+        assert!(
+            out.contains("Ship in Q2.")
+                && out.contains("Ship in Q3.")
+                && out.contains("Use Postgres.")
+        );
+        assert!(out.contains("**X**") && out.contains("**Org**") && out.contains("**Y**"));
     }
 }
