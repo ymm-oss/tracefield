@@ -26,3 +26,7 @@
 ## ユーザーの開口部のフレーム(提示された梃子)を疑わず大作で応答するな（2026-06-23・「問題は…じゃない」で発覚）
 - 「毎週MTGを処理、過去処理を参照できれば情報が多層になり高精度化する→そのためメモリが要る。現Storeをそのまま使えばいい?」と問われ、(1)コード接地でStore再利用可(永続/resume/seed重複回避)を詳述 (2)実痛点のブレインダンプを受け「判断Storeが正準/スライドは投影/直交foresightレンズ群」の大きな再設計を提示。直後に「問題は継続的にメモリーとして利用できるかじゃない」と*開口部の仮説ごと*否定された。ユーザーは梃子(=メモリ/想起)自体が的外れと既に気づいており、真のボトルネックは曖昧多状態の解釈+先読みだった。
 - 教訓: 「Y のために X(梃子)をすればいい?」型の問いは、X を精緻化する前に**Y が本当のボトルネックか／X が本当の梃子か**を短く突く。初期フレームは検証対象であって前提でない。特にユーザーがブレインダンプ中は巨大な構造化ソリューションが過剰射撃になりやすい——まず問題を1-2文で写し返して合意(reflect-and-confirm)、それから設計。来歴(memory)も初期フレームに引きずられるので、撤回が出たら明示訂正する。
+
+## engine/CLI の振る舞いを変えたら skills 更新を同一 commit に同梱する（2026-06-24・レビュー中にユーザー指摘）
+- turnkey 5機能(input_chunk_paragraphs 新 flow キー・--profile meeting-support scaffold・tracefield meeting ラッパ・doctor adapter hint・slides_markdown template)を b5fadff として .rs 3本だけで commit。マージ前にユーザーに「skill の更新は必要だった?」と問われ確認すると、operator/flow-design とも新機能を一切記載しておらず、CLAUDE.md の「skills は authoritative な運用/設計ガイド＝engine behavior が変わったら更新／runtime copy(~/.claude/skills/)も同期」に違反していた。別 commit(957ce2e)で追補・runtime rsync 同期する羽目に。
+- 教訓: **flow.toml キー追加・新 profile・新サブコマンド・doctor 等 operator 表面の変更は、コードと同じ commit で skills を更新する**(repo の skills/ ＋ version 管理外の ~/.claude/skills/ runtime copy の両方=既知の drift hazard)。チェック: 機能 commit 前に新キー/profile/コマンド名を `grep -rl <kw> skills/` し、ヒット 0 なら追補してからコミット。doctor hint の既定(claude)と scaffold 既定(codex)のような表面の不整合も skill で説明する。「実装は緑」で止めず「設計知識は同期したか」まで完了条件に含める。
