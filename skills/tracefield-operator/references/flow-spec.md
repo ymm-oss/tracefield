@@ -45,7 +45,8 @@
 | key | 型 | 既定 | 説明 |
 | --- | --- | --- | --- |
 | `organ` | string | `"mock"` | 使う `[organs.<id>]` の id |
-| `inputs` | string[] | （空なら task＋retrieval） | 入力セレクタ（下表） |
+| `inputs` | string[] | （空なら task＋retrieval） | 入力セレクタ（下表）。actor mode で shard される |
+| `shared_inputs` | string[] | `[]` | 全 actor に**共有**で渡すセレクタ（shard されない）。`per_input` で `inputs` を1件ずつ shard しつつ、閉じた一覧を全 actor に渡す用途。例: stance を1件ずつ shard＋確定 matter 一覧を全 actor へ→単一 LLM の collapse 無しで no-drop ラベル付け |
 | `outputs` | string[] | — | このステージが出すエントリ型（下表） |
 | `grounded` | bool | `false` | 接地ゲートを有効化。各非 question 主張に `meta.evidence_quote`（引用元の逐語部分文字列）を要求し、それを**引用 store エントリ本文 ∪ `meta.source_path`(+`source_line`) の実ファイル**に機械照合する。外れたら `evidence_quote_not_found`＋`evidence_strength=needs_review`（per-claim・retract 閉包内・no-silent-drop）。`source_`/`web`/`data` を含む id/organ/role でも自動 true（既存ヒューリスティック）。読み取り正準骨格・コード抽出での捏造検出に使う |
 | `retract_overturned` | bool | `false` | このステージ後に `reconcile_overturned` を走らせ、`判定: 結論変更…` の verdict が指す `meta.refutes` 主張を機械 retract（adjudication 段に置く） |
@@ -73,7 +74,7 @@
 ### actor mode の意味
 
 - `fixed`：`count` 個（roles を循環割当）。
-- `per_input`：入力エントリ**1件＝1 actor**（反証ごと独立審判に使う）。`roles` 長1なら全 actor が同一 lens。
+- `per_input`：入力エントリ**1件＝1 actor**（反証ごと独立審判に使う）。`roles` 長1なら全 actor が同一 lens。`shared_inputs` のエントリは shard されず各 actor に共有される（閉じた一覧を全 actor へ渡し no-drop ラベル付けする等）。
 - `per_agent`：agents.json の数だけ。`per_source` / `per_cluster`：source/cluster 単位。
 - `auto`：入力規模から `min`〜`max` で自動。`none`：actor 0（`command`/`clustering` 併用時はそれが走る、無ければスキップ）。
 
