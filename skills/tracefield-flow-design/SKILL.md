@@ -117,10 +117,14 @@ verify/adjudication が **analysis と同じモデル**だと、生成器の pri
 - **正直な射程（n=1/codex）**: frontier 相手では edge は*増分*（単一も一次交互作用は拾う／O が二次を数個追加）。各ドメイン n=1＝係数は要再現、方向は3ドメインで一貫。
 - **弱/中位ローカルモデルの使いどころ（行き先②・実測）**: 効くのはモデル強度でなく*構造*なので、中位ローカル(qwen27b)を隔離レンズに載せれば二次盲点(適用順序)は単発でも届く。最 subtle な攻撃/gaming は**反復ループ(哲学⇄検討×3, patterns.md「6.」の変種)**で到達＝frontier 単発 O と同等以上。**frontier 不要、中位ローカル×隔離×反復**で深い発見が回る（frontier は最後の鋭さ・再接地だけ）。集約は機械的に（弱 SELECT は稀 signal を落とす）。弱モデルの使いどころは*単発の賢さ*でなく*反復の実行器官*。
 
-### 反復（denoise）と沈殿 — 実験機能（既定 off）
-> **denoise は製品でなく研究機能。** answer-quality を上げる主張で、equal-compute ベースライン未検証＝単一強モデルに同等 compute で負けうる領域に最も晒される。既定は `cycles=1`／`long_run` off。下記は外部再現のない**内部 finding**。
+### 反復（denoise）と沈殿
+denoise（`[long_run]` 自己参照サイクル）には検証状態の異なる2用途が同居する。**用途で記述を分ける**：
+
+**沈殿（正式機能・確証済み）** — 単一 agent＋最小 seed＋自己参照サイクルで**経路依存の立場を育てる**。既定アトラクタに逆らう種でも保持・自己強化する。これは「機構として何が起きるか」の主張（自己参照は種を保持する）で answer-quality の優位主張を含まないため正式に使える。
+
+**多サイクル answer-quality（実験・既定 off）**
+> **この用途は製品でなく研究機能。** 「3サイクル精製で答えの質が上がる」は answer-quality の主張で、equal-compute ベースライン未検証＝単一強モデルに同等 compute で負けうる領域に最も晒される。既定は `cycles=1`／`long_run` off。下記は外部再現のない**内部 finding**。**昇格条件**＝equal-compute baseline（同 token budget の単一強モデル1パス）に盲検で負けないこと＋別題材2/別モデル1で方向再現（現状 n=1 を脱する）。
 - 多サイクル精製は `[long_run] cycles=3 cycle_stages=["analysis"]` ＋ `inputs=["path:task.md","stage:analysis"]`（自己/相互参照）。**約3サイクルがスイート**（cycle1粗→cycle2立場ロック→cycle3二次精製、cycle4で飽和）。ピア反復は mode collapse しない（内部 finding・外部未検証）。
-- **沈殿した経路依存の立場**を育てるなら、単一 agent＋最小 seed＋自己参照サイクル。既定アトラクタに逆らう種でも保持・自己強化する（確証済み）。
 
 ### 問いの扱い（立てる・増やす・差し替える）
 問い(task.md)は seed 1回で固定の不変 entry（サイクルをまたいでも再 seed されない）。だが問いは3通りに動かせる:
