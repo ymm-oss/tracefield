@@ -1,0 +1,67 @@
+# 実データ run + plan(a)+異種debate。出典: TC39 2024-10-09 Extractors。
+# 設計: per-unit抽出(coverage) → 論点集合を「閉じる」(codex提案→claude反証で欠落を足し戻す=異種debate)
+#        → 閉じた集合で1:1ラベル付け(NORM-safe) → 機械的にCONTESTED判定(contested_map render)。
+# 単一LLMがその思考方向で matter を落とすのを、異種モデルの反証で防ぐ(findings: debate>>単一/異種organが真の対照)。
+
+[flow]
+profile = "meeting-support-probe-tc39-debate"
+policy = "fixed"
+
+[actor_scaling]
+default_mode = "fixed"
+max_parallel_actors = 3
+
+[organs.codex]
+adapter = "cli"
+command = "codex"
+
+[organs.claude]
+adapter = "cli"
+command = "claude"
+
+# 下層: 各 chunk を隔離読みして stance を網羅抽出（coverage）
+[stages.stances]
+organ = "codex"
+inputs = ["kind:input"]
+outputs = ["stance"]
+grounded = true
+[stages.stances.actors]
+mode = "per_input"
+roles = ["STANCE_EXTRACT"]
+
+# 集合を閉じる step1: codex が正準 matter リストを提案（表記揺れを merge）
+[stages.matter_propose]
+organ = "codex"
+inputs = ["stage:stances"]
+outputs = ["question"]
+[stages.matter_propose.actors]
+mode = "fixed"
+count = 1
+roles = ["MATTER_PROPOSE"]
+
+# step2(異種debate): claude が単一提案の「欠落 / 恣意 merge」を攻撃し、欠けた matter を足し戻す
+[stages.matter_challenge]
+organ = "claude"
+inputs = ["stage:stances", "stage:matter_propose"]
+outputs = ["question"]
+[stages.matter_challenge.actors]
+mode = "fixed"
+count = 1
+roles = ["MATTER_CHALLENGE"]
+
+# step3: per_input で stance を1個ずつ shard（物理的に無落とし）＋確定 matter リストを shared_inputs で全 actor に共有。
+# ＝1 actor=1 stance を閉じた集合にラベル付け。単一文脈の collapse(16→3)を構造で封じる(scale_by 共有文脈)。
+[stages.matter_label]
+organ = "codex"
+inputs = ["stage:stances"]
+shared_inputs = ["stage:matter_propose", "stage:matter_challenge"]
+outputs = ["stance"]
+[stages.matter_label.actors]
+mode = "per_input"
+roles = ["MATTER_LABEL"]
+
+# 終端: 機械描画（matter別group・無落とし・≥2 author で CONTESTED）
+[artifacts.contested_map]
+format = "contested_map"
+from_stage = "matter_label"
+path = "outputs/contested-map.md"

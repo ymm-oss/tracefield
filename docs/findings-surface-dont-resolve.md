@@ -23,4 +23,4 @@
 ## 実装
 - engine(`crates/tracefield-core/src/flow.rs`): `shared_inputs`（StageConfig field／`per_input` は `inputs` を shard・`shared_inputs` を全 actor に共有）＋ `entry_speaker`（`meta.speaker` フォールバック `author`）＋ `contested_map` artifact format（matter 別 group・無落とし・≥2 speaker で CONTESTED、機械描画）。
 - 単体テスト: `shared_inputs_reach_every_actor_without_drop_or_dup` / `contested_map_groups_members_and_flags_divergence`。
-- scenario(committed): `scenarios/meeting-support-probe`（合成テンプレ＋ foresight deepen-loop arm）。**TC39 検証 harness は上記 公開 tc39/notes 上のローカル実走であり、`scenarios/` を synthetic/fictional 限定に保つため非コミット**（CLAUDE.md 準拠）。
+- scenario(committed): `scenarios/meeting-support-probe`（合成テンプレ＋ foresight deepen-loop arm）、`scenarios/meeting-support-probe-tc39`（**config＋出典 URL のみ。実トランスクリプトは vendoring せず README の手順で各自取得**＝`scenarios/` を synthetic 限定に保つ・CLAUDE.md 準拠）。

@@ -1,0 +1,27 @@
+{
+  "agents": [
+    {"id": "STANCE_EXTRACT", "domain": "stance-extraction", "desc": "与えられた1つの会議資料（議事録/チャット）だけを読み、各論点(matter)について『誰が(author)どんな立場か』を atomic な stance として抽出する。1 stance=1エントリ。**網羅的に**：与えられたチャンク内の全発言者の全ての立場を漏らさず出す。**同じ matter に複数人の立場があれば全員分を別 stance に**（対立を surface するため——ここで漏らすと CONTESTED が立たない）。**meta.speaker に発言者名（例 RBN/DE/SYG）**を入れ、meta.matter に論点の短いラベル（資料間で揃える。例 release-timing / datastore）、meta.evidence_quote にその立場の根拠となる原文の逐語部分文字列(8〜30語)を付す。立場の正否は判定せず、資料に書かれた事実のみ。意見でない単なる事実確認は observation で出す。死角: 書かれた発言に偏り、言外の空気を読まない。"},
+
+    {"id": "VALIDITY_FALSIFY", "domain": "stance-validity-falsification", "desc": "各 stance の *妥当性* だけを攻撃する: (a)誤帰属(その人はそう言っていない) (b)陳腐化(後の発言で本人が翻している) (c)出典が立場を支持しない。立場の中身の正否・優劣は **問わない**（誰が正しいかは決めない）。攻撃対象1件の id を meta.refutes に入れ、根拠の原文逐語を meta.evidence_quote に付す。接地できない指摘は question で出す。手加減・賛辞禁止。死角: 妥当性に集中し、立場間の対立そのものは扱わない(それは提示で残す)。"},
+
+    {"id": "ADJ", "domain": "validity-adjudication", "desc": "与えられた1件の妥当性反証だけを精査し、冒頭に対象、続けて『判定: {結論変更を要する / 条件付きで結論維持 / 却下}』の3択。裁くのは対象 stance を retract すべきか(=誤抽出/陳腐化か)だけ。立場の優劣は裁かない。矮小化・すり替え禁止。"},
+
+    {"id": "STAKEHOLDER", "domain": "stakeholder-map", "desc": "現在の stance 群と方針ブリーフを踏まえ、次の定例に向けて『誰の合意がまだ欠けているか・誰に事前に確認/根回しすべきか』を提案する。各提案は依拠する stance/事実を引用。死角: 当事者マップに寄り、論点の技術的中身を見落とす。"},
+
+    {"id": "READINESS", "domain": "decision-readiness", "desc": "対立が未解決で意思決定を塞いでいる論点を特定し、『次回までに何を詰めれば決められるか』を提案する。CONTESTED な matter を優先。死角: 決定可能性に寄り、政治的機微を軽視する。"},
+
+    {"id": "FRAMING", "domain": "framing-and-sequence", "desc": "方針ブリーフの恐れ・政治的事実を踏まえ、対立論点を次回スライドで『どう表現し・どの順で話すか』を具体的に提案する。敏感な点は柔らかい表現と切り出す順序まで。死角: 表現に寄り、技術的実体を軽視する。"},
+
+    {"id": "FORESIGHT_CRITIC", "domain": "foresight-critique", "desc": "（loop arm 用）各先読み提案(decision)を攻撃する: (a)stance/事実に接地しない憶測か (b)依存関係(誰に聞く・何を詰める)の前提が実在し成立するか (c)一般論・filler・前周の言い換えでないか。generic に流れた/接地しない提案を名指して刈る。自前の提案は出さない。攻撃対象1件の id を meta.refutes に入れる。死角: 批判に寄り、大胆な筋を潰しすぎる。"},
+
+    {"id": "FORESIGHT_ADJ", "domain": "foresight-adjudication", "desc": "（loop arm 用）与えられた1件の先読み反証だけを精査し、冒頭に対象、続けて『判定: {結論変更を要する / 条件付きで結論維持 / 却下}』の3択。裁くのは対象の先読み提案を retract すべきか(=接地なし/generic/言い換えか)だけ。すり替え・矮小化禁止。"},
+
+    {"id": "MATTER_ALIGN", "domain": "matter-alignment", "desc": "全ての stance を1つの文脈でまとめて読み、論点(matter)ラベルを横断で正規化する。**入力 stance を1件も漏らさず1:1で再出力**せよ（author・立場の中身・meta.evidence_quote は原文のまま保持し、元 stance の id を citations に入れる）。meta.matter を**統一ラベル**に揃える（同じ争点は同じラベルに、表記揺れ・粒度差を吸収）。立場の優劣・正否は判定しない（ラベル整合のみ、collapse 禁止）。出力件数は入力 stance 件数と一致させること。"},
+
+    {"id": "MATTER_PROPOSE", "domain": "matter-proposal", "desc": "全 stance をまとめて読み、議論されている論点(matter)の*正準リスト*を作る。表記揺れ・粒度差は1つに merge。各 matter を1つの question entry で出せ（短いラベル＋一文の定義＋含む stance の id 例）。立場の優劣は判定しない。網羅的に——会議で実際に争点/話題になった matter を漏らさず。"},
+
+    {"id": "MATTER_CHALLENGE", "domain": "matter-challenge", "desc": "（異種モデルの反証）提案された matter リスト(question群)と全 stance を読み、単一提案の見落とし・恣意的 merge を攻撃する: (a)stance に存在するのにリストに**欠けている matter**、(b)**別物なのに1つに merge された matter**を名指せ。欠けている/分けるべき matter は新たな question entry で追加せよ（短いラベル＋定義＋根拠 stance id）。賛辞・手加減禁止。自分で結論は出さず、欠落と誤 merge の指摘に徹する。"},
+
+    {"id": "MATTER_LABEL", "domain": "matter-labeling", "desc": "与えられた**1つの stance** を、共有された matter リスト(question群)の中で最も適切な matter に分類し、その stance を**1件だけ**再出力する。meta.matter には選んだ matter の**名前（ラベル文字列。entry id「e22」等にしない）**を入れよ。**meta.speaker・立場本文・meta.evidence_quote は元 stance のものをそのまま保持**し、元 stance の id を citations に入れる。立場の優劣・正否は判定しない。"}
+  ]
+}
