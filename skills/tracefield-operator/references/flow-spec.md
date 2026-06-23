@@ -11,6 +11,7 @@
 | `policy` | string | `"fixed"` | `fixed` / `best_first` / `adaptive_branching` / `multi_organ_adaptive` |
 | `budget` | int | — | 全体のエントリ予算（任意） |
 | `max_feedback_cycles` | int | — | フィードバック上限（任意） |
+| `input_chunk_paragraphs` | int | `0`（=分割しない） | seed 時に各 `inputs/*` を N 段落（空行区切り）単位で chunk 化し distinct path 付与。長文を `per_input` で網羅抽出する用（private/task は対象外） |
 
 ## `[actor_scaling]`
 

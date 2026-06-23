@@ -30,7 +30,16 @@ tracefield doctor
 ```sh
 tracefield new <name> --profile consult
 tracefield new <name> --profile deep_investigation
+tracefield new <name> --profile meeting-support
 ```
+
+`meeting-support` scaffolds the surface-don't-resolve meeting pipeline (stance
+extraction per chunk → matter propose/challenge → no-drop labeling → foresight →
+Marp deck) plus `inputs/minutes.md`, `private/agenda.md`, and a `README.md`. For a
+one-shot path use `tracefield meeting <dir>`: the first call scaffolds (when no
+`flow.toml` exists), the second runs the flow and writes `outputs/` (contested
+map, how-to-proceed, deck). `doctor` prints a ready-to-paste `[organs.<id>]`
+adapter line for the first CLI tool it finds.
 
 Edit `scenarios/<name>/task.md`, `agents.json`, `flow.toml`, `inputs/*`, and
 `private/*.md`. For the `agents.json` / directory format read
