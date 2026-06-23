@@ -86,6 +86,7 @@ analysis（直交レンズのパネル） → verify（FALSIFY/COUNTER） → ad
 - **整合に単一 LLM を使うな**: 全 stance を1文脈で再ラベルさせると closed-set 指示・「落とすな/件数一致」明記でも 16→3 に collapse（実証3回）＝開放集合の単一 NORM 再収束（§denoise・findings-diffusion-thinking）。**no-drop は構造（`shared_inputs`）でしか保証できない**。
 - **当事者は `entry.author`（＝actor 役割で全 stance 同一）でなく `meta.speaker`** で数える。抽出段が `meta.speaker` を立てる。
 - 実測 n=1(TC39 公開議事録): 18→18 無落とし、native 実装等の実対立が CONTESTED 化。係数・頑健性は要再現。P1(対立抽出)の検証であって P2(agenda 条件付き先読み)は別。
+- **この骨格は `tracefield new --profile meeting-support`（または `tracefield meeting <dir>`）で雛形が出る**（stances→matter propose/challenge→no-drop label→foresight→Marp deck）。長文議事録は `[flow] input_chunk_paragraphs = N` が seed 時に N 段落単位で chunk 化し `per_input` が網羅抽出（手分割不要・各 chunk は distinct path で resume 安全）。private(agenda) は chunk されず foresight に全体が届く。異種 debate は既定 codex に `[organs.claude]` を足し `matter_challenge.organ` を claude へ。
 
 ### 同一モデルの verify/adjudication は選択バイアスを孕む（debate で是正・findings-bet2-overturn）
 verify/adjudication が **analysis と同じモデル**だと、生成器の prior を共有した審判になり、**裁量 refuter（`fixed` count で agent が攻撃対象を選ぶ）はモデルの attractor に*同調する*主張を見逃し、*外れる*主張だけを攻撃する**＝収束を捏造する（実測: 11主張中、モデルの好む帰責枠7件は一度も攻撃されず無傷生存、外れたコスト枠4件だけが覆った）。**「生き残った」は反証を生き延びたのでなく*選ばれなかった*だけ。** 是正（強→弱）:
