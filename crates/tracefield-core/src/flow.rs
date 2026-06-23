@@ -55,6 +55,10 @@ pub struct FlowConfig {
     pub policy: String,
     pub budget: Option<usize>,
     pub max_feedback_cycles: Option<usize>,
+    /// When >0, split each input file into groups of N blank-line paragraphs at
+    /// seed time so `per_input` auto-scales to the chunk count (coverage for long
+    /// minutes/transcripts without manual splitting). 0 = off (one entry/file).
+    pub input_chunk_paragraphs: usize,
     pub process: ProcessConfig,
     pub long_run: LongRunConfig,
     pub actor_scaling: GlobalActorScaling,
@@ -302,7 +306,7 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
     } else {
         ReferenceStore::new()
     };
-    let seeded = seed_flow_layer0(&mut store, &scenario)?;
+    let seeded = seed_flow_layer0(&mut store, &scenario, config.input_chunk_paragraphs)?;
     checkpoint_flow_store(&store, options.persist_path.as_deref())?;
     let mut stages = Vec::new();
     let mut all_generated = Vec::new();
@@ -583,6 +587,7 @@ impl FlowConfig {
         let policy = string_value(&flow, "policy").unwrap_or_else(|| "fixed".to_string());
         let budget = usize_value(&flow, "budget");
         let max_feedback_cycles = usize_value(&flow, "max_feedback_cycles");
+        let input_chunk_paragraphs = usize_value(&flow, "input_chunk_paragraphs").unwrap_or(0);
         let long_run_table = document.table("long_run").cloned().unwrap_or_default();
         let long_run = LongRunConfig {
             enabled: bool_value(&long_run_table, "enabled").unwrap_or(false),
@@ -748,6 +753,7 @@ impl FlowConfig {
             policy,
             budget,
             max_feedback_cycles,
+            input_chunk_paragraphs,
             process,
             long_run,
             actor_scaling,
@@ -1855,7 +1861,11 @@ fn parse_config_entry_type(value: &str) -> Result<EntryType> {
     }
 }
 
-fn seed_flow_layer0(store: &mut ReferenceStore, scenario: &Scenario) -> Result<SeededFlow> {
+fn seed_flow_layer0(
+    store: &mut ReferenceStore,
+    scenario: &Scenario,
+    chunk_paragraphs: usize,
+) -> Result<SeededFlow> {
     let task = push_or_reuse_seed(
         store,
         NewEntry::new(EntryType::Chunk, "scenario", scenario.task.clone())
@@ -1882,15 +1892,27 @@ fn seed_flow_layer0(store: &mut ReferenceStore, scenario: &Scenario) -> Result<S
     }
 
     for input in load_input_docs(&scenario.dir)? {
-        let mut new_entry = NewEntry::new(EntryType::CorpusChunk, "scenario", input.content)
-            .with_citations(vec![task.id.clone()])
-            .with_meta("kind", json!("input"))
-            .with_meta("path", json!(input.path.clone()));
-        for (key, value) in input.meta {
-            new_entry.meta.entry(key).or_insert(value);
+        let chunks = chunk_input_content(&input.content, chunk_paragraphs);
+        let multi = chunks.len() > 1;
+        for (idx, chunk) in chunks.into_iter().enumerate() {
+            let path = if multi {
+                format!("{}#{:02}", input.path, idx + 1)
+            } else {
+                input.path.clone()
+            };
+            let mut new_entry = NewEntry::new(EntryType::CorpusChunk, "scenario", chunk)
+                .with_citations(vec![task.id.clone()])
+                .with_meta("kind", json!("input"))
+                .with_meta("path", json!(path.clone()));
+            if multi {
+                new_entry = new_entry.with_meta("chunk_index", json!(idx + 1));
+            }
+            for (key, value) in &input.meta {
+                new_entry.meta.entry(key.clone()).or_insert(value.clone());
+            }
+            let entry = push_or_reuse_seed(store, new_entry, "scenario", "input", Some(&path));
+            entries.push(entry);
         }
-        let entry = push_or_reuse_seed(store, new_entry, "scenario", "input", Some(&input.path));
-        entries.push(entry);
     }
 
     let mut skill_entry_ids = BTreeMap::new();
@@ -1942,6 +1964,25 @@ struct InputDoc {
     path: String,
     content: String,
     meta: Map<String, Value>,
+}
+
+/// Split input content into groups of `group` blank-line paragraphs so a
+/// `per_input` stage gets one actor per chunk (coverage for long minutes /
+/// transcripts). `group == 0`, or content with <= group paragraphs, returns the
+/// whole content as one chunk (short inputs like an agenda stay intact).
+fn chunk_input_content(content: &str, group: usize) -> Vec<String> {
+    if group == 0 {
+        return vec![content.to_string()];
+    }
+    let paras: Vec<&str> = content
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|para| !para.is_empty())
+        .collect();
+    if paras.len() <= group {
+        return vec![content.to_string()];
+    }
+    paras.chunks(group).map(|grp| grp.join("\n\n")).collect()
 }
 
 fn load_input_docs(scenario_dir: &Path) -> Result<Vec<InputDoc>> {
@@ -7821,5 +7862,60 @@ mode = "none"
         let before = a0.len();
         merge_shared_entries(&mut a0, &shared);
         assert_eq!(a0.len(), before);
+    }
+
+    #[tokio::test]
+    async fn input_chunk_paragraphs_splits_long_input() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("task.md"), "Chunk inputs.\n").unwrap();
+        fs::write(
+            dir.path().join("agents.json"),
+            r#"{"agents":[{"id":"A1","domain":"read","desc":"read"}]}"#,
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("inputs")).unwrap();
+        let body = (1..=7)
+            .map(|i| format!("paragraph {i}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        fs::write(dir.path().join("inputs").join("long.md"), body).unwrap();
+        fs::write(
+            dir.path().join("flow.toml"),
+            r#"
+[flow]
+profile = "chunk_flow"
+policy = "fixed"
+input_chunk_paragraphs = 3
+
+[organs.reasoning]
+adapter = "mock"
+
+[stages.read]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["observation"]
+
+[stages.read.actors]
+mode = "per_input"
+"#,
+        )
+        .unwrap();
+        let store_path = dir.path().join("store.jsonl");
+        run_flow(FlowRunOptions {
+            scenario_dir: dir.path().to_path_buf(),
+            config_path: None,
+            budget: None,
+            persist_path: Some(store_path.clone()),
+        })
+        .await
+        .unwrap();
+        let store = ReferenceStore::from_jsonl_path(&store_path).unwrap();
+        let inputs = store
+            .all()
+            .iter()
+            .filter(|entry| entry.meta.get("kind").and_then(Value::as_str) == Some("input"))
+            .count();
+        // 7 paragraphs / 3 per chunk = 3 input entries (per_input scales to 3).
+        assert_eq!(inputs, 3);
     }
 }
