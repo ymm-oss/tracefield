@@ -164,6 +164,14 @@ pub struct StageConfig {
     pub organ: Option<String>,
     pub budget: Option<usize>,
     pub inputs: Vec<String>,
+    /// Selectors whose entries are passed to EVERY actor as SHARED context (not
+    /// sharded by actor mode). Lets a `per_input` stage shard `inputs`
+    /// one-per-actor while giving each actor the full shared set — e.g. shard
+    /// stances one-per-judge while sharing a closed matter list. This is the
+    /// "scale by one selector, share the rest" primitive: it makes no-drop
+    /// per-item labeling possible (each actor handles exactly one input, so a
+    /// monolith can't collapse N items into a summary).
+    pub shared_inputs: Vec<String>,
     pub outputs: Vec<EntryType>,
     pub context: Option<StageContextConfig>,
     pub actors: ActorConfig,
@@ -702,6 +710,7 @@ impl FlowConfig {
                 organ: string_value(&values, "organ"),
                 budget: usize_value(&values, "budget"),
                 inputs: string_array(&values, "inputs"),
+                shared_inputs: string_array(&values, "shared_inputs"),
                 outputs,
                 context,
                 actors,
@@ -898,6 +907,7 @@ async fn execute_stage(
 ) -> Result<StageRunResult> {
     let stage = &config.stages[work_item.stage_index];
     let selected = select_stage_inputs(store, stage, scenario, &work_item.feedback_request_ids);
+    let shared = select_shared_inputs(store, stage);
     let scaling = decide_actor_count(stage, config, &selected, scenario.agents.len());
     let organ = stage
         .organ
@@ -987,6 +997,7 @@ async fn execute_stage(
                     organ,
                     budget_step,
                     &selected,
+                    &shared,
                     &scaling,
                     parallelism,
                     persist_path,
@@ -995,8 +1006,9 @@ async fn execute_stage(
             );
         } else {
             for actor_index in 0..scaling.chosen_count {
-                let actor_selected =
+                let mut actor_selected =
                     actor_selected_entries(stage, &selected, actor_index, scaling.chosen_count);
+                merge_shared_entries(&mut actor_selected, &shared);
                 let actor = actor_for_index(scenario, stage, actor_index);
                 let actor_id = actor
                     .map(|actor| actor.id.clone())
@@ -1121,6 +1133,7 @@ async fn execute_stage_actors_parallel(
     organ: Option<&OrganConfig>,
     budget_step: usize,
     selected: &[Entry],
+    shared: &[Entry],
     scaling: &ActorScalingDecision,
     parallelism: usize,
     persist_path: Option<&Path>,
@@ -1134,8 +1147,9 @@ async fn execute_stage_actors_parallel(
             let actor_index = next_actor_index;
             next_actor_index += 1;
 
-            let actor_selected =
+            let mut actor_selected =
                 actor_selected_entries(stage, selected, actor_index, scaling.chosen_count);
+            merge_shared_entries(&mut actor_selected, shared);
             let actor = actor_for_index(scenario, stage, actor_index).cloned();
             let actor_id = actor
                 .as_ref()
@@ -1349,6 +1363,7 @@ fn process_stage_config(config: &FlowConfig, kind: ProcessStageKind) -> StageCon
         organ: config.process.organ.clone(),
         budget: None,
         inputs: Vec::new(),
+        shared_inputs: Vec::new(),
         outputs: match kind {
             ProcessStageKind::Plan => vec![EntryType::Decision, EntryType::Requirement],
             ProcessStageKind::ArtifactGate => vec![EntryType::Audit, EntryType::Decision],
@@ -2073,6 +2088,36 @@ fn select_stage_inputs(
         }
     }
     selected
+}
+
+/// Resolve `shared_inputs` selectors to entries passed to every actor as shared
+/// context (un-sharded). Deduped by id; Active filtering happens inside
+/// `entries_for_selector`.
+fn select_shared_inputs(store: &ReferenceStore, stage: &StageConfig) -> Vec<Entry> {
+    let mut seen = BTreeSet::new();
+    let mut shared = Vec::new();
+    for selector in &stage.shared_inputs {
+        for entry in entries_for_selector(store, selector) {
+            if seen.insert(entry.id.clone()) {
+                shared.push(entry);
+            }
+        }
+    }
+    shared
+}
+
+/// Append `shared` entries to one actor's selection, skipping any id already
+/// present (a shared entry that also fell into this actor's shard).
+fn merge_shared_entries(actor_selected: &mut Vec<Entry>, shared: &[Entry]) {
+    let present: BTreeSet<String> = actor_selected
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    for entry in shared {
+        if !present.contains(&entry.id) {
+            actor_selected.push(entry.clone());
+        }
+    }
 }
 
 fn entries_for_selector(store: &ReferenceStore, selector: &str) -> Vec<Entry> {
@@ -5079,6 +5124,14 @@ fn render_slides_markdown_artifact(artifact: &ArtifactConfig, entries: &[Entry])
 /// disagreement rather than resolving it (peer disagreement is left Active; only
 /// validity refutations retract, upstream). This is the read shape that turns a
 /// flat pile of stance entries into something a human can adjudicate.
+/// The party holding a stance: the meeting speaker (`meta.speaker`) when the
+/// extractor captured it, else the entry author. Contestation is counted over
+/// distinct speakers, not the actor that emitted the entry (which is a role
+/// like STANCE_EXTRACT shared by every stance).
+fn entry_speaker(entry: &Entry) -> String {
+    entry_meta_string(entry, "speaker").unwrap_or_else(|| entry.author.clone())
+}
+
 fn render_contested_map_artifact(artifact: &ArtifactConfig, entries: &[Entry]) -> String {
     let mut output = String::new();
     output.push_str(&format!("# {}\n\n", artifact.id.replace('_', " ")));
@@ -5098,7 +5151,7 @@ fn render_contested_map_artifact(artifact: &ArtifactConfig, entries: &[Entry]) -
     for (matter, members) in &groups {
         let mut parties = members
             .iter()
-            .map(|entry| entry.author.clone())
+            .map(|entry| entry_speaker(entry))
             .collect::<Vec<_>>();
         parties.sort();
         parties.dedup();
@@ -5115,7 +5168,7 @@ fn render_contested_map_artifact(artifact: &ArtifactConfig, entries: &[Entry]) -
         for entry in members {
             output.push_str(&format!(
                 "- **{}** ({}): {}\n",
-                entry.author,
+                entry_speaker(entry),
                 entry.id,
                 entry.text.trim()
             ));
@@ -5367,6 +5420,7 @@ mod tests {
             organ: None,
             budget: None,
             inputs: Vec::new(),
+            shared_inputs: Vec::new(),
             outputs: vec![EntryType::Observation],
             context: None,
             actors: ActorConfig {
@@ -6641,6 +6695,7 @@ outputs = ["change", "decision"]
             organ: None,
             budget: None,
             inputs: Vec::new(),
+            shared_inputs: Vec::new(),
             outputs: vec![EntryType::Observation],
             context: None,
             actors: ActorConfig {
@@ -7696,5 +7751,75 @@ mode = "none"
                 && out.contains("Use Postgres.")
         );
         assert!(out.contains("**X**") && out.contains("**Org**") && out.contains("**Y**"));
+    }
+
+    #[test]
+    fn shared_inputs_reach_every_actor_without_drop_or_dup() {
+        // per_input shards `inputs` one-per-actor; `shared_inputs` reach EVERY
+        // actor un-sharded. This is the no-drop labeling primitive: each actor
+        // handles exactly one stance plus the full shared matter list.
+        let mut store = ReferenceStore::new();
+        let s1 = store.push(
+            NewEntry::new(EntryType::Stance, "X", "pos A").with_meta("stage", json!("stances")),
+            "x",
+        );
+        let s2 = store.push(
+            NewEntry::new(EntryType::Stance, "Y", "pos B").with_meta("stage", json!("stances")),
+            "y",
+        );
+        let m1 = store.push(
+            NewEntry::new(EntryType::Question, "survey", "matter one")
+                .with_meta("stage", json!("matter_propose")),
+            "survey",
+        );
+
+        let stage = StageConfig {
+            id: "matter_label".to_string(),
+            organ: None,
+            budget: None,
+            inputs: vec!["stage:stances".to_string()],
+            shared_inputs: vec!["stage:matter_propose".to_string()],
+            outputs: vec![EntryType::Stance],
+            context: None,
+            actors: ActorConfig {
+                mode: "per_input".to_string(),
+                count: None,
+                min: None,
+                max: None,
+                scale_by: Vec::new(),
+                roles: vec!["MATTER_LABEL".to_string()],
+            },
+            clustering: None,
+            command: None,
+            artifact: None,
+            retract_overturned: false,
+            grounded: false,
+        };
+
+        let shared = select_shared_inputs(&store, &stage);
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].id, m1.id);
+
+        let selected = vec![s1.clone(), s2.clone()];
+        let mut a0 = actor_selected_entries(&stage, &selected, 0, 2);
+        merge_shared_entries(&mut a0, &shared);
+        let mut a1 = actor_selected_entries(&stage, &selected, 1, 2);
+        merge_shared_entries(&mut a1, &shared);
+
+        // the shared matter reached BOTH actors
+        assert!(a0.iter().any(|e| e.id == m1.id));
+        assert!(a1.iter().any(|e| e.id == m1.id));
+        // every stance landed in exactly one actor's shard (no drop)
+        let stance_ids: BTreeSet<String> = a0
+            .iter()
+            .chain(a1.iter())
+            .filter(|e| e.entry_type == EntryType::Stance)
+            .map(|e| e.id.clone())
+            .collect();
+        assert!(stance_ids.contains(&s1.id) && stance_ids.contains(&s2.id));
+        // re-merging the same shared set does not duplicate
+        let before = a0.len();
+        merge_shared_entries(&mut a0, &shared);
+        assert_eq!(a0.len(), before);
     }
 }
