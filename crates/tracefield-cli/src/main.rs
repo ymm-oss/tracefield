@@ -88,6 +88,12 @@ enum Command {
     },
     /// Check local runtime dependencies.
     Doctor,
+    /// Scaffold (first call) then run the meeting-support flow on a directory.
+    Meeting {
+        dir: PathBuf,
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -234,6 +240,40 @@ async fn main() -> Result<()> {
         }
         Command::Doctor => {
             print_doctor().await;
+        }
+        Command::Meeting { dir, force } => {
+            if !dir.join("flow.toml").exists() {
+                let name = dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("meeting");
+                tracefield_core::scenario::scaffold_with_profile(
+                    name,
+                    Some(&dir),
+                    force,
+                    "meeting-support",
+                )
+                .with_context(|| {
+                    format!("failed to scaffold meeting scenario {}", dir.display())
+                })?;
+                println!("scaffolded meeting-support scenario at {}", dir.display());
+                println!(
+                    "→ edit inputs/minutes.md (+ private/agenda.md), confirm the adapter (tracefield doctor), then re-run: tracefield meeting {}",
+                    dir.display()
+                );
+            } else {
+                let result = run_flow(FlowRunOptions {
+                    scenario_dir: dir.clone(),
+                    config_path: None,
+                    budget: None,
+                    persist_path: Some(dir.join("store.jsonl")),
+                })
+                .await
+                .with_context(|| format!("failed to run meeting flow {}", dir.display()))?;
+                print_run_report(&result).context("failed to render run report")?;
+                println!();
+                println!("outputs: {}", dir.join("outputs").display());
+            }
         }
     }
 
@@ -572,6 +612,9 @@ async fn print_doctor() {
             format!("{} found", cli_tools.join(", "))
         }
     );
+    if let Some(tool) = cli_tools.first() {
+        println!("  → flow.toml: [organs.<id>] adapter = \"cli\" command = \"{tool}\"");
+    }
 }
 
 fn print_entry_line(entry: &Value) {

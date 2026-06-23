@@ -125,37 +125,39 @@ pub fn scaffold_with_profile(
     fs::create_dir_all(base.join("inputs"))
         .with_context(|| format!("failed to create {}", base.display()))?;
 
-    write_if_allowed(
-        &base.join("task.md"),
-        "Describe the decision or investigation task here.\n",
-        force,
-    )?;
-    write_if_allowed(
-        &base.join("agents.json"),
-        r#"{
-  "agents": [
-    {"id": "A1", "domain": "risk", "desc": "Focus on risks and constraints.", "doc": "lens1.md"},
-    {"id": "A2", "domain": "value", "desc": "Focus on user and business value.", "doc": "lens2.md"}
-  ]
-}
-"#,
-        force,
-    )?;
-    write_if_allowed(
-        &base.join("private").join("lens1.md"),
-        "Private lens for A1.\n",
-        force,
-    )?;
-    write_if_allowed(
-        &base.join("private").join("lens2.md"),
-        "Private lens for A2.\n",
-        force,
-    )?;
-    write_if_allowed(
-        &base.join("inputs").join("example.md"),
-        "Replace this with source material, issue text, logs, or other flow inputs.\n",
-        force,
-    )?;
+    write_if_allowed(&base.join("task.md"), task_template(profile), force)?;
+    write_if_allowed(&base.join("agents.json"), agents_template(profile), force)?;
+
+    if profile == "meeting-support" {
+        write_if_allowed(
+            &base.join("inputs").join("minutes.md"),
+            MEETING_SUPPORT_MINUTES,
+            force,
+        )?;
+        write_if_allowed(
+            &base.join("private").join("agenda.md"),
+            MEETING_SUPPORT_AGENDA,
+            force,
+        )?;
+        write_if_allowed(&base.join("README.md"), MEETING_SUPPORT_README, force)?;
+    } else {
+        write_if_allowed(
+            &base.join("private").join("lens1.md"),
+            "Private lens for A1.\n",
+            force,
+        )?;
+        write_if_allowed(
+            &base.join("private").join("lens2.md"),
+            "Private lens for A2.\n",
+            force,
+        )?;
+        write_if_allowed(
+            &base.join("inputs").join("example.md"),
+            "Replace this with source material, issue text, logs, or other flow inputs.\n",
+            force,
+        )?;
+    }
+
     write_if_allowed(
         &base.join("flow.toml"),
         flow_template(profile).with_context(|| format!("unknown flow profile {profile:?}"))?,
@@ -164,6 +166,201 @@ pub fn scaffold_with_profile(
 
     Ok(base)
 }
+
+fn task_template(profile: &str) -> &'static str {
+    match profile {
+        "meeting-support" => MEETING_SUPPORT_TASK,
+        _ => "Describe the decision or investigation task here.\n",
+    }
+}
+
+fn agents_template(profile: &str) -> &'static str {
+    match profile {
+        "meeting-support" => MEETING_SUPPORT_AGENTS,
+        _ => {
+            r#"{
+  "agents": [
+    {"id": "A1", "domain": "risk", "desc": "Focus on risks and constraints.", "doc": "lens1.md"},
+    {"id": "A2", "domain": "value", "desc": "Focus on user and business value.", "doc": "lens2.md"}
+  ]
+}
+"#
+        }
+    }
+}
+
+const MEETING_SUPPORT_TASK: &str = r##"# 定例MTG 支援（surface-don't-resolve）
+
+`inputs/` の会議資料（議事録・チャット）を読み、次の定例の準備を支援せよ。
+
+1. 各論点(matter)について「誰が(meta.speaker)どんな立場か」を来歴つきで洗い出す。立場の正否は **断定しない**（誰が正しいかは人間が決める）。対立はそのまま提示する。
+2. その上で、方針ブリーフ（`private/agenda.md`：望む成果・恐れ・政治的事実）を踏まえ、次の定例で「何を議論すべきか・誰に事前確認すべきか・どう表現すべきか・どの順で話すか」を提案する。
+
+立場の対立を AI が解決して1つの結論に畳んではならない。提示し、解決は人間に委ねる。
+"##;
+
+const MEETING_SUPPORT_AGENTS: &str = r##"{
+  "agents": [
+    {"id": "STANCE_EXTRACT", "domain": "stance-extraction", "desc": "与えられた1つの会議資料チャンクだけを読み、各論点(matter)について『誰がどんな立場か』を atomic な stance として抽出する。1 stance=1エントリ。**網羅的に**：チャンク内の全発言者の全ての立場を漏らさず出す。**同じ matter に複数人の立場があれば全員分を別 stance に**（対立を surface するため——漏らすと CONTESTED が立たない）。**meta.speaker に発言者名**を入れ、meta.matter に論点の短いラベル、meta.evidence_quote に根拠の原文逐語(8〜30語)を付す。立場の正否は判定せず資料の事実のみ。死角: 書かれた発言に偏り言外を読まない。"},
+
+    {"id": "MATTER_PROPOSE", "domain": "matter-proposal", "desc": "全 stance をまとめて読み、議論されている論点(matter)の正準リストを作る。表記揺れ・粒度差は1つに merge。各 matter を1つの question entry で出せ（短いラベル＋一文の定義＋含む stance の id 例）。立場の優劣は判定しない。網羅的に。"},
+
+    {"id": "MATTER_CHALLENGE", "domain": "matter-challenge", "desc": "提案された matter リスト(question群)と全 stance を読み、見落とし・恣意的 merge を攻撃する: (a)stance に在るのにリストに欠けている matter、(b)別物なのに merge された matter を名指せ。欠けている/分けるべき matter は新たな question entry で追加せよ（短いラベル＋定義＋根拠 stance id）。賛辞・手加減禁止。結論は出さず欠落と誤 merge の指摘に徹する。"},
+
+    {"id": "MATTER_LABEL", "domain": "matter-labeling", "desc": "与えられた**1つの stance** を、共有された matter リスト(question群)の中で最も適切な matter に分類し、その stance を**1件だけ**再出力する。meta.matter には選んだ matter の**名前**を入れよ（entry id にしない）。**meta.speaker・立場本文・meta.evidence_quote は元 stance のものをそのまま保持**し、元 stance の id を citations に。立場の優劣は判定しない。"},
+
+    {"id": "STAKEHOLDER", "domain": "stakeholder-map", "desc": "現在の立場群と方針ブリーフを踏まえ、次の定例に向け『誰の合意がまだ欠けているか・誰に事前確認/根回しすべきか』を提案する。各提案は依拠する stance を引用。死角: 当事者に寄り技術的中身を見落とす。"},
+
+    {"id": "READINESS", "domain": "decision-readiness", "desc": "対立が未解決で意思決定を塞いでいる論点を特定し『次回までに何を詰めれば決められるか』を提案する。CONTESTED な matter を優先。死角: 決定可能性に寄り政治的機微を軽視。"},
+
+    {"id": "FRAMING", "domain": "framing-and-sequence", "desc": "方針ブリーフの恐れ・政治的事実を踏まえ、対立論点を次回スライドで『どう表現し・どの順で話すか』を具体的に提案する。敏感な点は柔らかい表現と切り出す順序まで。死角: 表現に寄り技術的実体を軽視。"},
+
+    {"id": "DECK", "domain": "slide-draft", "desc": "生き残った立場(matter別)と進め方の提案を読み、次回定例の Marp スライド下書きを作る。各スライドはタイトル＋3〜5項目＋必要なら speaker notes。**対立論点はどちらかに畳まず両論を併記**し、進め方(誰に聞く/表現/順序)を反映。立場の優劣は決めない。meta.artifact_section に短いスライド題を入れる。"}
+  ]
+}
+"##;
+
+const MEETING_SUPPORT_FLOW: &str = r##"[flow]
+profile = "meeting-support"
+policy = "fixed"
+# 長い議事録を段落3つ単位で自動 chunk → per_input が網羅抽出（手分割不要）。
+input_chunk_paragraphs = 3
+
+[actor_scaling]
+default_mode = "fixed"
+max_parallel_actors = 3
+
+# 既定は単一モデル(codex)＝最小セットアップ。matter_challenge を異種モデルで硬化するなら
+# 別 organ（例: [organs.claude] adapter="cli" command="claude"）を足し matter_challenge.organ をそれに。
+[organs.reasoning]
+adapter = "cli"
+command = "codex"
+
+# 各 chunk を隔離読みして stance を網羅抽出（誰がどの立場か・meta.speaker つき）
+[stages.stances]
+organ = "reasoning"
+inputs = ["kind:input"]
+outputs = ["stance"]
+grounded = true
+[stages.stances.actors]
+mode = "per_input"
+roles = ["STANCE_EXTRACT"]
+
+# 論点(matter)集合を閉じる: 提案 → 反証で欠落を足し戻す
+[stages.matter_propose]
+organ = "reasoning"
+inputs = ["stage:stances"]
+outputs = ["question"]
+[stages.matter_propose.actors]
+mode = "fixed"
+count = 1
+roles = ["MATTER_PROPOSE"]
+
+[stages.matter_challenge]
+organ = "reasoning"
+inputs = ["stage:stances", "stage:matter_propose"]
+outputs = ["question"]
+[stages.matter_challenge.actors]
+mode = "fixed"
+count = 1
+roles = ["MATTER_CHALLENGE"]
+
+# no-drop ラベル付け: per_input で stance を1件ずつ shard ＋ 確定 matter 一覧を shared_inputs で全 actor に共有
+[stages.matter_label]
+organ = "reasoning"
+inputs = ["stage:stances"]
+shared_inputs = ["stage:matter_propose", "stage:matter_challenge"]
+outputs = ["stance"]
+[stages.matter_label.actors]
+mode = "per_input"
+roles = ["MATTER_LABEL"]
+
+# 進め方: 生き残った立場 ＋ 方針(private) を読み、次回の論点/根回し/表現/順序を提案
+[stages.foresight]
+organ = "reasoning"
+inputs = ["stage:matter_label", "kind:private"]
+outputs = ["decision", "question"]
+[stages.foresight.actors]
+mode = "fixed"
+count = 3
+roles = ["STAKEHOLDER", "READINESS", "FRAMING"]
+
+# スライド下書き(Marp): 立場と進め方を deck 化（対立は両論併記）
+[stages.deck]
+organ = "reasoning"
+inputs = ["stage:matter_label", "stage:foresight"]
+outputs = ["synthesis"]
+[stages.deck.actors]
+mode = "fixed"
+count = 1
+roles = ["DECK"]
+[stages.deck.artifact]
+format = "slides_markdown"
+
+# 終端の成果物（機械描画）
+[artifacts.contested_map]
+format = "contested_map"
+from_stage = "matter_label"
+path = "outputs/contested-map.md"
+
+[artifacts.how_to_proceed]
+format = "markdown"
+from_stage = "foresight"
+path = "outputs/how-to-proceed.md"
+
+[artifacts.deck]
+format = "slides_markdown"
+from_stage = "deck"
+path = "outputs/deck.marp.md"
+"##;
+
+const MEETING_SUPPORT_MINUTES: &str = r##"# 議事録（ここを実際の議事録に差し替える）
+
+発言は段落（空行区切り）で書く。長文は flow の input_chunk_paragraphs で自動 chunk され、
+per_input が各 chunk を網羅抽出する（手分割は不要）。
+
+田中: （例）スコープは確定したので Q2 出荷で行きたい。
+
+大野部長: クライアントには Q1 と約束済み。Q1 を死守したい。
+
+山本: 現状の負債だと Q2 は危うい。品質を担保するなら Q3 が現実的。
+"##;
+
+const MEETING_SUPPORT_AGENDA: &str = r##"# 方針ブリーフ（任意・進め方の質を上げる）
+
+数行でよい。空でも動くが、書くほど「進め方」の提案が鋭くなる。
+
+## 望む成果
+- （この定例で何を達成したいか）
+
+## 恐れ
+- （何が起きると困るか・政治的に痛い点）
+
+## 主要な政治的事実
+- （誰が力を持つ・何に敏感か、議事録に書かれない前提）
+"##;
+
+const MEETING_SUPPORT_README: &str = r##"# meeting-support — 定例MTG 支援（surface-don't-resolve）
+
+議事録から「誰がどの論点でどんな立場か（対立を潰さず提示）」＋「次回の進め方」＋
+「スライド下書き」を出す。詳細は `docs/findings-surface-dont-resolve.md`。
+
+## 使い方
+1. `inputs/minutes.md` を実際の議事録に差し替える（発言は空行区切りの段落で。長文は自動 chunk）。
+2. `private/agenda.md` に方針ブリーフを書く（任意だが推奨）。
+3. モデルを設定：`tracefield doctor` で codex/claude を確認し、`flow.toml` の
+   `[organs.reasoning]` は既定で `adapter="cli" command="codex"`。
+4. 実行：`tracefield run --scenario-dir <this dir>`（または `tracefield meeting <this dir>`）。
+
+## 出力（`outputs/`）
+- `contested-map.md` — 論点別に全立場を来歴つきで提示。発言者 ≥2 の論点に `⚠ CONTESTED`。
+- `how-to-proceed.md` — 次に議論すべき点・誰に聞くか・表現・順序。
+- `deck.marp.md` — Marp スライド下書き（対立は両論併記）。
+
+## 異種モデルで硬化（任意）
+matter の欠落落としを防ぐなら `[organs.claude] adapter="cli" command="claude"` を足し、
+`[stages.matter_challenge] organ = "claude"` にする（異種 debate）。
+"##;
 
 fn flow_template(profile: &str) -> Option<&'static str> {
     match profile {
@@ -553,6 +750,7 @@ from_stage = "deck_finalize"
 path = "outputs/deck.md"
 "#,
         ),
+        "meeting-support" => Some(MEETING_SUPPORT_FLOW),
         _ => None,
     }
 }
@@ -805,6 +1003,24 @@ Review procedure
         let flow = fs::read_to_string(scenario_dir.join("flow.toml")).unwrap();
         assert!(flow.contains("[stages.collect]"));
         assert!(flow.contains("[artifacts.summary]"));
+    }
+
+    #[test]
+    fn scaffold_can_create_meeting_support_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("mtg");
+        let scenario_dir =
+            scaffold_with_profile("mtg", Some(&target), false, "meeting-support").unwrap();
+
+        let flow = fs::read_to_string(scenario_dir.join("flow.toml")).unwrap();
+        assert!(flow.contains("profile = \"meeting-support\""));
+        assert!(flow.contains("shared_inputs"));
+        assert!(flow.contains("input_chunk_paragraphs"));
+        let agents = fs::read_to_string(scenario_dir.join("agents.json")).unwrap();
+        assert!(agents.contains("STANCE_EXTRACT") && agents.contains("MATTER_LABEL"));
+        assert!(scenario_dir.join("inputs").join("minutes.md").exists());
+        assert!(scenario_dir.join("private").join("agenda.md").exists());
+        assert!(scenario_dir.join("README.md").exists());
     }
 
     #[test]
