@@ -419,10 +419,16 @@ mod tests {
     #[test]
     fn reconcile_retracts_only_the_refuted_target_not_context() {
         let mut store = ReferenceStore::new();
-        let target =
-            store.push(NewEntry::new(EntryType::Decision, "spec", "status always Active"), "spec");
+        let target = store.push(
+            NewEntry::new(EntryType::Decision, "spec", "status always Active"),
+            "spec",
+        );
         let context = store.push(
-            NewEntry::new(EntryType::Decision, "spec", "closure traverses Active edges"),
+            NewEntry::new(
+                EntryType::Decision,
+                "spec",
+                "closure traverses Active edges",
+            ),
             "spec",
         );
         // Refutation attacks `target`, only *references* `context`; it names the
@@ -434,8 +440,12 @@ mod tests {
             "CONTRACT",
         );
         let overturn = store.push(
-            NewEntry::new(EntryType::Decision, "ADJ", "判定: 結論変更を要する（当該主張を撤回）。")
-                .with_citations(vec![refutation.id.clone()]),
+            NewEntry::new(
+                EntryType::Decision,
+                "ADJ",
+                "判定: 結論変更を要する（当該主張を撤回）。",
+            )
+            .with_citations(vec![refutation.id.clone()]),
             "ADJ",
         );
         let conditional = store.push(
@@ -449,7 +459,10 @@ mod tests {
         assert_eq!(report.retracted[0].0, target.id);
         assert!(report.unactioned.is_empty());
         // Only the refuted target is retracted; the endorsed context survives.
-        assert_eq!(store.get(&target.id).unwrap().status, EntryStatus::Retracted);
+        assert_eq!(
+            store.get(&target.id).unwrap().status,
+            EntryStatus::Retracted
+        );
         assert_eq!(store.get(&context.id).unwrap().status, EntryStatus::Active);
         // A conditional verdict retracts nothing and is not an unactioned overturn.
         let r2 = store.reconcile_overturned(&[conditional]);
@@ -461,8 +474,10 @@ mod tests {
         // Agents emit meta.refutes as a bare string (not an array) about half the
         // time; reconcile must action it, else the overturn is silently UNACTIONED.
         let mut store = ReferenceStore::new();
-        let target =
-            store.push(NewEntry::new(EntryType::Decision, "spec", "claim under attack"), "spec");
+        let target = store.push(
+            NewEntry::new(EntryType::Decision, "spec", "claim under attack"),
+            "spec",
+        );
         let refutation = store.push(
             NewEntry::new(EntryType::Observation, "FRONTIER", "this claim fails")
                 .with_citations(vec![target.id.clone()])
@@ -478,13 +493,19 @@ mod tests {
         assert_eq!(report.retracted.len(), 1);
         assert_eq!(report.retracted[0].0, target.id);
         assert!(report.unactioned.is_empty());
-        assert_eq!(store.get(&target.id).unwrap().status, EntryStatus::Retracted);
+        assert_eq!(
+            store.get(&target.id).unwrap().status,
+            EntryStatus::Retracted
+        );
     }
 
     #[test]
     fn reconcile_surfaces_overturn_with_no_retractable_target() {
         let mut store = ReferenceStore::new();
-        let claim = store.push(NewEntry::new(EntryType::Decision, "spec", "some claim"), "spec");
+        let claim = store.push(
+            NewEntry::new(EntryType::Decision, "spec", "some claim"),
+            "spec",
+        );
         // Refutation WITHOUT meta.refutes (the lens forgot to declare its target).
         let refutation = store.push(
             NewEntry::new(EntryType::Observation, "INVARIANT", "this claim is wrong")
@@ -534,7 +555,12 @@ mod tests {
         assert_eq!(store.get(&q1.id).unwrap().status, EntryStatus::Superseded);
         assert_eq!(store.get(&d1.id).unwrap().status, EntryStatus::Superseded);
         assert_eq!(
-            store.get(&d1.id).unwrap().meta.get("superseded_by").unwrap(),
+            store
+                .get(&d1.id)
+                .unwrap()
+                .meta
+                .get("superseded_by")
+                .unwrap(),
             &Value::String(q2.id.clone())
         );
         // Replacement stays live despite citing the superseded question.
