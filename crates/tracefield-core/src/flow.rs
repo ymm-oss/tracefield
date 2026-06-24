@@ -181,6 +181,7 @@ pub struct StageConfig {
     pub actors: ActorConfig,
     pub clustering: Option<StageClusteringConfig>,
     pub command: Option<StageCommandConfig>,
+    pub structural_checks: Option<StageStructuralChecksConfig>,
     pub artifact: Option<StageArtifactConfig>,
     /// When set, after this stage runs its adjudication verdicts are folded
     /// mechanically: any claim a `overturn` verdict's refutation names in
@@ -227,6 +228,14 @@ pub struct StageCommandConfig {
     pub args: Vec<String>,
     pub cwd: Option<String>,
     pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageStructuralChecksConfig {
+    pub enabled: bool,
+    pub active_only: bool,
+    pub checks: Vec<String>,
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -703,6 +712,9 @@ impl FlowConfig {
             let command = document
                 .table(&format!("stages.{id}.command"))
                 .map(parse_stage_command);
+            let structural_checks = document
+                .table(&format!("stages.{id}.structural_checks"))
+                .map(parse_stage_structural_checks);
             let artifact = document
                 .table(&format!("stages.{id}.artifact"))
                 .map(parse_stage_artifact);
@@ -721,6 +733,7 @@ impl FlowConfig {
                 actors,
                 clustering,
                 command,
+                structural_checks,
                 artifact,
                 retract_overturned: bool_value(&values, "retract_overturned").unwrap_or(false),
                 grounded: bool_value(&values, "grounded").unwrap_or(false),
@@ -839,6 +852,28 @@ impl FlowConfig {
                 if stage.actors.mode != "none" {
                     bail!(
                         "stage {} with a command must set [actors] mode = \"none\"",
+                        stage.id
+                    );
+                }
+            }
+            if let Some(structural_checks) = &stage.structural_checks
+                && structural_checks.enabled
+            {
+                if stage.command.is_some() || stage.clustering.is_some() {
+                    bail!(
+                        "stage {} cannot combine structural_checks with command or clustering",
+                        stage.id
+                    );
+                }
+                if stage.actors.mode != "none" {
+                    bail!(
+                        "stage {} with structural_checks must set [actors] mode = \"none\"",
+                        stage.id
+                    );
+                }
+                if !matches!(structural_checks.scope.as_str(), "store" | "selected") {
+                    bail!(
+                        "stage {} structural_checks.scope must be \"store\" or \"selected\"",
                         stage.id
                     );
                 }
@@ -980,6 +1015,47 @@ async fn execute_stage(
                 config,
                 format!(
                     "stage={} cycle={} command resume entries={}",
+                    stage.id,
+                    work_item.cycle,
+                    existing.len()
+                ),
+            );
+            stage_entries.extend(existing);
+        }
+    }
+
+    if let Some(structural_checks) = stage
+        .structural_checks
+        .as_ref()
+        .filter(|structural_checks| structural_checks.enabled)
+    {
+        let existing = existing_work_item_entries(
+            store,
+            stage,
+            work_item,
+            None,
+            Some("flow-structural-check"),
+        );
+        if existing.is_empty() {
+            let new_entries = run_stage_structural_checks(
+                config,
+                stage,
+                structural_checks,
+                budget_step,
+                store,
+                &selected,
+                &scaling,
+            );
+            let new_entries = apply_core_gates(new_entries, store, config, stage, &scenario.dir);
+            let new_entries = attach_work_item_meta(new_entries, work_item);
+            let stored = store.absorb(new_entries, "flow-structural-check");
+            stage_entries.extend(stored);
+            checkpoint_flow_store(store, persist_path)?;
+        } else {
+            log_flow_progress(
+                config,
+                format!(
+                    "stage={} cycle={} structural_checks resume entries={}",
                     stage.id,
                     work_item.cycle,
                     existing.len()
@@ -1391,6 +1467,7 @@ fn process_stage_config(config: &FlowConfig, kind: ProcessStageKind) -> StageCon
         },
         clustering: None,
         command: None,
+        structural_checks: None,
         artifact: None,
         retract_overturned: false,
         grounded: false,
@@ -1791,6 +1868,17 @@ fn parse_stage_command(values: &BTreeMap<String, ConfigValue>) -> StageCommandCo
         args: string_array(values, "args"),
         cwd: string_value(values, "cwd"),
         timeout_seconds: usize_value(values, "timeout_seconds").map(|value| value as u64),
+    }
+}
+
+fn parse_stage_structural_checks(
+    values: &BTreeMap<String, ConfigValue>,
+) -> StageStructuralChecksConfig {
+    StageStructuralChecksConfig {
+        enabled: bool_value(values, "enabled").unwrap_or(true),
+        active_only: bool_value(values, "active_only").unwrap_or(true),
+        checks: string_array(values, "checks"),
+        scope: string_value(values, "scope").unwrap_or_else(|| "store".to_string()),
     }
 }
 
@@ -2728,10 +2816,12 @@ fn apply_core_gates(
         .into_iter()
         .map(|mut entry| {
             let feedback_like = is_feedback_entry_like(&entry, config);
+            let structural_like = is_structural_entry_like(&entry);
             let source_grounded_stage = is_source_grounded_stage(stage);
             if !stage.outputs.is_empty()
                 && !stage.outputs.contains(&entry.entry_type)
                 && !feedback_like
+                && !structural_like
             {
                 let original = format!("{:?}", entry.entry_type).to_ascii_lowercase();
                 entry.entry_type = stage.outputs[0].clone();
@@ -2854,10 +2944,55 @@ fn apply_core_gates(
                 }
             }
             normalize_feedback_entry_meta(&mut entry, config);
+            normalize_structural_entry_meta(&mut entry);
 
             entry
         })
         .collect()
+}
+
+fn is_structural_entry_like(entry: &NewEntry) -> bool {
+    entry
+        .meta
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| {
+            matches!(
+                kind,
+                "obstruction"
+                    | "completion_candidate"
+                    | "invariant"
+                    | "morphism"
+                    | "structural_check"
+            )
+        })
+        || entry
+            .meta
+            .get("structural_kind")
+            .and_then(Value::as_str)
+            .is_some()
+}
+
+fn normalize_structural_entry_meta(entry: &mut NewEntry) {
+    if !is_structural_entry_like(entry) {
+        return;
+    }
+    if let Some(kind) = entry
+        .meta
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        && kind != "structural_check"
+    {
+        entry
+            .meta
+            .entry("structural_kind".to_string())
+            .or_insert_with(|| json!(kind));
+    }
+    entry
+        .meta
+        .entry("review_status".to_string())
+        .or_insert_with(|| json!("unreviewed"));
 }
 
 fn is_source_grounded_stage(stage: &StageConfig) -> bool {
@@ -3508,6 +3643,108 @@ async fn run_stage_command(
     Ok(vec![entry])
 }
 
+fn run_stage_structural_checks(
+    config: &FlowConfig,
+    stage: &StageConfig,
+    checks_config: &StageStructuralChecksConfig,
+    budget_step: usize,
+    store: &ReferenceStore,
+    selected: &[Entry],
+    scaling: &ActorScalingDecision,
+) -> Vec<NewEntry> {
+    let scoped_store;
+    let reference = if checks_config.scope == "selected" {
+        scoped_store = ReferenceStore::from_entries(selected.to_vec());
+        &scoped_store
+    } else {
+        store
+    };
+    let report = crate::structural_view::run_structural_checks(
+        reference,
+        crate::structural_view::StructuralCheckOptions {
+            space_id: Some(format!("tracefield-space:{}:{}", config.profile, stage.id)),
+            active_only: checks_config.active_only,
+            checks: checks_config.checks.clone(),
+        },
+    );
+
+    if report.findings.is_empty() {
+        let mut meta = Map::new();
+        add_flow_meta(
+            &mut meta,
+            config,
+            stage,
+            "structural-check",
+            None,
+            budget_step,
+            0,
+            scaling,
+        );
+        meta.insert("kind".to_string(), json!("structural_check"));
+        meta.insert("structural_check_status".to_string(), json!("passed"));
+        meta.insert(
+            "structural_check_summary".to_string(),
+            serde_json::to_value(&report.summary).unwrap_or_else(|_| json!({})),
+        );
+        return vec![NewEntry {
+            entry_type: stage.outputs.first().cloned().unwrap_or(EntryType::Audit),
+            status: Default::default(),
+            author: Some("flow-structural-check".to_string()),
+            text: "Structural checks passed with no findings.".to_string(),
+            citations: Vec::new(),
+            meta,
+            embedding: Vec::new(),
+        }];
+    }
+
+    report
+        .findings
+        .into_iter()
+        .map(|finding| {
+            let mut meta = Map::new();
+            add_flow_meta(
+                &mut meta,
+                config,
+                stage,
+                "structural-check",
+                None,
+                budget_step,
+                0,
+                scaling,
+            );
+            meta.insert("kind".to_string(), json!("structural_check"));
+            meta.insert("check".to_string(), json!(finding.check));
+            meta.insert("severity".to_string(), json!(finding.severity));
+            meta.insert("structural_status".to_string(), json!(finding.status));
+            meta.insert("review_status".to_string(), json!(finding.review_status));
+            meta.insert("finding_id".to_string(), json!(finding.id));
+            meta.insert(
+                "affected_cell_ids".to_string(),
+                json!(finding.affected_cell_ids),
+            );
+            meta.insert(
+                "obstruction_ids".to_string(),
+                json!(finding.obstruction_ids),
+            );
+            meta.insert("invariant_ids".to_string(), json!(finding.invariant_ids));
+            meta.insert(
+                "completion_candidate_ids".to_string(),
+                json!(finding.completion_candidate_ids),
+            );
+            meta.insert("projection_ids".to_string(), json!(finding.projection_ids));
+            NewEntry {
+                entry_type: stage.outputs.first().cloned().unwrap_or(EntryType::Audit),
+                status: Default::default(),
+                author: Some("flow-structural-check".to_string()),
+                text: finding.text,
+                citations: finding.source_entry_ids,
+                meta,
+                embedding: Vec::new(),
+            }
+        })
+        .collect()
+}
+
 fn deterministic_cluster_entries(
     config: &FlowConfig,
     stage: &StageConfig,
@@ -4115,6 +4352,7 @@ fn stage_messages(
     let actor_role = resolve_actor_role(stage, actor_index, actor);
     let feedback_schema = feedback_schema_prompt(config);
     let source_grounding_contract = source_grounding_contract_prompt(stage);
+    let structured_delta_contract = structured_delta_contract_prompt();
     let artifact_contract = artifact_contract_prompt(stage);
     let entry_budget_contract = entry_budget_contract_prompt(stage);
     let process_contract = process_management_contract_prompt(config, stage, work_item);
@@ -4126,10 +4364,10 @@ fn stage_messages(
 
     vec![
         Message::system(format!(
-            "You are a Tracefield Field Runner actor. Honor ACTOR_ROLE and STAGE_ROLES. Return strict JSON only, with no markdown fences or prose outside JSON. The first character must be {{ and the final character must be }}. Required shape: {{\"entries\":[{{\"type\":\"{stage_outputs}\",\"text\":\"...\",\"citations\":[\"e1\"],\"meta\":{{}}}}]}}. {entry_budget_contract} Normal entries must use STAGE_OUTPUT_TYPES. Tracefield feedback entries may use the FEEDBACK_ENTRY_TYPES described below. Use only known citation ids when possible. When resolving an open question, cite the question id and the evidence ids, and include meta {{\"status\":\"resolved\",\"resolves_question\":\"<question id>\"}}.{skill_contract} {source_grounding_contract} {feedback_schema} {artifact_contract} {process_contract}"
+            "You are a Tracefield Field Runner actor. Honor ACTOR_ROLE and STAGE_ROLES. Return strict JSON only, with no markdown fences or prose outside JSON. The first character must be {{ and the final character must be }}. Required shape: {{\"entries\":[{{\"type\":\"{stage_outputs}\",\"text\":\"...\",\"citations\":[\"e1\"],\"meta\":{{}},\"structured_deltas\":[]}}]}}. {entry_budget_contract} Normal entries must use STAGE_OUTPUT_TYPES. Tracefield feedback entries may use the FEEDBACK_ENTRY_TYPES described below. Use only known citation ids when possible. When resolving an open question, cite the question id and the evidence ids, and include meta {{\"status\":\"resolved\",\"resolves_question\":\"<question id>\"}}.{skill_contract} {source_grounding_contract} {structured_delta_contract} {feedback_schema} {artifact_contract} {process_contract}"
         )),
         Message::user(format!(
-            "TRACEFIELD_FLOW_STAGE\nFLOW: {}\nPOLICY: {}\nSTAGE: {}\nSTAGE_ROLES: {}\nSTAGE_OUTPUT_TYPES: {}\nACTOR: {}\nACTOR_INDEX: {}\nACTOR_ROLE: {}\nDOMAIN: {}\nDESC: {}\nTASK:\n{}\nPRIVATE:\n{}\nSKILL_CITATIONS: {}\nAVAILABLE_SKILLS:\n{}\nACTOR_SCALING: mode={} chosen_count={} signals={:?}\nWORK_ITEM_CYCLE: {}\nWORK_ITEM_REASON: {}\nFEEDBACK_REQUEST_IDS: {}\nSELECTED_ENTRY_COUNT: {}\nSOURCE_GROUNDING_CONTRACT:\n{}\nTRACEFIELD_FEEDBACK_SCHEMA:\n{}\nARTIFACT_CONTRACT:\n{}\nPROCESS_MANAGEMENT_CONTRACT:\n{}\nCONTEXT:\n{}",
+            "TRACEFIELD_FLOW_STAGE\nFLOW: {}\nPOLICY: {}\nSTAGE: {}\nSTAGE_ROLES: {}\nSTAGE_OUTPUT_TYPES: {}\nACTOR: {}\nACTOR_INDEX: {}\nACTOR_ROLE: {}\nDOMAIN: {}\nDESC: {}\nTASK:\n{}\nPRIVATE:\n{}\nSKILL_CITATIONS: {}\nAVAILABLE_SKILLS:\n{}\nACTOR_SCALING: mode={} chosen_count={} signals={:?}\nWORK_ITEM_CYCLE: {}\nWORK_ITEM_REASON: {}\nFEEDBACK_REQUEST_IDS: {}\nSELECTED_ENTRY_COUNT: {}\nSOURCE_GROUNDING_CONTRACT:\n{}\nSTRUCTURED_DELTA_CONTRACT:\n{}\nTRACEFIELD_FEEDBACK_SCHEMA:\n{}\nARTIFACT_CONTRACT:\n{}\nPROCESS_MANAGEMENT_CONTRACT:\n{}\nCONTEXT:\n{}",
             config.profile,
             config.policy,
             stage.id,
@@ -4154,6 +4392,7 @@ fn stage_messages(
             work_item.feedback_request_ids.join(", "),
             selected.len(),
             source_grounding_contract,
+            structured_delta_contract,
             feedback_schema,
             artifact_contract,
             process_contract,
@@ -4226,6 +4465,10 @@ fn source_grounding_contract_prompt(stage: &StageConfig) -> String {
     }
 
     "SOURCE_GROUNDING_CONTRACT: In source/data stages, extract only facts directly supported by selected CONTEXT entries. Do not use outside knowledge and do not turn source content into Tracefield design recommendations. For every non-question entry, citations must contain the exact CONTEXT entry id that supports the claim, and meta.evidence_quote must be an exact contiguous 8-30 word substring copied from that cited CONTEXT entry. The claim text may only paraphrase what meta.evidence_quote says. Do not stitch a heading and a later paragraph into one quote. Do not use table-of-contents, navigation, isolated heading lists, or ellipsized text as meta.evidence_quote; choose a complete prose sentence or clause. Do not add facts that are merely plausible from the title or navigation. Include meta.claim_role as source_evidence, gap, or low_quality_source. If no exact quote supports the claim, emit type question with meta.action=\"recollect\" instead of observation/requirement. If the claim is grounded in a file you re-opened rather than in inline CONTEXT text, also set meta.source_path to that file's path relative to the scenario directory and meta.source_line to the line number, and copy meta.evidence_quote verbatim from that file. In later long-run cycles, focus on gaps from feedback request entries and avoid restating already extracted evidence unless it resolves a contradiction.".to_string()
+}
+
+fn structured_delta_contract_prompt() -> &'static str {
+    "STRUCTURED_DELTA_CONTRACT: When a finding changes the problem structure, attach structured_deltas to the normal entry instead of leaving the structure only in prose. Each delta is reviewable, not accepted fact. Supported delta kinds are obstruction, invariant, completion_candidate, and morphism. Example: {\"kind\":\"obstruction\",\"type\":\"consent_scope_mismatch\",\"location_cell_ids\":[\"e1\"],\"related_contexts\":[\"terms\"],\"severity\":\"high\",\"required_resolution\":\"clarify consent scope\",\"review_status\":\"unreviewed\"}. For completion candidates use kind=\"completion_candidate\" and candidate_type. For invariants use kind=\"invariant\" and invariant_type. Cite the source entry ids that support the delta."
 }
 
 fn feedback_schema_prompt(config: &FlowConfig) -> String {
@@ -4669,10 +4912,11 @@ fn append_parsed_stage_entry(
         status: Default::default(),
         author: Some(context.actor_id.to_string()),
         text: text.to_string(),
-        citations,
-        meta,
+        citations: citations.clone(),
+        meta: meta.clone(),
         embedding: Vec::new(),
     });
+    append_structured_delta_entries(raw_entry, context, entries, &citations, &meta);
 }
 
 fn parsed_stage_entry_type(raw_entry: &Value, stage: &StageConfig) -> (EntryType, Option<String>) {
@@ -4724,6 +4968,266 @@ fn parsed_stage_entry_meta(
         }
     }
     meta
+}
+
+fn append_structured_delta_entries(
+    raw_entry: &Value,
+    context: &StageEntryParseContext<'_>,
+    entries: &mut Vec<NewEntry>,
+    parent_citations: &[String],
+    parent_meta: &Map<String, Value>,
+) {
+    for (index, delta) in structured_delta_values(raw_entry).into_iter().enumerate() {
+        let Some(kind) = structural_delta_kind(&delta) else {
+            continue;
+        };
+        let citations = structural_delta_citations(&delta, parent_citations);
+        let mut meta = parent_meta.clone();
+        for key in [
+            "nested_json_text_flattened",
+            "nested_json_depth",
+            "nested_json_parent_type",
+        ] {
+            meta.remove(key);
+        }
+        merge_structural_delta_meta(&mut meta, &delta);
+        meta.insert("kind".to_string(), json!(kind.clone()));
+        meta.insert("structural_kind".to_string(), json!(kind.clone()));
+        meta.entry("review_status".to_string())
+            .or_insert_with(|| json!("unreviewed"));
+        meta.insert("structured_delta".to_string(), json!(true));
+        meta.insert("structured_delta_index".to_string(), json!(index + 1));
+        if let Some(delta_id) = delta.get("id").and_then(Value::as_str) {
+            meta.insert("structural_delta_id".to_string(), json!(delta_id));
+        }
+        add_flow_meta(
+            &mut meta,
+            context.config,
+            context.stage,
+            context.organ_id,
+            context.organ,
+            context.budget_step,
+            context.actor_index,
+            context.scaling,
+        );
+
+        entries.push(NewEntry {
+            entry_type: structural_delta_entry_type(&kind),
+            status: Default::default(),
+            author: Some(context.actor_id.to_string()),
+            text: structural_delta_text(&kind, &delta),
+            citations,
+            meta,
+            embedding: Vec::new(),
+        });
+    }
+}
+
+fn structured_delta_values(raw_entry: &Value) -> Vec<Value> {
+    let mut values = Vec::new();
+    for key in [
+        "structured_delta",
+        "structural_delta",
+        "structured_deltas",
+        "structural_deltas",
+    ] {
+        collect_structured_delta_values(raw_entry.get(key), &mut values);
+    }
+    if let Some(meta) = raw_entry.get("meta") {
+        for key in [
+            "structured_delta",
+            "structural_delta",
+            "structured_deltas",
+            "structural_deltas",
+        ] {
+            collect_structured_delta_values(meta.get(key), &mut values);
+        }
+    }
+    values
+}
+
+fn collect_structured_delta_values(value: Option<&Value>, values: &mut Vec<Value>) {
+    match value {
+        Some(Value::Array(items)) => {
+            values.extend(items.iter().filter(|item| item.is_object()).cloned())
+        }
+        Some(Value::Object(_)) => {
+            if let Some(value) = value {
+                values.push(value.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn structural_delta_kind(delta: &Value) -> Option<String> {
+    let object = delta.as_object()?;
+    for key in ["kind", "structural_kind"] {
+        if let Some(kind) = object
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(normalize_structural_delta_kind)
+        {
+            return Some(kind);
+        }
+    }
+    if let Some(kind) = object
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(normalize_structural_delta_kind)
+    {
+        return Some(kind);
+    }
+    if object.contains_key("obstruction_type")
+        || object.contains_key("required_resolution")
+        || object.contains_key("severity")
+    {
+        return Some("obstruction".to_string());
+    }
+    if object.contains_key("candidate_type") {
+        return Some("completion_candidate".to_string());
+    }
+    if object.contains_key("invariant_type") {
+        return Some("invariant".to_string());
+    }
+    if object.contains_key("morphism_type") {
+        return Some("morphism".to_string());
+    }
+    None
+}
+
+fn normalize_structural_delta_kind(value: &str) -> Option<String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "obstruction" | "refutation" | "counterexample" => Some("obstruction".to_string()),
+        "completion" | "completion_candidate" | "candidate" => {
+            Some("completion_candidate".to_string())
+        }
+        "invariant" | "invariant_violation" => Some("invariant".to_string()),
+        "morphism" | "projection" => Some("morphism".to_string()),
+        _ => None,
+    }
+}
+
+fn structural_delta_citations(delta: &Value, parent_citations: &[String]) -> Vec<String> {
+    let mut citations = Vec::new();
+    collect_string_values(delta.get("citations"), &mut citations);
+    for key in [
+        "location_cell_ids",
+        "location_cells",
+        "target_cell_ids",
+        "target_entries",
+        "source_entry_ids",
+        "witness_entry_ids",
+    ] {
+        collect_cell_entry_ids(delta.get(key), &mut citations);
+    }
+    if citations.is_empty() {
+        citations.extend(parent_citations.iter().cloned());
+    }
+    normalize_citation_values(citations)
+}
+
+fn collect_string_values(value: Option<&Value>, output: &mut Vec<String>) {
+    match value {
+        Some(Value::String(value)) => output.push(value.clone()),
+        Some(Value::Array(values)) => {
+            output.extend(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn collect_cell_entry_ids(value: Option<&Value>, output: &mut Vec<String>) {
+    let mut values = Vec::new();
+    collect_string_values(value, &mut values);
+    output.extend(values.into_iter().map(|value| {
+        value
+            .strip_prefix("cell:")
+            .unwrap_or(value.as_str())
+            .to_string()
+    }));
+}
+
+fn normalize_citation_values(citations: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    citations
+        .into_iter()
+        .map(|citation| citation.trim().to_string())
+        .filter(|citation| !citation.is_empty())
+        .filter(|citation| seen.insert(citation.clone()))
+        .collect()
+}
+
+fn merge_structural_delta_meta(meta: &mut Map<String, Value>, delta: &Value) {
+    let Some(object) = delta.as_object() else {
+        return;
+    };
+    for (key, value) in object {
+        if matches!(
+            key.as_str(),
+            "text" | "citations" | "kind" | "structural_kind"
+        ) {
+            continue;
+        }
+        let normalized_key = match key.as_str() {
+            "type" if structural_delta_kind(delta).as_deref() == Some("obstruction") => {
+                "obstruction_type"
+            }
+            "type" if structural_delta_kind(delta).as_deref() == Some("completion_candidate") => {
+                "candidate_type"
+            }
+            "type" if structural_delta_kind(delta).as_deref() == Some("invariant") => {
+                "invariant_type"
+            }
+            "type" if structural_delta_kind(delta).as_deref() == Some("morphism") => {
+                "morphism_type"
+            }
+            other => other,
+        };
+        meta.insert(normalized_key.to_string(), value.clone());
+    }
+}
+
+fn structural_delta_entry_type(kind: &str) -> EntryType {
+    match kind {
+        "obstruction" => EntryType::Audit,
+        "completion_candidate" => EntryType::Change,
+        "invariant" => EntryType::Requirement,
+        "morphism" => EntryType::Observation,
+        _ => EntryType::Observation,
+    }
+}
+
+fn structural_delta_text(kind: &str, delta: &Value) -> String {
+    if let Some(text) = delta.get("text").and_then(Value::as_str) {
+        return text.trim().to_string();
+    }
+    let label = delta
+        .get("type")
+        .or_else(|| delta.get("obstruction_type"))
+        .or_else(|| delta.get("candidate_type"))
+        .or_else(|| delta.get("invariant_type"))
+        .or_else(|| delta.get("morphism_type"))
+        .and_then(Value::as_str)
+        .unwrap_or(kind);
+    match kind {
+        "obstruction" => {
+            let resolution = delta
+                .get("required_resolution")
+                .and_then(Value::as_str)
+                .unwrap_or("review required");
+            format!("Structured obstruction ({label}): {resolution}")
+        }
+        "completion_candidate" => format!("Structured completion candidate ({label})."),
+        "invariant" => format!("Structured invariant ({label})."),
+        "morphism" => format!("Structured morphism ({label})."),
+        _ => format!("Structured delta ({label})."),
+    }
 }
 
 fn model_entry_values_from_text(content: &str) -> Option<(Vec<Value>, bool)> {
@@ -5474,6 +5978,7 @@ mod tests {
             },
             clustering: None,
             command: None,
+            structural_checks: None,
             artifact: None,
             retract_overturned: false,
             grounded: false,
@@ -5949,6 +6454,67 @@ args = ["-c", "echo PROBE_MARKER; cat \"$1\"", "sh", "{input}"]
         assert!(probe.text.contains("round"), "text: {}", probe.text);
         // the probe cites what it measured, so it stays in the retract closure.
         assert!(!probe.citations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_flow_executes_structural_checks_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("task.md"), "Check structure.\n").unwrap();
+        fs::write(
+            dir.path().join("agents.json"),
+            r#"{"agents":[{"id":"A1","domain":"analysis","desc":"Analyze evidence."}]}"#,
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("inputs")).unwrap();
+        fs::write(dir.path().join("inputs").join("source.md"), "Source fact.").unwrap();
+        fs::write(
+            dir.path().join("flow.toml"),
+            r#"
+[flow]
+profile = "structural_flow"
+policy = "fixed"
+
+[stages.structural_verify]
+inputs = ["all"]
+outputs = ["audit"]
+
+[stages.structural_verify.actors]
+mode = "none"
+
+[stages.structural_verify.structural_checks]
+enabled = true
+checks = ["obstruction_presence"]
+scope = "store"
+"#,
+        )
+        .unwrap();
+
+        let result = run_flow(FlowRunOptions {
+            scenario_dir: dir.path().to_path_buf(),
+            config_path: None,
+            budget: None,
+            persist_path: None,
+        })
+        .await
+        .unwrap();
+
+        let check = result
+            .entries
+            .iter()
+            .find(|entry| entry.author == "flow-structural-check")
+            .expect("structural check stage produced an entry");
+        assert_eq!(check.entry_type, EntryType::Audit);
+        assert_eq!(
+            check.meta.get("kind").and_then(Value::as_str),
+            Some("structural_check")
+        );
+        assert_eq!(
+            check
+                .meta
+                .get("structural_check_status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
     }
 
     #[tokio::test]
@@ -6749,6 +7315,7 @@ outputs = ["change", "decision"]
             },
             clustering: None,
             command: None,
+            structural_checks: None,
             artifact: None,
             retract_overturned: false,
             grounded: false,
@@ -7036,6 +7603,165 @@ outputs = ["observation", "question"]
                 .and_then(Value::as_str),
             Some("graph control flow")
         );
+    }
+
+    #[test]
+    fn parse_stage_entries_expands_structured_deltas() {
+        let config = FlowConfig::parse(
+            r#"
+[flow]
+profile = "structured_delta_test"
+policy = "fixed"
+
+[stages.analysis]
+outputs = ["observation"]
+"#,
+        )
+        .unwrap();
+        let stage = &config.stages[0];
+        let selected = vec![Entry {
+            id: "e1".to_string(),
+            entry_type: EntryType::Claim,
+            status: EntryStatus::Active,
+            author: "source".to_string(),
+            text: "Customer logs require consent for secondary use.".to_string(),
+            citations: Vec::new(),
+            meta: Map::new(),
+            embedding: Vec::new(),
+        }];
+        let scaling = ActorScalingDecision {
+            mode: "fixed".to_string(),
+            chosen_count: 1,
+            signals: BTreeMap::new(),
+        };
+        let content = json!({
+            "entries": [{
+                "type": "observation",
+                "text": "The recommendation plan has a consent-scope risk.",
+                "citations": ["e1"],
+                "meta": {"confidence": 0.8},
+                "structured_deltas": [{
+                    "kind": "obstruction",
+                    "type": "consent_scope_mismatch",
+                    "location_cell_ids": ["e1"],
+                    "severity": "high",
+                    "required_resolution": "clarify consent scope before promotion"
+                }]
+            }]
+        })
+        .to_string();
+
+        let entries = parse_stage_entries(
+            &content,
+            &config,
+            stage,
+            "reasoning",
+            None,
+            "LEGAL",
+            1,
+            1,
+            &selected,
+            &scaling,
+        );
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry_type, EntryType::Observation);
+        assert_eq!(entries[1].entry_type, EntryType::Audit);
+        assert_eq!(
+            entries[1].meta.get("kind").and_then(Value::as_str),
+            Some("obstruction")
+        );
+        assert_eq!(
+            entries[1]
+                .meta
+                .get("obstruction_type")
+                .and_then(Value::as_str),
+            Some("consent_scope_mismatch")
+        );
+        assert_eq!(entries[1].citations, vec!["e1".to_string()]);
+
+        let gated = apply_core_gates(
+            entries,
+            &ReferenceStore::from_entries(selected),
+            &config,
+            stage,
+            Path::new("."),
+        );
+        assert_eq!(gated[1].entry_type, EntryType::Audit);
+        assert_eq!(
+            gated[1].meta.get("review_status").and_then(Value::as_str),
+            Some("unreviewed")
+        );
+    }
+
+    #[test]
+    fn structural_checks_config_and_runner_emit_obstruction_audit() {
+        let config = FlowConfig::parse(
+            r#"
+[flow]
+profile = "structural_check_test"
+policy = "fixed"
+
+[stages.structural_verify]
+outputs = ["audit"]
+
+[stages.structural_verify.actors]
+mode = "none"
+
+[stages.structural_verify.structural_checks]
+enabled = true
+checks = ["obstruction_presence"]
+scope = "store"
+"#,
+        )
+        .unwrap();
+        let stage = &config.stages[0];
+        let checks = stage.structural_checks.as_ref().unwrap();
+        assert!(checks.enabled);
+        assert_eq!(checks.checks, vec!["obstruction_presence".to_string()]);
+
+        let mut store = ReferenceStore::new();
+        let source = store.push(
+            NewEntry::new(EntryType::Claim, "source", "base claim"),
+            "source",
+        );
+        store.push(
+            NewEntry::new(EntryType::Audit, "LEGAL", "Structured obstruction")
+                .with_citations(vec![source.id.clone()])
+                .with_meta("kind", json!("obstruction"))
+                .with_meta("obstruction_type", json!("consent_scope_mismatch"))
+                .with_meta("location_cell_ids", json!([source.id.clone()]))
+                .with_meta("severity", json!("high"))
+                .with_meta("required_resolution", json!("clarify consent scope"))
+                .with_meta("review_status", json!("unreviewed")),
+            "LEGAL",
+        );
+        let scaling = ActorScalingDecision {
+            mode: "none".to_string(),
+            chosen_count: 0,
+            signals: BTreeMap::new(),
+        };
+
+        let entries = run_stage_structural_checks(&config, stage, checks, 1, &store, &[], &scaling);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry_type, EntryType::Audit);
+        assert_eq!(
+            entries[0].meta.get("kind").and_then(Value::as_str),
+            Some("structural_check")
+        );
+        assert_eq!(
+            entries[0].meta.get("check").and_then(Value::as_str),
+            Some("obstruction_presence")
+        );
+        assert_eq!(
+            entries[0]
+                .meta
+                .get("structural_status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(entries[0].citations, vec!["e2".to_string()]);
     }
 
     #[test]
@@ -7832,6 +8558,7 @@ mode = "none"
             },
             clustering: None,
             command: None,
+            structural_checks: None,
             artifact: None,
             retract_overturned: false,
             grounded: false,

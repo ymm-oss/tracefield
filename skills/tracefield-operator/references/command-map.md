@@ -21,9 +21,26 @@ surface.
 | Emit compact JSON | add `--json` |
 | Write pretty JSON report | add `--out <file>` |
 | Persist reference store | add `--persist <file>.jsonl` to `run` |
+| Materialize structural view | `tracefield structural-view --store <file>.jsonl [--active-only] [--out <file>]` |
+| Run structural checks | `tracefield structural-checks --store <file>.jsonl [--check <name>] [--out <file>]` |
 | Retract an entry (premise wrong) | `tracefield retract --store <file>.jsonl --entry <id>` |
 | Supersede an entry (question/claim replaced) | `tracefield supersede --store <file>.jsonl --entry <old> --with <new>` |
 | Aggregate adjudication verdicts | `tracefield aggregate --store <file>.jsonl [--stage adjudication]` |
+
+`structural-view` keeps the persisted JSONL store canonical and derives a
+HigherGraphen-backed materialized view from it. Entries become cells, citations
+become dependency incidences / derivation morphisms, explicit `meta.refutes`
+becomes obstructions, and impact cones are computed through HigherGraphen graph
+analytics over the citation incidence view. Use `--active-only` after
+retract/supersede when the user wants the live view only.
+
+`structural-checks` runs deterministic checks over the materialized live view
+without an LLM. Default checks surface blocking obstructions, dangling
+incidences, unreviewed invariants, unreviewed completion candidates, and
+HigherGraphen evaluator citation acyclicity violations. Use
+`--check hg_graph_analytics` for HigherGraphen centrality, cut-cell, and
+dominator candidates. Use `--include-terminal` to include retracted/superseded
+entries in the check input.
 
 `aggregate` deterministically folds per-refutation adjudication verdicts (no
 LLM): any `overturn` → conclusion changed; any `unclassified` → `indeterminate`

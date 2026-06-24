@@ -86,6 +86,34 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Materialize a persisted JSONL store as a HigherGraphen-backed structural view.
+    StructuralView {
+        #[arg(long, value_name = "JSONL")]
+        store: PathBuf,
+        #[arg(long)]
+        active_only: bool,
+        #[arg(long, value_name = "ID")]
+        space_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
+    /// Run deterministic structural checks over a persisted JSONL store.
+    StructuralChecks {
+        #[arg(long, value_name = "JSONL")]
+        store: PathBuf,
+        #[arg(long)]
+        include_terminal: bool,
+        #[arg(long = "check", value_name = "CHECK")]
+        checks: Vec<String>,
+        #[arg(long, value_name = "ID")]
+        space_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
     /// Check local runtime dependencies.
     Doctor,
     /// Scaffold (first call) then run the meeting-support flow on a directory.
@@ -236,6 +264,83 @@ async fn main() -> Result<()> {
                 println!("{}", serde_json::to_string(&report)?);
             } else {
                 print_aggregate_report(&report);
+            }
+        }
+        Command::StructuralView {
+            store,
+            active_only,
+            space_id,
+            json,
+            out,
+        } => {
+            ensure_file(&store, "--store")?;
+
+            let reference = tracefield_core::ReferenceStore::from_jsonl_path(&store)
+                .with_context(|| format!("failed to load persisted store {}", store.display()))?;
+            let view = tracefield_core::materialize_structural_view(
+                &reference,
+                tracefield_core::StructuralViewOptions {
+                    space_id,
+                    active_only,
+                },
+            );
+
+            if let Some(out) = &out {
+                let encoded = serde_json::to_string_pretty(&view)
+                    .context("failed to encode structural view")?;
+                write_text(out, &encoded).with_context(|| {
+                    format!("failed to write structural view to {}", out.display())
+                })?;
+            }
+            if json {
+                println!("{}", serde_json::to_string(&view)?);
+            } else {
+                print_structural_view_report(&view);
+                if let Some(path) = out {
+                    println!();
+                    println!("wrote structural view: {}", path.display());
+                }
+            }
+        }
+        Command::StructuralChecks {
+            store,
+            include_terminal,
+            checks,
+            space_id,
+            json,
+            out,
+        } => {
+            ensure_file(&store, "--store")?;
+
+            let reference = tracefield_core::ReferenceStore::from_jsonl_path(&store)
+                .with_context(|| format!("failed to load persisted store {}", store.display()))?;
+            let report = tracefield_core::run_structural_checks(
+                &reference,
+                tracefield_core::StructuralCheckOptions {
+                    space_id,
+                    active_only: !include_terminal,
+                    checks,
+                },
+            );
+
+            if let Some(out) = &out {
+                let encoded = serde_json::to_string_pretty(&report)
+                    .context("failed to encode structural check report")?;
+                write_text(out, &encoded).with_context(|| {
+                    format!(
+                        "failed to write structural check report to {}",
+                        out.display()
+                    )
+                })?;
+            }
+            if json {
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                print_structural_check_report(&report);
+                if let Some(path) = out {
+                    println!();
+                    println!("wrote structural check report: {}", path.display());
+                }
             }
         }
         Command::Doctor => {
@@ -577,6 +682,93 @@ where
     }
 
     Ok(())
+}
+
+fn print_structural_view_report(view: &tracefield_core::StructuralView) {
+    println!("# tracefield structural-view");
+    println!();
+    println!("schema: {}", view.schema);
+    println!("space: {}", view.space.id);
+    println!(
+        "entries: canonical={} included={} active={} terminal={}",
+        view.space.canonical_entry_count,
+        view.space.included_entry_count,
+        view.space.active_entry_count,
+        view.space.terminal_entry_count
+    );
+    println!(
+        "structure: cells={} incidences={} morphisms={} obstructions={} completion_candidates={} invariants={} impact_cones={}",
+        view.cells.len(),
+        view.incidences.len(),
+        view.morphisms.len(),
+        view.obstructions.len(),
+        view.completion_candidates.len(),
+        view.invariants.len(),
+        view.impact_cones.len()
+    );
+
+    if !view.obstructions.is_empty() {
+        println!();
+        println!("## obstructions");
+        for obstruction in &view.obstructions {
+            let severity = obstruction
+                .severity
+                .as_deref()
+                .map(|value| format!(" severity={value}"))
+                .unwrap_or_default();
+            println!(
+                "- {} type={}{} review_status={} locations={}",
+                obstruction.id,
+                obstruction.obstruction_type,
+                severity,
+                obstruction.provenance.review_status,
+                obstruction.location_cell_ids.join(",")
+            );
+        }
+    }
+
+    if let Some(projection) = view.projections.first() {
+        println!();
+        println!("## projection loss");
+        for loss in &projection.information_loss {
+            println!("- {loss}");
+        }
+    }
+}
+
+fn print_structural_check_report(report: &tracefield_core::StructuralCheckReport) {
+    println!("# tracefield structural-checks");
+    println!();
+    println!("schema: {}", report.schema);
+    println!("space: {}", report.space_id);
+    println!(
+        "findings: total={} blocking={} obstructions={} dangling_incidence={} invariants={} completion_candidates={} projection_loss={} hg_acyclicity={} hg_graph_analytics={}",
+        report.summary.finding_count,
+        report.summary.blocking_count,
+        report.summary.obstruction_count,
+        report.summary.dangling_incidence_count,
+        report.summary.unreviewed_invariant_count,
+        report.summary.unreviewed_completion_candidate_count,
+        report.summary.projection_loss_count,
+        report.summary.highergraphen_acyclicity_count,
+        report.summary.highergraphen_graph_analytics_count
+    );
+
+    if !report.findings.is_empty() {
+        println!();
+        println!("## findings");
+        for finding in &report.findings {
+            println!(
+                "- {} check={} severity={} status={} review_status={}: {}",
+                finding.id,
+                finding.check,
+                finding.severity,
+                finding.status,
+                finding.review_status,
+                first_line(&finding.text)
+            );
+        }
+    }
 }
 
 async fn print_doctor() {

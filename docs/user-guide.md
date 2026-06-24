@@ -165,6 +165,30 @@ stageの `inputs` では `kind:input`、`stage:<id>`、`entry_type:<type>`、`pa
 
 artifactを生成した場合は、出力ファイルに加えて `<artifact>.manifest.json` も作成されます。manifestにはartifactが参照したentry id、stage、citationが入り、報告書やスライドからTracefield entryへ戻れるようにします。
 
+レンズが構造的な発見をした場合、通常 entry に `structured_deltas` を添えられます。runner はこれを sibling entry に展開し、`kind = "obstruction" | "invariant" | "completion_candidate" | "morphism"` として保存します。
+
+```json
+{
+  "entries": [
+    {
+      "type": "observation",
+      "text": "The recommendation plan has a consent-scope risk.",
+      "citations": ["e1"],
+      "structured_deltas": [
+        {
+          "kind": "obstruction",
+          "type": "consent_scope_mismatch",
+          "location_cell_ids": ["e1"],
+          "severity": "high",
+          "required_resolution": "clarify consent scope before promotion",
+          "review_status": "unreviewed"
+        }
+      ]
+    }
+  ]
+}
+```
+
 agentがTracefield自体への改善を見つけた場合は、通常entryとして `meta.kind = "tracefield_feedback"` を付けます。runnerは `[feedback_entries]` と `[[feedback_entries.route]]` に従い、そのentryを再収集、分析、監査、artifact生成などの層へ戻します。
 
 ```toml
@@ -366,6 +390,44 @@ tracefield run \
 ```
 
 store には task、input、private document、skill procedure、flow output が entry として保存されます。entry id は `e1`, `e2`, ... の形式です。
+
+## structural view を生成する
+
+JSONL store を canonical log として残したまま、HigherGraphen core crate で扱える構造ビューへ materialize できます。
+
+```sh
+tracefield structural-view \
+  --store runs/my-review.jsonl \
+  --out runs/my-review.structural-view.json
+```
+
+この view では entry が cell、citation が incidence / derivation morphism、`meta.refutes` が obstruction として表現されます。`impact_cones` は HigherGraphen graph analytics で citation incidence view を辿って計算され、その cell を起点にした downstream citation impact と projection impact が入ります。`--active-only` を付けると、retracted / superseded entry を除いた live view だけを生成します。
+
+deterministic check だけを実行する場合:
+
+```sh
+tracefield structural-checks --store runs/my-review.jsonl
+tracefield structural-checks --store runs/my-review.jsonl --check hg_graph_analytics
+```
+
+flow に stage として組み込む場合:
+
+```toml
+[stages.structural_verify]
+inputs = ["all"]
+outputs = ["audit"]
+
+[stages.structural_verify.actors]
+mode = "none"
+
+[stages.structural_verify.structural_checks]
+enabled = true
+checks = ["obstruction_presence", "dangling_incidence", "hg_acyclicity"]
+scope = "store"
+active_only = true
+```
+
+この stage は LLM を呼ばず、materialized structural view に対して blocking obstruction、dangling incidence、unreviewed invariant / completion candidate、HigherGraphen evaluator による citation acyclicity violation を `audit` entry として出します。`hg_graph_analytics` を指定すると、HigherGraphen graph analytics の centrality / cut-cell / dominator candidate も出力できます。
 
 ## retract する
 
