@@ -28,16 +28,19 @@ surface.
 | Aggregate adjudication verdicts | `tracefield aggregate --store <file>.jsonl [--stage adjudication]` |
 
 `structural-view` keeps the persisted JSONL store canonical and derives a
-HigherGraphen-style materialized view from it. Entries become cells, citations
+HigherGraphen-backed materialized view from it. Entries become cells, citations
 become dependency incidences / derivation morphisms, explicit `meta.refutes`
-becomes obstructions, and impact cones show downstream citation/projection
-effects. Use `--active-only` after retract/supersede when the user wants the live
-view only.
+becomes obstructions, and impact cones are computed through HigherGraphen graph
+analytics over the citation incidence view. Use `--active-only` after
+retract/supersede when the user wants the live view only.
 
 `structural-checks` runs deterministic checks over the materialized live view
 without an LLM. Default checks surface blocking obstructions, dangling
-incidences, unreviewed invariants, and unreviewed completion candidates. Use
-`--include-terminal` to include retracted/superseded entries in the check input.
+incidences, unreviewed invariants, unreviewed completion candidates, and
+HigherGraphen evaluator citation acyclicity violations. Use
+`--check hg_graph_analytics` for HigherGraphen centrality, cut-cell, and
+dominator candidates. Use `--include-terminal` to include retracted/superseded
+entries in the check input.
 
 `aggregate` deterministically folds per-refutation adjudication verdicts (no
 LLM): any `overturn` → conclusion changed; any `unclassified` → `indeterminate`

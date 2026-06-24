@@ -90,21 +90,24 @@ with source entry ids.
 `deep_investigation` includes source discovery, deterministic source clustering,
 per-input extraction, analysis, audit, report, and deck artifact stages.
 
-6. Materialize a HigherGraphen-style structural view when the user needs a
+6. Materialize a HigherGraphen-backed structural view when the user needs a
    machine-readable structure over the canonical JSONL log:
 
 ```sh
 tracefield structural-view --store runs/<name>.jsonl --out runs/<name>.structural-view.json
 tracefield structural-checks --store runs/<name>.jsonl
+tracefield structural-checks --store runs/<name>.jsonl --check hg_graph_analytics
 ```
 
 The view keeps the JSONL store canonical: entries become cells, citations become
 incidences / derivation morphisms, explicit `meta.refutes` becomes obstructions,
-and impact cones show downstream citation and projection effects. Add
-`--active-only` for the live view after retract/supersede. `structural-checks`
-runs deterministic checks over the materialized live view and surfaces blocking
-obstructions, dangling incidences, and unreviewed structural candidates without
-an LLM.
+and impact cones are computed through HigherGraphen graph analytics over the
+citation incidence view. Add `--active-only` for the live view after
+retract/supersede. `structural-checks` runs deterministic checks over the
+materialized live view and surfaces blocking obstructions, dangling incidences,
+unreviewed structural candidates, and HigherGraphen evaluator acyclicity
+violations without an LLM. Use `--check hg_graph_analytics` for HigherGraphen
+centrality, cut-cell, and dominator candidates.
 
 7. When the flow has an `adjudication` stage, fold the per-refutation verdicts
    into a standing conclusion mechanically (no LLM):
