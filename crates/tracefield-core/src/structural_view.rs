@@ -1,4 +1,15 @@
 use crate::{Entry, EntryStatus, EntryType, ReferenceStore};
+use higher_graphen_core::{
+    Confidence, Id as HgId, Provenance as HgProvenance, Severity as HgSeverity, SourceKind,
+    SourceRef,
+};
+use higher_graphen_reasoning::invariant::{
+    AcyclicityCheck, CheckInput, EvaluatorCheck, EvaluatorContext, EvaluatorKernel, EvaluatorRule,
+};
+use higher_graphen_structure::space::{
+    Cell as HgCell, GraphAnalyticsInput, InMemorySpaceStore, Incidence as HgIncidence,
+    IncidenceOrientation, Space as HgSpace, TraversalDirection,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -182,6 +193,8 @@ pub struct StructuralCheckSummary {
     pub unreviewed_invariant_count: usize,
     pub unreviewed_completion_candidate_count: usize,
     pub projection_loss_count: usize,
+    pub highergraphen_acyclicity_count: usize,
+    pub highergraphen_graph_analytics_count: usize,
     pub blocking_count: usize,
 }
 
@@ -205,6 +218,9 @@ pub fn materialize_structural_view(
     reference: &ReferenceStore,
     options: StructuralViewOptions,
 ) -> StructuralView {
+    let space_id = options
+        .space_id
+        .unwrap_or_else(|| "tracefield-space:materialized-view".to_string());
     let canonical_entries = reference.all();
     let included_entries = canonical_entries
         .iter()
@@ -289,36 +305,15 @@ pub fn materialize_structural_view(
         }
     }
 
-    let citation_reverse = citation_reverse_index(&included_entries);
-    let obstruction_reverse = obstruction_reverse_index(&obstructions);
     let projection_id = "projection:tracefield-structural-view".to_string();
-    let impact_cones = included_entries
-        .iter()
-        .map(|entry| {
-            let impacted_entries = downstream_entries(&entry.id, &citation_reverse);
-            let citation_impact_cell_ids = impacted_entries
-                .iter()
-                .map(|id| cell_id(id))
-                .collect::<Vec<_>>();
-            let obstruction_impact_ids = obstruction_reverse
-                .get(cell_id(&entry.id).as_str())
-                .cloned()
-                .unwrap_or_default();
-            let projection_impact_ids =
-                if citation_impact_cell_ids.is_empty() && obstruction_impact_ids.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![projection_id.clone()]
-                };
-
-            StructuralImpactCone {
-                source_cell_id: cell_id(&entry.id),
-                citation_impact_cell_ids,
-                obstruction_impact_ids,
-                projection_impact_ids,
-            }
-        })
-        .collect::<Vec<_>>();
+    let impact_cones = highergraphen_impact_cones(
+        &space_id,
+        &cells,
+        &incidences,
+        &obstructions,
+        &projection_id,
+    )
+    .unwrap_or_else(|| local_impact_cones(&included_entries, &obstructions, &projection_id));
 
     let source_entry_ids = included_entries
         .iter()
@@ -327,7 +322,7 @@ pub fn materialize_structural_view(
     let projections = vec![StructuralProjection {
         id: projection_id,
         audience: "machine".to_string(),
-        purpose: "materialize a tracefield JSONL log as reviewable HigherGraphen-style structure"
+        purpose: "materialize a tracefield JSONL log as reviewable HigherGraphen-backed structure"
             .to_string(),
         input_selector: if options.active_only {
             "active_entries".to_string()
@@ -351,9 +346,7 @@ pub fn materialize_structural_view(
     StructuralView {
         schema: STRUCTURAL_VIEW_SCHEMA.to_string(),
         space: StructuralSpaceSummary {
-            id: options
-                .space_id
-                .unwrap_or_else(|| "tracefield-space:materialized-view".to_string()),
+            id: space_id,
             kind: "tracefield_run_space".to_string(),
             canonical_entry_count: canonical_entries.len(),
             included_entry_count: included_entries.len(),
@@ -531,6 +524,14 @@ pub fn run_structural_checks(
         }
     }
 
+    if check_enabled(&checks, "highergraphen_acyclicity") {
+        findings.extend(highergraphen_acyclicity_findings(&view));
+    }
+
+    if check_enabled(&checks, "highergraphen_graph_analytics") {
+        findings.extend(highergraphen_graph_analytics_findings(&view));
+    }
+
     let summary = StructuralCheckSummary {
         finding_count: findings.len(),
         obstruction_count: findings
@@ -552,6 +553,14 @@ pub fn run_structural_checks(
         projection_loss_count: findings
             .iter()
             .filter(|finding| finding.check == "projection_loss")
+            .count(),
+        highergraphen_acyclicity_count: findings
+            .iter()
+            .filter(|finding| finding.check == "highergraphen_acyclicity")
+            .count(),
+        highergraphen_graph_analytics_count: findings
+            .iter()
+            .filter(|finding| finding.check == "highergraphen_graph_analytics")
             .count(),
         blocking_count: findings
             .iter()
@@ -575,6 +584,7 @@ fn normalize_check_set(checks: &[String]) -> BTreeSet<String> {
             "dangling_incidence",
             "unreviewed_invariant",
             "unreviewed_completion_candidate",
+            "highergraphen_acyclicity",
         ]
         .into_iter()
         .map(ToOwned::to_owned)
@@ -589,6 +599,17 @@ fn normalize_check_set(checks: &[String]) -> BTreeSet<String> {
             "invariant" | "invariants" => "unreviewed_invariant",
             "completion_candidate" | "completion_candidates" => "unreviewed_completion_candidate",
             "projection" | "projection_loss" => "projection_loss",
+            "acyclicity" | "citation_acyclicity" | "hg_acyclicity" | "highergraphen_acyclicity" => {
+                "highergraphen_acyclicity"
+            }
+            "graph_analytics"
+            | "hg_graph_analytics"
+            | "highergraphen_graph_analytics"
+            | "centrality"
+            | "central_cells"
+            | "dominators"
+            | "cut_sets"
+            | "impact_cone" => "highergraphen_graph_analytics",
             other => other,
         })
         .filter(|check| !check.is_empty())
@@ -598,6 +619,416 @@ fn normalize_check_set(checks: &[String]) -> BTreeSet<String> {
 
 fn check_enabled(checks: &BTreeSet<String>, check: &str) -> bool {
     checks.contains("all") || checks.contains(check)
+}
+
+struct HigherGraphenLift {
+    space_id: HgId,
+    store: InMemorySpaceStore,
+}
+
+fn highergraphen_impact_cones(
+    space_id: &str,
+    cells: &[StructuralCell],
+    incidences: &[StructuralIncidence],
+    obstructions: &[StructuralObstruction],
+    projection_id: &str,
+) -> Option<Vec<StructuralImpactCone>> {
+    let lift = build_highergraphen_space(space_id, cells, incidences).ok()?;
+    let obstruction_reverse = obstruction_reverse_index(obstructions);
+    let mut impact_cones = Vec::new();
+
+    for cell in cells {
+        let seed = hg_id(&cell.id).ok()?;
+        let input = GraphAnalyticsInput::new(lift.space_id.clone())
+            .with_seed_cell_ids([seed])
+            .in_direction(TraversalDirection::Incoming)
+            .with_relation_type("citation")
+            .ok()?;
+        let report = lift.store.analyze_graph(&input).ok()?;
+        let citation_impact_cell_ids = report
+            .impact_cone_cell_ids
+            .iter()
+            .map(hg_id_string)
+            .filter(|id| id != &cell.id)
+            .collect::<Vec<_>>();
+        let obstruction_impact_ids = obstruction_reverse
+            .get(cell.id.as_str())
+            .cloned()
+            .unwrap_or_default();
+        let projection_impact_ids =
+            if citation_impact_cell_ids.is_empty() && obstruction_impact_ids.is_empty() {
+                Vec::new()
+            } else {
+                vec![projection_id.to_string()]
+            };
+
+        impact_cones.push(StructuralImpactCone {
+            source_cell_id: cell.id.clone(),
+            citation_impact_cell_ids,
+            obstruction_impact_ids,
+            projection_impact_ids,
+        });
+    }
+
+    Some(impact_cones)
+}
+
+fn local_impact_cones(
+    included_entries: &[&Entry],
+    obstructions: &[StructuralObstruction],
+    projection_id: &str,
+) -> Vec<StructuralImpactCone> {
+    let citation_reverse = citation_reverse_index(included_entries);
+    let obstruction_reverse = obstruction_reverse_index(obstructions);
+
+    included_entries
+        .iter()
+        .map(|entry| {
+            let impacted_entries = downstream_entries(&entry.id, &citation_reverse);
+            let citation_impact_cell_ids = impacted_entries
+                .iter()
+                .map(|id| cell_id(id))
+                .collect::<Vec<_>>();
+            let obstruction_impact_ids = obstruction_reverse
+                .get(cell_id(&entry.id).as_str())
+                .cloned()
+                .unwrap_or_default();
+            let projection_impact_ids =
+                if citation_impact_cell_ids.is_empty() && obstruction_impact_ids.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![projection_id.to_string()]
+                };
+
+            StructuralImpactCone {
+                source_cell_id: cell_id(&entry.id),
+                citation_impact_cell_ids,
+                obstruction_impact_ids,
+                projection_impact_ids,
+            }
+        })
+        .collect()
+}
+
+fn highergraphen_acyclicity_findings(view: &StructuralView) -> Vec<StructuralCheckFinding> {
+    let lift = match build_highergraphen_space(&view.space.id, &view.cells, &view.incidences) {
+        Ok(lift) => lift,
+        Err(error) => {
+            return vec![highergraphen_error_finding(
+                "highergraphen_acyclicity",
+                error,
+            )];
+        }
+    };
+
+    let invariant_id = match hg_id("invariant:tracefield:citation_acyclicity") {
+        Ok(id) => id,
+        Err(error) => {
+            return vec![highergraphen_error_finding(
+                "highergraphen_acyclicity",
+                error.to_string(),
+            )];
+        }
+    };
+    let kernel = EvaluatorKernel::new().with_rule(EvaluatorRule::invariant(
+        invariant_id,
+        HgSeverity::High,
+        EvaluatorCheck::Acyclicity(AcyclicityCheck::new().with_relation_type("citation")),
+    ));
+    let check_input = CheckInput::new(lift.space_id.clone());
+    let context = EvaluatorContext::new(&check_input, &lift.store);
+    let report = match kernel.evaluate(&context) {
+        Ok(report) => report,
+        Err(error) => {
+            return vec![highergraphen_error_finding(
+                "highergraphen_acyclicity",
+                error.to_string(),
+            )];
+        }
+    };
+
+    report
+        .results
+        .iter()
+        .filter_map(|result| {
+            let violation = result.violation()?;
+            let affected_cell_ids = hg_ids_to_strings(&violation.location_cell_ids);
+            let severity = violation.severity.as_str().to_string();
+            Some(StructuralCheckFinding {
+                id: format!(
+                    "structural_check:highergraphen_acyclicity:{}",
+                    result.target_id()
+                ),
+                check: "highergraphen_acyclicity".to_string(),
+                severity: severity.clone(),
+                status: if matches!(severity.as_str(), "high" | "critical") {
+                    "blocked".to_string()
+                } else {
+                    "needs_review".to_string()
+                },
+                text: format!(
+                    "HigherGraphen evaluator found a citation acyclicity violation: {}",
+                    violation.message
+                ),
+                source_entry_ids: entry_ids_from_cell_ids(&affected_cell_ids),
+                affected_cell_ids,
+                obstruction_ids: Vec::new(),
+                invariant_ids: vec![result.target_id().as_str().to_string()],
+                completion_candidate_ids: Vec::new(),
+                projection_ids: Vec::new(),
+                review_status: "unreviewed".to_string(),
+            })
+        })
+        .collect()
+}
+
+fn highergraphen_graph_analytics_findings(view: &StructuralView) -> Vec<StructuralCheckFinding> {
+    let lift = match build_highergraphen_space(&view.space.id, &view.cells, &view.incidences) {
+        Ok(lift) => lift,
+        Err(error) => {
+            return vec![highergraphen_error_finding(
+                "highergraphen_graph_analytics",
+                error,
+            )];
+        }
+    };
+    let input = match GraphAnalyticsInput::new(lift.space_id.clone())
+        .in_direction(TraversalDirection::Incoming)
+        .with_relation_type("citation")
+    {
+        Ok(input) => input,
+        Err(error) => {
+            return vec![highergraphen_error_finding(
+                "highergraphen_graph_analytics",
+                error.to_string(),
+            )];
+        }
+    };
+    let report = match lift.store.analyze_graph(&input) {
+        Ok(report) => report,
+        Err(error) => {
+            return vec![highergraphen_error_finding(
+                "highergraphen_graph_analytics",
+                error.to_string(),
+            )];
+        }
+    };
+
+    let mut findings = Vec::new();
+    for score in report
+        .centrality_scores
+        .iter()
+        .filter(|score| score.outgoing_degree > 0)
+        .take(3)
+    {
+        let cell_id = score.cell_id.as_str().to_string();
+        findings.push(StructuralCheckFinding {
+            id: format!("structural_check:highergraphen_graph_analytics:centrality:{cell_id}"),
+            check: "highergraphen_graph_analytics".to_string(),
+            severity: "info".to_string(),
+            status: "informational".to_string(),
+            text: format!(
+                "HigherGraphen graph analytics ranks {cell_id} as a central downstream-impact cell with {} selected outgoing neighbor(s)",
+                score.outgoing_degree
+            ),
+            source_entry_ids: entry_ids_from_cell_ids(std::slice::from_ref(&cell_id)),
+            affected_cell_ids: vec![cell_id],
+            obstruction_ids: Vec::new(),
+            invariant_ids: Vec::new(),
+            completion_candidate_ids: Vec::new(),
+            projection_ids: Vec::new(),
+            review_status: "computed".to_string(),
+        });
+    }
+
+    for cut_cell_id in report.cut_cell_candidate_ids.iter().take(5) {
+        let cell_id = cut_cell_id.as_str().to_string();
+        findings.push(StructuralCheckFinding {
+            id: format!("structural_check:highergraphen_graph_analytics:cut_cell:{cell_id}"),
+            check: "highergraphen_graph_analytics".to_string(),
+            severity: "medium".to_string(),
+            status: "needs_review".to_string(),
+            text: format!(
+                "HigherGraphen graph analytics marks {cell_id} as a cut-cell candidate in the citation impact graph"
+            ),
+            source_entry_ids: entry_ids_from_cell_ids(std::slice::from_ref(&cell_id)),
+            affected_cell_ids: vec![cell_id],
+            obstruction_ids: Vec::new(),
+            invariant_ids: Vec::new(),
+            completion_candidate_ids: Vec::new(),
+            projection_ids: Vec::new(),
+            review_status: "computed".to_string(),
+        });
+    }
+
+    findings.extend(highergraphen_dominator_findings(&lift, &view.cells));
+    findings
+}
+
+fn highergraphen_dominator_findings(
+    lift: &HigherGraphenLift,
+    cells: &[StructuralCell],
+) -> Vec<StructuralCheckFinding> {
+    let mut findings = Vec::new();
+    for cell in cells {
+        let Ok(seed) = hg_id(&cell.id) else {
+            continue;
+        };
+        let Ok(input) = GraphAnalyticsInput::new(lift.space_id.clone())
+            .with_seed_cell_ids([seed])
+            .in_direction(TraversalDirection::Incoming)
+            .with_relation_type("citation")
+        else {
+            continue;
+        };
+        let Ok(report) = lift.store.analyze_graph(&input) else {
+            continue;
+        };
+        for candidate in report
+            .dominator_candidates
+            .iter()
+            .filter(|candidate| candidate.dominated_cell_ids.len() >= 2)
+            .take(1)
+        {
+            let dominator_id = candidate.dominator_cell_id.as_str().to_string();
+            let dominated_cell_ids = hg_ids_to_strings(&candidate.dominated_cell_ids);
+            let mut affected_cell_ids = vec![dominator_id.clone()];
+            affected_cell_ids.extend(dominated_cell_ids.clone());
+            affected_cell_ids.sort();
+            affected_cell_ids.dedup();
+            findings.push(StructuralCheckFinding {
+                id: format!(
+                    "structural_check:highergraphen_graph_analytics:dominator:{}:{}",
+                    cell.id, dominator_id
+                ),
+                check: "highergraphen_graph_analytics".to_string(),
+                severity: "medium".to_string(),
+                status: "needs_review".to_string(),
+                text: format!(
+                    "HigherGraphen graph analytics finds {dominator_id} dominates {} downstream cell(s) in the impact cone from {}",
+                    dominated_cell_ids.len(),
+                    cell.id
+                ),
+                source_entry_ids: entry_ids_from_cell_ids(&affected_cell_ids),
+                affected_cell_ids,
+                obstruction_ids: Vec::new(),
+                invariant_ids: Vec::new(),
+                completion_candidate_ids: Vec::new(),
+                projection_ids: Vec::new(),
+                review_status: "computed".to_string(),
+            });
+        }
+        if findings.len() >= 5 {
+            break;
+        }
+    }
+    findings
+}
+
+fn build_highergraphen_space(
+    space_id: &str,
+    cells: &[StructuralCell],
+    incidences: &[StructuralIncidence],
+) -> std::result::Result<HigherGraphenLift, String> {
+    let space_id = hg_id(space_id).map_err(|error| error.to_string())?;
+    let mut store = InMemorySpaceStore::new();
+    store
+        .insert_space(HgSpace::new(
+            space_id.clone(),
+            "tracefield materialized structural view",
+        ))
+        .map_err(|error| error.to_string())?;
+
+    for cell in cells {
+        let hg_cell = HgCell::new(
+            hg_id(&cell.id).map_err(|error| error.to_string())?,
+            space_id.clone(),
+            0,
+            cell.cell_type.clone(),
+        )
+        .with_label(cell.source_entry_id.clone())
+        .with_provenance(hg_provenance(cell));
+        store
+            .insert_cell(hg_cell)
+            .map_err(|error| error.to_string())?;
+    }
+
+    for incidence in incidences
+        .iter()
+        .filter(|incidence| incidence.target_present)
+    {
+        let hg_incidence = HgIncidence::new(
+            hg_id(&incidence.id).map_err(|error| error.to_string())?,
+            space_id.clone(),
+            hg_id(&incidence.source_cell_id).map_err(|error| error.to_string())?,
+            hg_id(&incidence.target_cell_id).map_err(|error| error.to_string())?,
+            incidence.relation_type.clone(),
+            IncidenceOrientation::Directed,
+        );
+        store
+            .insert_incidence(hg_incidence)
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(HigherGraphenLift { space_id, store })
+}
+
+fn hg_provenance(cell: &StructuralCell) -> HgProvenance {
+    let source = SourceRef::new(SourceKind::Ai)
+        .with_source_local_id(cell.source_entry_id.clone())
+        .unwrap_or_else(|_| SourceRef::new(SourceKind::Ai));
+    let confidence = cell
+        .meta
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    HgProvenance::new(
+        source,
+        Confidence::new(confidence).expect("clamped confidence is valid"),
+    )
+}
+
+fn hg_id(value: &str) -> higher_graphen_core::Result<HgId> {
+    HgId::new(value)
+}
+
+fn hg_id_string(id: &HgId) -> String {
+    id.as_str().to_string()
+}
+
+fn hg_ids_to_strings(ids: &[HgId]) -> Vec<String> {
+    ids.iter().map(hg_id_string).collect()
+}
+
+fn entry_ids_from_cell_ids(cell_ids: &[String]) -> Vec<String> {
+    let mut entry_ids = cell_ids
+        .iter()
+        .map(|cell_id| entry_id_from_cell_id(cell_id))
+        .collect::<Vec<_>>();
+    entry_ids.sort();
+    entry_ids.dedup();
+    entry_ids
+}
+
+fn highergraphen_error_finding(check: &str, error: impl Into<String>) -> StructuralCheckFinding {
+    StructuralCheckFinding {
+        id: format!("structural_check:{check}:engine_error"),
+        check: check.to_string(),
+        severity: "high".to_string(),
+        status: "blocked".to_string(),
+        text: format!(
+            "HigherGraphen core algorithm could not run: {}",
+            error.into()
+        ),
+        source_entry_ids: Vec::new(),
+        affected_cell_ids: Vec::new(),
+        obstruction_ids: Vec::new(),
+        invariant_ids: Vec::new(),
+        completion_candidate_ids: Vec::new(),
+        projection_ids: Vec::new(),
+        review_status: "unreviewed".to_string(),
+    }
 }
 
 fn entry_id_from_cell_id(cell_id: &str) -> String {
@@ -1054,5 +1485,86 @@ mod tests {
             report.findings[0].affected_cell_ids,
             vec![cell_id(&source.id)]
         );
+    }
+
+    #[test]
+    fn highergraphen_evaluator_detects_citation_cycles() {
+        let mut store = ReferenceStore::new();
+        store.push(
+            NewEntry::new(EntryType::Claim, "a", "first").with_citations(vec!["e2".to_string()]),
+            "a",
+        );
+        store.push(
+            NewEntry::new(EntryType::Claim, "b", "second").with_citations(vec!["e1".to_string()]),
+            "b",
+        );
+
+        let report = run_structural_checks(
+            &store,
+            StructuralCheckOptions {
+                checks: vec!["hg_acyclicity".to_string()],
+                ..StructuralCheckOptions::default()
+            },
+        );
+
+        assert_eq!(report.summary.finding_count, 1);
+        assert_eq!(report.summary.highergraphen_acyclicity_count, 1);
+        assert_eq!(report.summary.blocking_count, 1);
+        assert_eq!(report.findings[0].check, "highergraphen_acyclicity");
+        assert!(report.findings[0].text.contains("HigherGraphen evaluator"));
+        assert_eq!(
+            report.findings[0].invariant_ids,
+            vec!["invariant:tracefield:citation_acyclicity"]
+        );
+    }
+
+    #[test]
+    fn highergraphen_graph_analytics_drives_impact_and_dominator_findings() {
+        let mut store = ReferenceStore::new();
+        let root = store.push(NewEntry::new(EntryType::Claim, "root", "root"), "root");
+        let bridge = store.push(
+            NewEntry::new(EntryType::Claim, "bridge", "bridge")
+                .with_citations(vec![root.id.clone()]),
+            "bridge",
+        );
+        let leaf_a = store.push(
+            NewEntry::new(EntryType::Claim, "leaf-a", "leaf a")
+                .with_citations(vec![bridge.id.clone()]),
+            "leaf-a",
+        );
+        let leaf_b = store.push(
+            NewEntry::new(EntryType::Claim, "leaf-b", "leaf b")
+                .with_citations(vec![bridge.id.clone()]),
+            "leaf-b",
+        );
+
+        let view = materialize_structural_view(&store, StructuralViewOptions::default());
+        let root_cone = view
+            .impact_cones
+            .iter()
+            .find(|cone| cone.source_cell_id == cell_id(&root.id))
+            .unwrap();
+        assert_eq!(
+            root_cone.citation_impact_cell_ids,
+            vec![
+                cell_id(&bridge.id),
+                cell_id(&leaf_a.id),
+                cell_id(&leaf_b.id)
+            ]
+        );
+
+        let report = run_structural_checks(
+            &store,
+            StructuralCheckOptions {
+                checks: vec!["hg_graph_analytics".to_string()],
+                ..StructuralCheckOptions::default()
+            },
+        );
+
+        assert!(report.summary.highergraphen_graph_analytics_count >= 1);
+        assert!(report.findings.iter().any(|finding| {
+            finding.check == "highergraphen_graph_analytics"
+                && finding.text.contains("dominates 2 downstream cell")
+        }));
     }
 }

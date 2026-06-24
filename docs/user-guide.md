@@ -393,7 +393,7 @@ store には task、input、private document、skill procedure、flow output が
 
 ## structural view を生成する
 
-JSONL store を canonical log として残したまま、HigherGraphen 風の構造ビューへ materialize できます。
+JSONL store を canonical log として残したまま、HigherGraphen core crate で扱える構造ビューへ materialize できます。
 
 ```sh
 tracefield structural-view \
@@ -401,12 +401,13 @@ tracefield structural-view \
   --out runs/my-review.structural-view.json
 ```
 
-この view では entry が cell、citation が incidence / derivation morphism、`meta.refutes` が obstruction として表現されます。`impact_cones` には、その cell を起点にした downstream citation impact と projection impact が入ります。`--active-only` を付けると、retracted / superseded entry を除いた live view だけを生成します。
+この view では entry が cell、citation が incidence / derivation morphism、`meta.refutes` が obstruction として表現されます。`impact_cones` は HigherGraphen graph analytics で citation incidence view を辿って計算され、その cell を起点にした downstream citation impact と projection impact が入ります。`--active-only` を付けると、retracted / superseded entry を除いた live view だけを生成します。
 
 deterministic check だけを実行する場合:
 
 ```sh
 tracefield structural-checks --store runs/my-review.jsonl
+tracefield structural-checks --store runs/my-review.jsonl --check hg_graph_analytics
 ```
 
 flow に stage として組み込む場合:
@@ -421,12 +422,12 @@ mode = "none"
 
 [stages.structural_verify.structural_checks]
 enabled = true
-checks = ["obstruction_presence", "dangling_incidence"]
+checks = ["obstruction_presence", "dangling_incidence", "hg_acyclicity"]
 scope = "store"
 active_only = true
 ```
 
-この stage は LLM を呼ばず、materialized structural view に対して blocking obstruction、dangling incidence、unreviewed invariant / completion candidate を `audit` entry として出します。
+この stage は LLM を呼ばず、materialized structural view に対して blocking obstruction、dangling incidence、unreviewed invariant / completion candidate、HigherGraphen evaluator による citation acyclicity violation を `audit` entry として出します。`hg_graph_analytics` を指定すると、HigherGraphen graph analytics の centrality / cut-cell / dominator candidate も出力できます。
 
 ## retract する
 

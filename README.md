@@ -126,12 +126,15 @@ under `[organs.reasoning]`, for example `adapter = "ollama"` and
 `tracefield run --persist <file>.jsonl` resumes from an existing store when the
 file exists and writes Markdown artifacts plus sidecar manifests when configured.
 `tracefield structural-view --store <file>.jsonl` materializes that canonical
-log as a HigherGraphen-style structural view: entries become cells, citations
+log as a HigherGraphen-backed structural view: entries become cells, citations
 become incidences / derivation morphisms, explicit `meta.refutes` becomes
-obstructions, and impact cones show downstream citation and projection effects.
+obstructions, and impact cones are computed through HigherGraphen graph
+analytics over the citation incidence view.
 `tracefield structural-checks --store <file>.jsonl` runs deterministic checks
 over that materialized view, surfacing blocking obstructions, dangling
-incidences, and unreviewed structural candidates without an LLM.
+incidences, unreviewed structural candidates, and HigherGraphen evaluator
+acyclicity violations without an LLM. Pass `--check hg_graph_analytics` to
+surface HigherGraphen centrality, cut-cell, and dominator candidates.
 `tracefield web-input` fetches pages into `inputs/web/` with source URL,
 fetched-at, content type, and byte provenance so Field Runner can consume them as
 normal inputs.

@@ -340,6 +340,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "higher-graphen-core"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a3892ec79de8579c09ab6b4f65fc604d6fe9cee1a4e9d1ba9bc2cd8054e85a3"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "higher-graphen-projection"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eebf2d7a65e068c96f69214ce58756c9b078917ce4611844835eb3d560224b6"
+dependencies = [
+ "higher-graphen-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "higher-graphen-reasoning"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e60c6e39dd7600ef9cf2718ecc79b594c24ba84e191725d71119afb9f883948c"
+dependencies = [
+ "higher-graphen-core",
+ "higher-graphen-projection",
+ "higher-graphen-structure",
+ "serde",
+]
+
+[[package]]
+name = "higher-graphen-structure"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a94245bb8c24bc2d573e69fbe287c38a547c1a136dddb7d6c90ba6427fc1c571"
+dependencies = [
+ "higher-graphen-core",
+ "serde",
+]
+
+[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1263,6 +1305,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "higher-graphen-core",
+ "higher-graphen-reasoning",
+ "higher-graphen-structure",
  "reqwest",
  "serde",
  "serde_json",

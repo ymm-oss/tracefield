@@ -86,7 +86,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Materialize a persisted JSONL store as a HigherGraphen-style structural view.
+    /// Materialize a persisted JSONL store as a HigherGraphen-backed structural view.
     StructuralView {
         #[arg(long, value_name = "JSONL")]
         store: PathBuf,
@@ -742,14 +742,16 @@ fn print_structural_check_report(report: &tracefield_core::StructuralCheckReport
     println!("schema: {}", report.schema);
     println!("space: {}", report.space_id);
     println!(
-        "findings: total={} blocking={} obstructions={} dangling_incidence={} invariants={} completion_candidates={} projection_loss={}",
+        "findings: total={} blocking={} obstructions={} dangling_incidence={} invariants={} completion_candidates={} projection_loss={} hg_acyclicity={} hg_graph_analytics={}",
         report.summary.finding_count,
         report.summary.blocking_count,
         report.summary.obstruction_count,
         report.summary.dangling_incidence_count,
         report.summary.unreviewed_invariant_count,
         report.summary.unreviewed_completion_candidate_count,
-        report.summary.projection_loss_count
+        report.summary.projection_loss_count,
+        report.summary.highergraphen_acyclicity_count,
+        report.summary.highergraphen_graph_analytics_count
     );
 
     if !report.findings.is_empty() {
