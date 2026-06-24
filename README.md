@@ -107,6 +107,8 @@ TRACEFIELD_CLI_COMMAND=codex tracefield run --scenario-dir scenarios/my-review
 tracefield run --scenario-dir scenarios/my-review --persist runs/reference.jsonl
 tracefield aggregate --store runs/reference.jsonl
 tracefield retract --store runs/reference.jsonl --entry e3
+tracefield structural-view --store runs/reference.jsonl --out runs/structural-view.json
+tracefield structural-checks --store runs/reference.jsonl
 ```
 
 | Adapter | Use | Config |
@@ -123,6 +125,13 @@ under `[organs.reasoning]`, for example `adapter = "ollama"` and
 
 `tracefield run --persist <file>.jsonl` resumes from an existing store when the
 file exists and writes Markdown artifacts plus sidecar manifests when configured.
+`tracefield structural-view --store <file>.jsonl` materializes that canonical
+log as a HigherGraphen-style structural view: entries become cells, citations
+become incidences / derivation morphisms, explicit `meta.refutes` becomes
+obstructions, and impact cones show downstream citation and projection effects.
+`tracefield structural-checks --store <file>.jsonl` runs deterministic checks
+over that materialized view, surfacing blocking obstructions, dangling
+incidences, and unreviewed structural candidates without an LLM.
 `tracefield web-input` fetches pages into `inputs/web/` with source URL,
 fetched-at, content type, and byte provenance so Field Runner can consume them as
 normal inputs.
@@ -150,6 +159,7 @@ code:
 
 ```text
 analysis (a panel of orthogonal lenses)
+  → structural checks (deterministic obstruction / invariant / candidate scan)
   → verify (adversarial falsify / counter-example)
   → adjudication (one isolated actor per refutation, mode = "per_input")
   → tracefield aggregate (mechanical fold; no central synthesizer)
@@ -213,8 +223,8 @@ read or executed by the flow.
 knowledge so it is reusable across sessions:
 
 - [`tracefield-operator`](./skills/tracefield-operator/SKILL.md) — **running** the
-  CLI: `doctor` / `new` / `run` / `persist` / `aggregate` / `retract`, adapters,
-  and troubleshooting.
+  CLI: `doctor` / `new` / `run` / `persist` / `structural-view` /
+  `structural-checks` / `aggregate` / `retract`, adapters, and troubleshooting.
 - [`tracefield-flow-design`](./skills/tracefield-flow-design/SKILL.md) —
   **designing** `flow.toml` / `agents.json`: lens selection, stage topology,
   mechanical aggregation, and denoise patterns, distilled from the findings.

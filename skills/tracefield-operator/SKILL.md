@@ -1,6 +1,6 @@
 ---
 name: tracefield-operator
-description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続化、機械的集約(aggregate)、retract/supersede検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「flowを実行して」「集約して/aggregateして」「retractして」「問いを差し替えて/supersedeして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。flow.toml/agents.jsonの設計判断は tracefield-flow-design を使う。
+description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続化、structural-view生成、structural-checks実行、機械的集約(aggregate)、retract/supersede検証、doctor診断を行う運用ガイド。「tracefieldで相談を回して」「scenarioを作って」「flowを実行して」「structural viewを見せて」「structural checksを実行して」「集約して/aggregateして」「retractして」「問いを差し替えて/supersedeして」「doctorして」「Tracefieldの結果を確認して」と言われた時に使用する。flow.toml/agents.jsonの設計判断は tracefield-flow-design を使う。
 ---
 
 # Tracefield Operator
@@ -9,9 +9,10 @@ description: Tracefield Rust CLIでシナリオ作成、flow実行、JSONL永続
 
 Use the Rust `tracefield` CLI as the active implementation. Do not use removed
 Mix/Elixir commands. This skill covers **running** the CLI (doctor / new / run /
-persist / aggregate / retract). For **designing** what goes into `flow.toml` /
-`agents.json` (lens selection, stage topology, mechanical aggregation, denoise),
-use the [tracefield-flow-design](../tracefield-flow-design/SKILL.md) skill.
+persist / structural-view / structural-checks / aggregate / retract). For
+**designing** what goes into `flow.toml` / `agents.json` (lens selection, stage
+topology, mechanical aggregation, denoise), use the
+[tracefield-flow-design](../tracefield-flow-design/SKILL.md) skill.
 
 Build/run from the workspace with `./target/release/tracefield` (the
 `~/.cargo/bin` copy can lag behind the source — rebuild if a flag like `--force`
@@ -89,7 +90,23 @@ with source entry ids.
 `deep_investigation` includes source discovery, deterministic source clustering,
 per-input extraction, analysis, audit, report, and deck artifact stages.
 
-6. When the flow has an `adjudication` stage, fold the per-refutation verdicts
+6. Materialize a HigherGraphen-style structural view when the user needs a
+   machine-readable structure over the canonical JSONL log:
+
+```sh
+tracefield structural-view --store runs/<name>.jsonl --out runs/<name>.structural-view.json
+tracefield structural-checks --store runs/<name>.jsonl
+```
+
+The view keeps the JSONL store canonical: entries become cells, citations become
+incidences / derivation morphisms, explicit `meta.refutes` becomes obstructions,
+and impact cones show downstream citation and projection effects. Add
+`--active-only` for the live view after retract/supersede. `structural-checks`
+runs deterministic checks over the materialized live view and surfaces blocking
+obstructions, dangling incidences, and unreviewed structural candidates without
+an LLM.
+
+7. When the flow has an `adjudication` stage, fold the per-refutation verdicts
    into a standing conclusion mechanically (no LLM):
 
 ```sh
@@ -100,7 +117,7 @@ Reports `maintained` (with the union of conditions), `changed` (any overturning
 verdict), or `indeterminate` (an unclassifiable verdict is surfaced, never
 dropped). Add `--stage <id>` if the adjudication stage is named otherwise.
 
-7. Retract or supersede by entry id and inspect the downstream closure (same
+8. Retract or supersede by entry id and inspect the downstream closure (same
    primitive: mark id + citation closure with a terminal status). Retract when a
    premise is **wrong**; supersede when a question/claim is **replaced**:
 
