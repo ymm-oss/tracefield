@@ -83,6 +83,12 @@ pub struct LongRunConfig {
     pub cycle_stages: Vec<String>,
     pub max_work_items: Option<usize>,
     pub max_feedback_cycles: Option<usize>,
+    /// loop-until-dry: stop re-queuing cycles once a cycle's critic declares the
+    /// search exhausted (`探索状況: 枯渇`) for this many *consecutive* cycles. `0`
+    /// (default) = run the fixed `cycles` count. A `継続` marker resets the streak.
+    /// The novelty judgment is delegated to the critic stage (semantic); the engine
+    /// only counts the canonical marker (deterministic), like `判定:` / classify_verdict.
+    pub stop_when_dry: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -330,6 +336,7 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
     let mut work_queue = initial_work_queue(&config);
     let mut budget_step = 0;
     let mut feedback_cycles = 0;
+    let mut dry_streak = 0usize;
     let mut executed_work_items = 0;
     let mut process_artifact_gate_ran = false;
 
@@ -505,6 +512,37 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
             }
         }
 
+        // loop-until-dry: when a cycle's critic declares the search exhausted
+        // (`探索状況: 枯渇`) for stop_when_dry consecutive cycles, drop the remaining
+        // long_run cycles (keep final/artifact stages). Novelty is judged by the
+        // critic (semantic); the engine only counts the canonical marker. A `継続`
+        // marker resets the streak. The pruned cycles are logged — never silent.
+        if config.long_run.stop_when_dry > 0 {
+            match cycle_dry_signal(&stage_result.entries) {
+                Some(true) => dry_streak += 1,
+                Some(false) => dry_streak = 0,
+                None => {}
+            }
+            if dry_streak >= config.long_run.stop_when_dry {
+                let before = work_queue.len();
+                work_queue.retain(|item| item.reason != "long_run_cycle");
+                let pruned = before - work_queue.len();
+                if pruned > 0 {
+                    log_flow_progress(
+                        &config,
+                        format!(
+                            "stage={} cycle={} loop-until-dry STOP (dry_streak={} >= {}) pruned_cycles={}",
+                            stage_result.id,
+                            work_item.cycle,
+                            dry_streak,
+                            config.long_run.stop_when_dry,
+                            pruned
+                        ),
+                    );
+                }
+            }
+        }
+
         let feedback_work = feedback_work_items(
             &config,
             work_item.stage_index,
@@ -563,6 +601,28 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
         layer0_index: seeded.entries,
         artifacts: all_artifacts,
     })
+}
+
+/// Read a cycle's critic verdict on whether the search is exhausted, from the
+/// canonical `探索状況:` marker (full- or half-width colon). `Some(true)` = dry
+/// (枯渇), `Some(false)` = keep going (継続), `None` = no marker in these entries.
+/// Deterministic engine read of a semantic judgment the critic stage emits —
+/// the same split-of-labor as `判定:` / [`classify_verdict`].
+fn cycle_dry_signal(entries: &[Entry]) -> Option<bool> {
+    for entry in entries {
+        let text = &entry.text;
+        let anchor = text.find("探索状況:").or_else(|| text.find("探索状況："));
+        if let Some(idx) = anchor {
+            let head: String = text[idx..].chars().take(16).collect();
+            if head.contains("枯渇") {
+                return Some(true);
+            }
+            if head.contains("継続") {
+                return Some(false);
+            }
+        }
+    }
+    None
 }
 
 fn initial_work_queue(config: &FlowConfig) -> Vec<FlowWorkItem> {
@@ -644,6 +704,7 @@ impl FlowConfig {
             cycle_stages: string_array(&long_run_table, "cycle_stages"),
             max_work_items: usize_value(&long_run_table, "max_work_items"),
             max_feedback_cycles: usize_value(&long_run_table, "max_feedback_cycles"),
+            stop_when_dry: usize_value(&long_run_table, "stop_when_dry").unwrap_or(0),
         };
         let process_table = document.table("process").cloned().unwrap_or_default();
         let process_gates_table = document.table("process.gates").cloned().unwrap_or_default();
@@ -6283,6 +6344,46 @@ kind = "report"
                 "finalize:3:final"
             ]
         );
+    }
+
+    #[test]
+    fn cycle_dry_signal_reads_canonical_marker_and_parses_stop_when_dry() {
+        let dry = vec![Entry::from_new(
+            "e1".into(),
+            "DEEPEN",
+            NewEntry::new(
+                EntryType::Question,
+                "DEEPEN",
+                "未探索の角度は無い。探索状況: 枯渇",
+            ),
+        )];
+        let going = vec![Entry::from_new(
+            "e2".into(),
+            "DEEPEN",
+            NewEntry::new(
+                EntryType::Question,
+                "DEEPEN",
+                "次に丸めgamingを問え。探索状況：継続",
+            ),
+        )];
+        let none = vec![Entry::from_new(
+            "e3".into(),
+            "QANSWER",
+            NewEntry::new(
+                EntryType::Observation,
+                "QANSWER",
+                "仕様は失効を沈黙している",
+            ),
+        )];
+        assert_eq!(cycle_dry_signal(&dry), Some(true));
+        assert_eq!(cycle_dry_signal(&going), Some(false));
+        assert_eq!(cycle_dry_signal(&none), None);
+
+        let config = FlowConfig::parse(
+            "[flow]\nprofile=\"p\"\n[long_run]\nenabled=true\ncycles=6\nstop_when_dry=2\ncycle_stages=[\"a\"]\n[stages.a]\noutputs=[\"observation\"]\n",
+        )
+        .unwrap();
+        assert_eq!(config.long_run.stop_when_dry, 2);
     }
 
     #[test]
