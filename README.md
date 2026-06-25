@@ -281,4 +281,4 @@ Copyright 2026 Ryoichi Izumita. See [`NOTICE`](./NOTICE) for attribution details
 
 ## Contact
 
-Ryoichi Izumita — ryoichi.a.izumita@accenture.com
+Ryoichi Izumita — please file questions and issues via [GitHub Issues](https://github.com/ymm-oss/tracefield/issues).

@@ -86,8 +86,8 @@ max_total_actors = 24
 
 [organs.local_data]
 adapter = "cli"
-command = "/Users/rizumita/Workspace/github/ds4/ds4"
-model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+command = "/path/to/ds4/ds4"
+model = "/path/to/ds4/ds4flash.gguf"
 
 [organs.reasoning]
 adapter = "cli"
@@ -155,8 +155,8 @@ hard-coded model:
 ```toml
 [organs.local_data]
 adapter = "cli"
-command = "/Users/rizumita/Workspace/github/ds4/ds4"
-model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+command = "/path/to/ds4/ds4"
+model = "/path/to/ds4/ds4flash.gguf"
 
 [organs.reasoning]
 adapter = "cli"
@@ -498,8 +498,8 @@ max_feedback_cycles = 3
 
 [organs.data]
 adapter = "cli"
-command = "/Users/rizumita/Workspace/github/ds4/ds4"
-model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+command = "/path/to/ds4/ds4"
+model = "/path/to/ds4/ds4flash.gguf"
 
 [organs.reasoning]
 adapter = "cli"

@@ -519,8 +519,8 @@ entry_types = ["change", "requirement", "question", "audit"]
 
 [organs.data]
 adapter = "cli"
-command = "/Users/rizumita/Workspace/github/ds4/ds4"
-model = "/Users/rizumita/Workspace/github/ds4/ds4flash.gguf"
+command = "/path/to/ds4/ds4"
+model = "/path/to/ds4/ds4flash.gguf"
 max_tokens = 400
 timeout_seconds = 1200
 
@@ -1032,8 +1032,8 @@ Review procedure
         let flow = fs::read_to_string(scenario_dir.join("flow.toml")).unwrap();
 
         assert!(flow.contains("profile = \"deep_investigation\""));
-        assert!(flow.contains("command = \"/Users/rizumita/Workspace/github/ds4/ds4\""));
-        assert!(flow.contains("model = \"/Users/rizumita/Workspace/github/ds4/ds4flash.gguf\""));
+        assert!(flow.contains("command = \"/path/to/ds4/ds4\""));
+        assert!(flow.contains("model = \"/path/to/ds4/ds4flash.gguf\""));
         assert!(flow.contains("command = \"codex\""));
         assert!(flow.contains("[process]"));
         assert!(flow.contains("artifact_after_feedback = true"));

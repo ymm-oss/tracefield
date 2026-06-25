@@ -210,7 +210,7 @@ to = "feedback_triage"
 
 feedback entryの標準metadataは `target`、`action`、`priority`、`status` です。例: `{"kind":"tracefield_feedback","target":"flow.stage.source_extract","action":"change","priority":"high","status":"proposed"}`。
 
-`tracefield new --profile deep_investigation` は、source discovery、source clustering、source extraction、hypothesis、lens analysis、audit、report/deck artifact production を含むテンプレートを生成します。データ層は `cli` 経由の `/Users/rizumita/Workspace/github/ds4/ds4`、推論層は `cli` の `codex` を使う設定です。`per_input` / `per_source` / `per_cluster` のactorは入力をshardして受け取り、`[stages.<id>.clustering]` を持つstageは `source_cluster` metadata付きのcluster entryを生成します。
+`tracefield new --profile deep_investigation` は、source discovery、source clustering、source extraction、hypothesis、lens analysis、audit、report/deck artifact production を含むテンプレートを生成します。データ層は `cli` 経由の `/path/to/ds4/ds4`、推論層は `cli` の `codex` を使う設定です。`per_input` / `per_source` / `per_cluster` のactorは入力をshardして受け取り、`[stages.<id>.clustering]` を持つstageは `source_cluster` metadata付きのcluster entryを生成します。
 
 ## task.md
 

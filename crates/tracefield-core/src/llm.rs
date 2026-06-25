@@ -791,7 +791,7 @@ mod tests {
         };
 
         let invocation = build_cli_invocation(
-            "/Users/rizumita/Workspace/github/ds4/ds4",
+            "/path/to/ds4/ds4",
             &options,
             "PROMPT".to_string(),
             PathBuf::from("/tmp/unused"),
@@ -799,11 +799,11 @@ mod tests {
 
         assert_eq!(
             invocation.program,
-            "/Users/rizumita/Workspace/github/ds4/ds4"
+            "/path/to/ds4/ds4"
         );
         assert_eq!(
             invocation.current_dir.as_deref(),
-            Some(Path::new("/Users/rizumita/Workspace/github/ds4"))
+            Some(Path::new("/path/to/ds4"))
         );
         assert_eq!(invocation.args[0], "-m");
         assert_eq!(invocation.args[1], "/models/ds4flash.gguf");
