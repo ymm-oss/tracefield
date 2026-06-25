@@ -234,7 +234,7 @@ impl ReferenceStore {
 
     /// For each commitment entry, supersede the entries it names in `meta.supersedes`
     /// (a JSON array of ids or a single scalar id — agents emit both) with the
-    /// commitment. This mechanically demotes the deliberative voices a commitment
+    /// commitment. This mechanically demotes the deliberative entries a commitment
     /// moves past, while keeping them in the store + citation closure as the
     /// commitment's recoverable provenance (the cost of the road not taken).
     /// Symmetric to [`Self::reconcile_overturned`] but records *what replaced* each

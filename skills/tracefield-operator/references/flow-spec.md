@@ -29,6 +29,7 @@
 | `cycles` | int | `1` | サイクル数（≥1） |
 | `cycle_stages` | string[] | `[]` | 各サイクルで反復するステージ id。空なら artifact 以外の全ステージ。ここに入れないステージは最後に1回だけ実行 |
 | `max_work_items` | int | — | work item 上限（任意） |
+| `stop_when_dry` | int | `0`（=固定 `cycles` 回） | loop-until-dry: あるサイクルの critic が正準マーカー `探索状況: 枯渇` を **N サイクル連続**で出したら残りのサイクルを打ち切る。novelty 判定は critic（意味的）、engine は marker 計数（決定論）＝`判定:`/classify_verdict と同設計。`継続` マーカーで連続はリセット。打ち切りは log に出る（no silent prune） |
 
 ## `[organs.<id>]`（モデル器官。ステージが `organ = "<id>"` で参照）
 
@@ -51,7 +52,7 @@
 | `outputs` | string[] | — | このステージが出すエントリ型（下表） |
 | `grounded` | bool | `false` | 接地ゲートを有効化。各非 question 主張に `meta.evidence_quote`（引用元の逐語部分文字列）を要求し、それを**引用 store エントリ本文 ∪ `meta.source_path`(+`source_line`) の実ファイル**に機械照合する。外れたら `evidence_quote_not_found`＋`evidence_strength=needs_review`（per-claim・retract 閉包内・no-silent-drop）。`source_`/`web`/`data` を含む id/organ/role でも自動 true（既存ヒューリスティック）。読み取り正準骨格・コード抽出での捏造検出に使う |
 | `retract_overturned` | bool | `false` | このステージ後に `reconcile_overturned` を走らせ、`判定: 結論変更…` の verdict が指す `meta.refutes` 主張を機械 retract（adjudication 段に置く） |
-| `supersede_marked` | bool | `false` | このステージ後に `reconcile_superseded` を走らせ、各産出エントリが `meta.supersedes`（id 配列 or scalar）で名指した熟考エントリを機械 supersede（消さず格下げ・引用閉包に保持＝来歴/コスト）。`retract_overturned` と対称で「何が置き換えたか」を記録。LLM 合成器なしの昇華段（出来事→commit→supersede）。対象が live でなければ UNACTIONED として可視化（no silent drop） |
+| `supersede_marked` | bool | `false` | このステージ後に `reconcile_superseded` を走らせ、各産出エントリが `meta.supersedes`（id 配列 or scalar）で名指した熟考エントリを機械 supersede（消さず格下げ・引用閉包に保持＝来歴/コスト）。`retract_overturned` と対称で「何が置き換えたか」を記録。LLM 合成器なしの統合段（出来事→commit→supersede）。対象が live でなければ UNACTIONED として可視化（no silent drop） |
 | `budget` | int | — | このステージのエントリ予算 |
 
 サブテーブル `[stages.<id>.actors]`:

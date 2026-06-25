@@ -199,7 +199,7 @@ pub struct StageConfig {
     /// deliberative voices a commitment moves past while keeping them in the store +
     /// citation closure as the commitment's recoverable provenance (the "cost" of the
     /// road not taken). Symmetric to `retract_overturned` but records *what replaced*
-    /// each target. The sublimation step (event→commit→supersede) without an LLM synthesizer.
+    /// each target. The integration step (event→commit→supersede) without an LLM synthesizer.
     pub supersede_marked: bool,
     /// Opt in to source-grounding discipline (evidence-quote contract + machine verification)
     /// regardless of stage/organ/role naming. See is_source_grounded_stage.
@@ -479,7 +479,7 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
             }
         }
 
-        // Mechanical sublimation: each commitment supersedes the deliberative voices
+        // Mechanical integration: each commitment supersedes the deliberative entries
         // it names in meta.supersedes — demoting them (status-driven) while keeping
         // them in the closure as recoverable provenance. The supersede closure is
         // logged — never silently dropped. No LLM synthesizer folds the voices.
@@ -489,7 +489,7 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
                 log_flow_progress(
                     &config,
                     format!(
-                        "stage={} cycle={} sublimate superseded-voice={} closure={}",
+                        "stage={} cycle={} integrate superseded-entry={} closure={}",
                         stage_id,
                         work_item.cycle,
                         voice,
@@ -501,7 +501,7 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
                 log_flow_progress(
                     &config,
                     format!(
-                        "stage={} cycle={} sublimate UNACTIONED commits={} entries={:?} \
+                        "stage={} cycle={} integrate UNACTIONED commits={} entries={:?} \
                          (no meta.supersedes target live — nothing demoted)",
                         stage_id,
                         work_item.cycle,
