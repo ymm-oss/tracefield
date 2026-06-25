@@ -797,10 +797,7 @@ mod tests {
             PathBuf::from("/tmp/unused"),
         );
 
-        assert_eq!(
-            invocation.program,
-            "/path/to/ds4/ds4"
-        );
+        assert_eq!(invocation.program, "/path/to/ds4/ds4");
         assert_eq!(
             invocation.current_dir.as_deref(),
             Some(Path::new("/path/to/ds4"))
