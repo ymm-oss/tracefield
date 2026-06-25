@@ -26,13 +26,12 @@
 | [`frame-problem.md`](./frame-problem.md) | **フレーム問題と tracefield**（概念整理）。frame は2つ（研究期 Frame Revision=null／開発期 動的ギャップ検出）・frame を器官の外に持つ・relevance>diversity・古典通信の不足・クラスタ規模の分野 | フレーム問題の観点と AI駆動開発への含意を知りたい |
 | [`findings-contrastive-serve.md`](./findings-contrastive-serve.md) | **contrastive serve の検証結果**。差延＝`serve :contrastive` は genuine 発見を surface 多様性とトレード（diversity theater・net-negative）→棚上げ。theater 検出ハーネスの設計も | 「偏りの関係的強化」を試した結末を知りたい |
 | [`findings-continuity-vs-diffusion.md`](./findings-continuity-vs-diffusion.md) | **連続性 vs 拡散**。narrow-answer 実タスク（匿名）で直交レンズは単一強モデルに answer で並ばれる→「拡散で分岐発見→単一の連続深掘り」交互織りが盲検で優位。勝因は観点でなく文脈の隔離（同じレンズpromptを1文脈に詰めた単一Wはむしろ劣化）。連続性ステージ/立場トーナメントの製品化提言 | パネルが単一に勝つ条件・観点vs隔離の切り分けを知りたい |
-| [`roadmap.md`](./roadmap.md) | **ロードマップ**。検証完了後の計画: 実用ツール化(モード/実データ/verify/撤回E2E)→統治ループ完成→残研究→プロダクト化、判定ゲート付き | これからの計画を知りたい |
 | [`design-reference.md`](./design-reference.md) | **Reference 設計**。ドキュメント接地＋検証可能な引用で C5 の過剰隔離(precision)を解決する再設計。Field Actor の sensitivity profile 具体化、段階的スコープ（静的→生きた） | C5 を実用化する次設計を知りたい |
 | [`design-agent.md`](./design-agent.md) | **Agent 境界の再定義**。Agent=状態+手続きの主体、LLM=無状態の器官。溶解の2次元化（状態×手続き）と統治の手続き拡張、OTP写像 | エージェントの主体モデルを知りたい |
-| [`design-cluster.md`](./design-cluster.md) | **クラスタ設計**。エージェント集合の単位と接続（projection/absorption・撤回の越境・メタ場）。半溶解性の再帰=スケールフリー化 | 複数チーム/案件横断の構想を知りたい |
+| [`design-cluster.md`](./design-cluster.md) | **クラスタ設計**。エージェント集合の単位と接続（projection/absorption・撤回の越境・メタ場）。半溶解性の再帰=スケールフリー化 | 複数チーム横断の構想を知りたい |
 | [`design-genesis.md`](./design-genesis.md) | **析出設計**。クラスタの自動生成（attractor検出・出生証明・ゲート・endowment・ライフサイクル）。EGI上り(Frame Revision)の組織スケール操作化 | クラスタが『発生する』機構を知りたい |
 | [`design-pipeline.md`](./design-pipeline.md) | **開発パイプライン設計（最優先目標）**。Issue詳細化→設計→実装→QA+HITL gate。端到端provenance・HUMAN=第一級著者・ギャップ分析・brief 24-27計画 | AI駆動開発の完遂計画を知りたい |
-| [`design-field-runner.md`](./design-field-runner.md) | **Field Runner設計**。`tracefield run`、`flow.toml`、stage、actor scaling、organ routing、feedback、gateを持つ汎用ステージ実行器。長時間調査はprofileの一例 | 長時間調査、開発、QA、コンサル分析を同じ実行基盤で扱いたい |
+| [`design-field-runner.md`](./design-field-runner.md) | **Field Runner設計**。`tracefield run`、`flow.toml`、stage、actor scaling、organ routing、feedback、gateを持つ汎用ステージ実行器。長時間調査はprofileの一例 | 長時間調査、開発、QA を同じ実行基盤で扱いたい |
 | `mvp-impl-brief*.md` / `../RUNNING.md` / [`rust-port.md`](./rust-port.md) | codex への実装ブリーフ群、Rust CLI の実行手順、現在の実装範囲 | 実装の詳細・動かし方を知りたい |
 | [`pre-registration.md`](./pre-registration.md) | 事前登録書（記入式）。`[未定]` パラメータと採点基準・分析計画、設計レビュー由来の追加項目（DR-*）を凍結する | 実験を始める前に確定事項を埋める |
 

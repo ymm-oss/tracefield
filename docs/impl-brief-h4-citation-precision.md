@@ -17,7 +17,7 @@
   | relies_on + verified（**新 Reference 完全**） | **1.00** | verify が幻覚引用を棄却 |
 - **支持**: harness データで cited-anything < relies_on < relies_on+verified と単調上昇し、完全形 >0.8。recall は維持（≥1.0 近傍）。
 - **棄却**: 完全形でも precision ≤0.6（プロトタイプの 1.0 が controlled GT のアーティファクト）→ 接地は実条件で過剰連結を解かない。
-- **製品的含意**: 陽性なら C5 の守りが製品化可能（roadmap 行き先①②の critical path）。H3（越境統治）はこの precision 修正に依存。
+- **製品的含意**: 陽性なら C5 の守りが製品化可能（製品化の critical path）。H3（越境統治）はこの precision 修正に依存。
 
 ## 2. なぜ今これか
 

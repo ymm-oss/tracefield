@@ -1,7 +1,7 @@
 # 実装ブリーフ 14 — フェーズ1: モード / verify / 訂正デモ / レポート（roadmap 1-1〜1-4）
 
 > codex 指示（第14弾）。前提: brief-13 まで実装済（ideate / Reference / Agent / Discovery）。
-> [`roadmap.md`](./roadmap.md) フェーズ1 のコンサル・パイロット機能を ideate に揃える。
+> フェーズ1 のパイロット機能を ideate に揃える。
 > `mise exec -- mix ...`。ネット無し（mock のみ）。コミットしない。
 
 ## 1. モードプリセット（roadmap 1-1）
