@@ -16,13 +16,6 @@
 # experiment run outputs
 /runs/
 /docs/index.bleve/
-scenarios/*/consult.log
-scenarios/*/run.jsonl
-scenarios/generic-smoke/outputs/
 
-# fsl-codespec references the local FSL skills by symlink (not committed: avoids
-# leaking local paths / FSL content into this public repo and avoids snapshot drift)
-scenarios/fsl-codespec/skills/
-
-# paired-adjudication experiment fixture (derived from a run)
-scenarios/adj-paired/
+# scenarios/ are kept out of this repo (experiment data lives in an external folder)
+scenarios/

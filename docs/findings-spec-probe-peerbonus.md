@@ -1,5 +1,7 @@
 # uncued・新規盲点でのオーケストレーション edge（peerbonus 仕様, 4ドメイン目）
 
+> 注: 本実験のシナリオ（`spec-probe-peerbonus` 一式と他の全シナリオ）はこのリポジトリには同梱せず、外部フォルダに保管している。以下の `flow.*.toml` / `scripts/*` 等のパスは外部のシナリオフォルダ内を指す。
+
 `findings-bet2-overturn.md` の cued/uncued 命題 ──「多エージェントの answer-quality edge は *uncued かつ新規*（priors が薄く、危険次元が要件に書かれていない）でのみ立ち、馴染んだ複雑(checkout/auth/CRUD)では単一が priors で全発見」── を**新規ドメインで追試**。
 既存3ドメイン(checkout=ゼロ / semver=薄い / approval=出現)に **peerbonus=同僚間ボーナストークン(bespoke)** を4つ目として追加。
 
