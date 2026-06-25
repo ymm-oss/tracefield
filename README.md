@@ -172,8 +172,7 @@ Persisting with `--persist` makes the result **falsifiable over time**:
 `tracefield retract` on a load-bearing premise propagates a closure over every
 dependent entry, and re-running `aggregate` recomputes the standing conclusion.
 The [`tracefield-flow-design`](./skills/tracefield-flow-design/SKILL.md) skill
-encodes how to choose lenses and wire these stages; reproducible example
-scenarios live under `scenarios/lens-*`.
+encodes how to choose lenses and wire these stages.
 
 ## Author A Scenario
 
@@ -258,14 +257,14 @@ Highlights confirmed by controlled and blind-rated experiments (full notes in
 ```text
 crates/tracefield-cli/   CLI binary
 crates/tracefield-core/  scenario, store, LLM adapter, Field Runner / flow logic
-scenarios/               synthetic, fictional consulting scenarios
 skills/                  Claude Code skills (operate + design)
 docs/                    design notes, experiment plans, findings
 experiments/             Python analysis scripts for historical run outputs
 ```
 
-All scenario data under `scenarios/` is **synthetic and fictional**. Do not add
-real client, customer, or personal data to this repository.
+Scenarios you create live under a local `scenarios/` directory, which is
+**git-ignored and not part of this repository**. Keep scenario data synthetic
+and fictional; never commit real client, customer, or personal data.
 
 ## Status
 
