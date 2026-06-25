@@ -232,6 +232,49 @@ impl ReferenceStore {
         report
     }
 
+    /// For each commitment entry, supersede the entries it names in `meta.supersedes`
+    /// (a JSON array of ids or a single scalar id — agents emit both) with the
+    /// commitment. This mechanically demotes the deliberative voices a commitment
+    /// moves past, while keeping them in the store + citation closure as the
+    /// commitment's recoverable provenance (the cost of the road not taken).
+    /// Symmetric to [`Self::reconcile_overturned`] but records *what replaced* each
+    /// target instead of retracting it. A commitment naming no live target is
+    /// reported in [`ReconcileReport::unactioned`] (never silently ignored). The
+    /// `retracted` field carries the superseded `(target, closure)` pairs.
+    pub fn reconcile_superseded(&mut self, commitments: &[Entry]) -> ReconcileReport {
+        let mut report = ReconcileReport::default();
+        for commitment in commitments {
+            let mut targets: Vec<String> = Vec::new();
+            match commitment.meta.get("supersedes") {
+                Some(Value::Array(ids)) => {
+                    targets.extend(ids.iter().filter_map(Value::as_str).map(String::from));
+                }
+                Some(Value::String(id)) => targets.push(id.clone()),
+                _ => {}
+            }
+            let mut acted = false;
+            for id in targets {
+                if id == commitment.id {
+                    continue;
+                }
+                match self.get(&id).map(|entry| entry.status.clone()) {
+                    None => {}
+                    Some(status) if status != EntryStatus::Active => acted = true,
+                    Some(_) => {
+                        if let Ok(affected) = self.supersede(&id, &commitment.id) {
+                            report.retracted.push((id, affected));
+                            acted = true;
+                        }
+                    }
+                }
+            }
+            if !acted {
+                report.unactioned.push(commitment.id.clone());
+            }
+        }
+        report
+    }
+
     /// Supersede `id` (and its downstream citation closure) with replacement
     /// `new_id`: the closure is marked `Superseded` with `superseded_by = new_id`,
     /// while `new_id` stays `Active`. Symmetric to `retract` (citation-closure
@@ -565,6 +608,61 @@ mod tests {
         );
         // Replacement stays live despite citing the superseded question.
         assert_eq!(store.get(&q2.id).unwrap().status, EntryStatus::Active);
+    }
+
+    #[test]
+    fn reconcile_superseded_demotes_named_voices_and_reports_unactioned() {
+        let mut store = ReferenceStore::new();
+        let accept = store.push(
+            NewEntry::new(EntryType::Stance, "LEAN_ACCEPT", "受けたい"),
+            "x",
+        );
+        let decline = store.push(
+            NewEntry::new(EntryType::Stance, "LEAN_DECLINE", "断りたい"),
+            "x",
+        );
+        // The commitment cites both leans as provenance and names them in supersedes.
+        let commit = store.push(
+            NewEntry::new(EntryType::Decision, "COMMIT", "受ける方へ踏み出す")
+                .with_citations(vec![accept.id.clone(), decline.id.clone()])
+                .with_meta(
+                    "supersedes",
+                    serde_json::json!([accept.id.clone(), decline.id.clone()]),
+                ),
+            "x",
+        );
+
+        let report = store.reconcile_superseded(&[commit.clone()]);
+        assert_eq!(report.retracted.len(), 2);
+        assert!(report.unactioned.is_empty());
+        // Both deliberative voices demoted, commitment stays live (its closure-keep).
+        assert_eq!(
+            store.get(&accept.id).unwrap().status,
+            EntryStatus::Superseded
+        );
+        assert_eq!(
+            store.get(&decline.id).unwrap().status,
+            EntryStatus::Superseded
+        );
+        assert_eq!(store.get(&commit.id).unwrap().status, EntryStatus::Active);
+        // Superseded voices record what replaced them (recoverable provenance).
+        assert_eq!(
+            store
+                .get(&accept.id)
+                .unwrap()
+                .meta
+                .get("superseded_by")
+                .unwrap(),
+            &Value::String(commit.id.clone())
+        );
+
+        // A commitment naming no live target is surfaced, never silently ignored.
+        let empty = store.push(
+            NewEntry::new(EntryType::Decision, "COMMIT", "no targets"),
+            "x",
+        );
+        let report2 = store.reconcile_superseded(&[empty.clone()]);
+        assert_eq!(report2.unactioned, vec![empty.id]);
     }
 
     #[test]

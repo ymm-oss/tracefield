@@ -51,6 +51,7 @@
 | `outputs` | string[] | — | このステージが出すエントリ型（下表） |
 | `grounded` | bool | `false` | 接地ゲートを有効化。各非 question 主張に `meta.evidence_quote`（引用元の逐語部分文字列）を要求し、それを**引用 store エントリ本文 ∪ `meta.source_path`(+`source_line`) の実ファイル**に機械照合する。外れたら `evidence_quote_not_found`＋`evidence_strength=needs_review`（per-claim・retract 閉包内・no-silent-drop）。`source_`/`web`/`data` を含む id/organ/role でも自動 true（既存ヒューリスティック）。読み取り正準骨格・コード抽出での捏造検出に使う |
 | `retract_overturned` | bool | `false` | このステージ後に `reconcile_overturned` を走らせ、`判定: 結論変更…` の verdict が指す `meta.refutes` 主張を機械 retract（adjudication 段に置く） |
+| `supersede_marked` | bool | `false` | このステージ後に `reconcile_superseded` を走らせ、各産出エントリが `meta.supersedes`（id 配列 or scalar）で名指した熟考エントリを機械 supersede（消さず格下げ・引用閉包に保持＝来歴/コスト）。`retract_overturned` と対称で「何が置き換えたか」を記録。LLM 合成器なしの昇華段（出来事→commit→supersede）。対象が live でなければ UNACTIONED として可視化（no silent drop） |
 | `budget` | int | — | このステージのエントリ予算 |
 
 サブテーブル `[stages.<id>.actors]`:

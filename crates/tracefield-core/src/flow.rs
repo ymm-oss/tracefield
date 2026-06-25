@@ -188,6 +188,13 @@ pub struct StageConfig {
     /// `meta.refutes` is retracted (status-driven), so a later assembler sees
     /// only survivors. Keeps the verdict fold out of the LLM (invariant #1).
     pub retract_overturned: bool,
+    /// When set, after this stage runs each produced entry mechanically supersedes
+    /// the entries it names in `meta.supersedes` (array or scalar id) — demoting the
+    /// deliberative voices a commitment moves past while keeping them in the store +
+    /// citation closure as the commitment's recoverable provenance (the "cost" of the
+    /// road not taken). Symmetric to `retract_overturned` but records *what replaced*
+    /// each target. The sublimation step (event→commit→supersede) without an LLM synthesizer.
+    pub supersede_marked: bool,
     /// Opt in to source-grounding discipline (evidence-quote contract + machine verification)
     /// regardless of stage/organ/role naming. See is_source_grounded_stage.
     pub grounded: bool,
@@ -456,6 +463,39 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
                     format!(
                         "stage={} cycle={} reconcile UNACTIONED overturns={} verdicts={:?} \
                          (overturn but no meta.refutes target — claim survives; verdict↔artifact gap, human must reconcile)",
+                        stage_id,
+                        work_item.cycle,
+                        reconcile.unactioned.len(),
+                        reconcile.unactioned
+                    ),
+                );
+            }
+        }
+
+        // Mechanical sublimation: each commitment supersedes the deliberative voices
+        // it names in meta.supersedes — demoting them (status-driven) while keeping
+        // them in the closure as recoverable provenance. The supersede closure is
+        // logged — never silently dropped. No LLM synthesizer folds the voices.
+        if config.stages[work_item.stage_index].supersede_marked {
+            let reconcile = store.reconcile_superseded(&stage_result.entries);
+            for (voice, affected) in &reconcile.retracted {
+                log_flow_progress(
+                    &config,
+                    format!(
+                        "stage={} cycle={} sublimate superseded-voice={} closure={}",
+                        stage_id,
+                        work_item.cycle,
+                        voice,
+                        affected.len()
+                    ),
+                );
+            }
+            if !reconcile.unactioned.is_empty() {
+                log_flow_progress(
+                    &config,
+                    format!(
+                        "stage={} cycle={} sublimate UNACTIONED commits={} entries={:?} \
+                         (no meta.supersedes target live — nothing demoted)",
                         stage_id,
                         work_item.cycle,
                         reconcile.unactioned.len(),
@@ -736,6 +776,7 @@ impl FlowConfig {
                 structural_checks,
                 artifact,
                 retract_overturned: bool_value(&values, "retract_overturned").unwrap_or(false),
+                supersede_marked: bool_value(&values, "supersede_marked").unwrap_or(false),
                 grounded: bool_value(&values, "grounded").unwrap_or(false),
             });
         }
@@ -1470,6 +1511,7 @@ fn process_stage_config(config: &FlowConfig, kind: ProcessStageKind) -> StageCon
         structural_checks: None,
         artifact: None,
         retract_overturned: false,
+        supersede_marked: false,
         grounded: false,
     }
 }
@@ -5981,6 +6023,7 @@ mod tests {
             structural_checks: None,
             artifact: None,
             retract_overturned: false,
+            supersede_marked: false,
             grounded: false,
         };
         (scenario, stage)
@@ -7318,6 +7361,7 @@ outputs = ["change", "decision"]
             structural_checks: None,
             artifact: None,
             retract_overturned: false,
+            supersede_marked: false,
             grounded: false,
         };
 
@@ -8561,6 +8605,7 @@ mode = "none"
             structural_checks: None,
             artifact: None,
             retract_overturned: false,
+            supersede_marked: false,
             grounded: false,
         };
 
