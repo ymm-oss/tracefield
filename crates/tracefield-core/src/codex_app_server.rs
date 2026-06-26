@@ -47,39 +47,60 @@ pub(crate) async fn run(
     let model = options.model.clone();
     let web_search = options.web_search;
 
-    // Share a kill handle between the blocking task and this async context so
-    // that a timeout can terminate the child even though spawn_blocking is not
-    // cancellable.
-    let child_handle: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
-    let child_handle_for_task = Arc::clone(&child_handle);
-
-    let task = tokio::task::spawn_blocking(move || {
-        run_sync(
-            &scenario_dir,
-            &author,
-            &skill_citations,
-            &messages,
-            model,
+    // Codex occasionally completes a turn with NO agent message (empty output) --
+    // a stochastic mode (~15% measured) that, on a single-actor critical stage
+    // (e.g. contract/decompose), would silently collapse the whole pipeline. Retry
+    // the turn a few times on an empty (non-error) result; a fresh turn almost
+    // always produces output. Errors and timeouts are surfaced, not retried.
+    const MAX_ATTEMPTS: usize = 3;
+    let mut last: (String, Vec<NewEntry>) = (String::new(), Vec::new());
+    for attempt in 1..=MAX_ATTEMPTS {
+        // Share a kill handle between the blocking task and this async context so
+        // that a timeout can terminate the child even though spawn_blocking is not
+        // cancellable. A fresh handle per attempt (the child is per-attempt).
+        let child_handle: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
+        let child_handle_for_task = Arc::clone(&child_handle);
+        let (sdir, auth, cites, msgs, mdl, web) = (
+            scenario_dir.clone(),
+            author.clone(),
+            skill_citations.clone(),
+            messages.clone(),
+            model.clone(),
             web_search,
-            child_handle_for_task,
-        )
-    });
+        );
+        let task = tokio::task::spawn_blocking(move || {
+            run_sync(&sdir, &auth, &cites, &msgs, mdl, web, child_handle_for_task)
+        });
 
-    let result = tokio::time::timeout(options.timeout, task).await;
-
-    match result {
-        Ok(join_result) => join_result.context("codex app-server blocking task panicked")?,
-        Err(_elapsed) => {
-            // Timeout: kill the child so the blocking task unblocks (its stdout
-            // read returns EOF), then wait briefly for the task to finish.
-            if let Ok(mut guard) = child_handle.lock()
-                && let Some(child) = guard.as_mut()
-            {
-                let _ = child.kill();
+        match tokio::time::timeout(options.timeout, task).await {
+            Ok(join_result) => {
+                let (text, provenance) =
+                    join_result.context("codex app-server blocking task panicked")??;
+                if !text.trim().is_empty() {
+                    return Ok((text, provenance));
+                }
+                if attempt < MAX_ATTEMPTS {
+                    eprintln!(
+                        "[codex-app-server] empty result for {author}, retrying ({attempt}/{MAX_ATTEMPTS})"
+                    );
+                }
+                last = (text, provenance);
             }
-            bail!("codex app-server timed out")
+            Err(_elapsed) => {
+                // Timeout: kill the child so the blocking task unblocks (its stdout
+                // read returns EOF), then surface the timeout.
+                if let Ok(mut guard) = child_handle.lock()
+                    && let Some(child) = guard.as_mut()
+                {
+                    let _ = child.kill();
+                }
+                bail!("codex app-server timed out")
+            }
         }
     }
+    // All attempts produced empty output -- return the last (empty) result so the
+    // caller can record an (empty) entry rather than erroring the whole run.
+    Ok(last)
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -273,6 +294,20 @@ pub(crate) fn collect_turn_output<W: Write>(
                 .with_meta("kind", json!("codex_skill"))
                 .with_meta("detail", json!("skills/changed"));
                 provenance.push(entry);
+            }
+            "error" => {
+                // codex emits this when the model/turn call fails. A retryable
+                // error (e.g. transient) is followed by another attempt, so let
+                // the stream continue; a non-retryable one dooms the turn — surface
+                // it instead of silently returning an empty message.
+                let will_retry = params.get("willRetry").and_then(Value::as_bool).unwrap_or(false);
+                if !will_retry {
+                    let detail = params
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown error");
+                    bail!("codex app-server error during turn: {detail}");
+                }
             }
             _ => {} // ignore other notifications
         }
@@ -564,6 +599,46 @@ mod tests {
         let mut lines = BufReader::new(lines_str.as_bytes()).lines();
         let (text, _) = collect_turn_output(&mut lines, &mut sink, "A1", &[]).unwrap();
         assert_eq!(text, "delta-only");
+    }
+
+    #[test]
+    fn collect_turn_output_surfaces_nonretryable_error() {
+        // A non-retryable `error` notification must fail loudly, not return empty
+        // (regression: codex>=0.142 rejects a bad outputSchema this way, and a
+        // silently-swallowed error produced empty reasoning-organ entries).
+        let lines_str = [
+            json!({"method": "error", "params": {
+                "error": {"message": "invalid_json_schema: 'additionalProperties' required"},
+                "willRetry": false
+            }}),
+            json!({"method": "turn/completed", "params": {}}),
+        ]
+        .iter()
+        .map(|v| serde_json::to_string(v).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let mut sink: Vec<u8> = Vec::new();
+        let mut lines = BufReader::new(lines_str.as_bytes()).lines();
+        let err = collect_turn_output(&mut lines, &mut sink, "A1", &[]).unwrap_err();
+        assert!(err.to_string().contains("invalid_json_schema"));
+    }
+
+    #[test]
+    fn collect_turn_output_ignores_retryable_error() {
+        // A retryable error is followed by another attempt; keep reading.
+        let lines_str = [
+            json!({"method": "error", "params": {"error": {"message": "transient"}, "willRetry": true}}),
+            json!({"method": "item/agentMessage/delta", "params": {"itemId": "m1", "delta": "recovered"}}),
+            json!({"method": "turn/completed", "params": {}}),
+        ]
+        .iter()
+        .map(|v| serde_json::to_string(v).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let mut sink: Vec<u8> = Vec::new();
+        let mut lines = BufReader::new(lines_str.as_bytes()).lines();
+        let (text, _) = collect_turn_output(&mut lines, &mut sink, "A1", &[]).unwrap();
+        assert_eq!(text, "recovered");
     }
 
     #[test]
