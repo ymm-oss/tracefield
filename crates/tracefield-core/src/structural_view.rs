@@ -17,19 +17,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub const STRUCTURAL_VIEW_SCHEMA: &str = "tracefield.structural_view.v1";
 pub const STRUCTURAL_CHECK_REPORT_SCHEMA: &str = "tracefield.structural_check_report.v1";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StructuralViewOptions {
     pub space_id: Option<String>,
     pub active_only: bool,
-}
-
-impl Default for StructuralViewOptions {
-    fn default() -> Self {
-        Self {
-            space_id: None,
-            active_only: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

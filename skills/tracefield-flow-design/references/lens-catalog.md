@@ -22,6 +22,16 @@
 {"id":"CRITICAL","domain":"critical-theory","desc":"批判理論。誰の利益が通り誰が黙らされるか、権力の非対称と正当化の言説を問う。死角: 実務的実現可能性・コストを軽視する。"}
 ```
 
+## 俯瞰レンズ（広さの保険 — 深さ panel に1枚足す）
+
+直交学派レンズ（深さ）の panel に**俯瞰役を1枚**足すと、隔離されている限り depth を損なわず breadth を補える（`docs/findings-survey-lens-breadth.md`、n=4 盲検: tracefield の breadth 2.75→4.5、かつ critique 4.25→5・insight 3.25→5 と深さはむしろ向上、全問 judge best で鍛えた単体を上回る）。俯瞰の浅い列挙は per_input 反証で覆れば消える（裏付けのない広さは残らない＝正しい挙動）。効きどころは uncued。
+
+```json
+{"id":"GENERALIST","domain":"survey","desc":"特定の学派に偏らず問い全体を広く俯瞰し、主要レンズに収まらない立場・論点・緊張(東洋思想・実存・ケアの倫理・少数派の視点・問いの前提自体への異議など)を網羅的に1つのエントリで挙げる。死角: 各立場を深められない(深掘りは他レンズの役)。"}
+```
+
+> 注: GENERALIST は偏った「観点」でなく「網羅役」(source_discovery に近い)。analysis panel に混ぜてよいが、critique/adjudication では他レンズ同様 per_input 反証にかける。深さは隔離学派レンズ、広さは俯瞰、の分業。
+
 ## 仕様インタロゲーション用レンズ（*仕様の沈黙*を問う — 複雑×新規で効く）
 
 同じ哲学分野だが**仕様/要件を*問う*用に framing**（directions 生成でなく、仕様の暗黙前提・書き落とし・二次の盲点を掘る）。effective なのは**開いた対象(仕様)× 複雑かつ新規なドメイン**。馴染み/cued は単一で足りる。フロー型は patterns.md「6. 仕様を問う」。根拠 `docs/findings-bet2-overturn.md`。

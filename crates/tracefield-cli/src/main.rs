@@ -1,11 +1,15 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use serde_json::Value;
+use serde_json::{Value, json};
+use std::io::{self, BufRead, Write};
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
-use tracefield_core::{FlowRunOptions, WebInputOptions, ingest_web_inputs, run_flow};
+use tracefield_core::{
+    Entry, EntryStatus, EntryType, FlowRunOptions, FlowRunResult, NewEntry, ReferenceStore,
+    WebInputOptions, ingest_web_inputs, run_flow,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "tracefield")]
@@ -114,6 +118,17 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         out: Option<PathBuf>,
     },
+    /// Interactive REPL chat over a persisted Field Runner store.
+    Chat {
+        #[arg(long, alias = "scenario", value_name = "DIR")]
+        scenario_dir: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
+        #[arg(long, value_name = "JSONL")]
+        persist: Option<PathBuf>,
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Check local runtime dependencies.
     Doctor,
     /// Scaffold (first call) then run the meeting-support flow on a directory.
@@ -169,6 +184,7 @@ async fn main() -> Result<()> {
                 config_path: config.clone(),
                 budget,
                 persist_path: persist.clone(),
+                cycle_seed: None,
             })
             .await
             .with_context(|| format!("failed to run flow {}", scenario_dir.display()))?;
@@ -343,6 +359,18 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Command::Chat {
+            scenario_dir,
+            config,
+            persist,
+            verbose,
+        } => {
+            ensure_directory(&scenario_dir, "--scenario-dir")?;
+            if let Some(config) = &config {
+                ensure_file(config, "--config")?;
+            }
+            run_chat_repl(scenario_dir, config, persist, verbose).await?;
+        }
         Command::Doctor => {
             print_doctor().await;
         }
@@ -372,6 +400,7 @@ async fn main() -> Result<()> {
                     config_path: None,
                     budget: None,
                     persist_path: Some(dir.join("store.jsonl")),
+                    cycle_seed: None,
                 })
                 .await
                 .with_context(|| format!("failed to run meeting flow {}", dir.display()))?;
@@ -560,8 +589,15 @@ struct AggregateReport {
 /// a clean fold; otherwise the conclusion is maintained under the union of the
 /// conditional verdicts. No LLM, no silent drops.
 fn aggregate_verdicts(reference: &tracefield_core::ReferenceStore, stage: &str) -> AggregateReport {
+    aggregate_verdicts_in(reference.all(), stage)
+}
+
+/// Same deterministic fold as [`aggregate_verdicts`] but over an arbitrary entry
+/// slice, so a chat turn can aggregate just its freshly generated entries
+/// (`FlowRunResult::entries`) without reloading the whole store.
+fn aggregate_verdicts_in(entries: &[Entry], stage: &str) -> AggregateReport {
     let mut records = Vec::new();
-    for entry in reference.all() {
+    for entry in entries {
         if entry.status != tracefield_core::EntryStatus::Active {
             continue;
         }
@@ -840,6 +876,391 @@ fn find_on_path(binary: &str) -> bool {
     };
 
     env::split_paths(&paths).any(|path| path.join(binary).is_file())
+}
+
+const CHAT_HELP: &str = "\
+コマンド:
+  <発話>                   ふつうに入力すると 1 ターン回る
+  /history                 これまでの会話（Active な問い/答え）を表示
+  /retract <id>            指定エントリを撤回（引用閉包ごと無効化）
+  /supersede <id> <text>   指定の問いを新しい問いに差し替えて答え直す
+  /aggregate [stage]       審議判定を機械集約して結論を表示
+  /new                     話題の区切り（過去は撤回しない）
+  /help                    このヘルプ
+  /quit, /exit             終了";
+
+enum ChatControl {
+    Continue,
+    Quit,
+}
+
+/// Interactive REPL: each plain line becomes a turn-stamped question pushed to
+/// the persisted store, then one `run_flow` pass answers it. Slash commands map
+/// to the existing store operations (retract / supersede / aggregate), so the
+/// store's status-driven read path makes "撤回" take effect on the next turn.
+async fn run_chat_repl(
+    scenario_dir: PathBuf,
+    config: Option<PathBuf>,
+    persist: Option<PathBuf>,
+    verbose: bool,
+) -> Result<()> {
+    let store_path = persist.unwrap_or_else(|| scenario_dir.join("chat.jsonl"));
+
+    println!("# tracefield chat");
+    println!("scenario: {}", scenario_dir.display());
+    println!("store:    {}", store_path.display());
+    println!("/help でコマンド一覧、/quit で終了。空行は無視されます。");
+    println!();
+
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+    loop {
+        print!("> ");
+        io::stdout().flush().ok();
+
+        let Some(line) = lines.next() else {
+            break; // EOF (Ctrl-D)
+        };
+        let line = line.context("failed to read stdin")?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(command) = trimmed.strip_prefix('/') {
+            match dispatch_slash(
+                command,
+                &scenario_dir,
+                config.as_deref(),
+                &store_path,
+                verbose,
+            )
+            .await
+            {
+                Ok(ChatControl::Quit) => break,
+                Ok(ChatControl::Continue) => {}
+                Err(error) => eprintln!("error: {error:#}"),
+            }
+            continue;
+        }
+
+        if let Err(error) = chat_turn(
+            trimmed,
+            &scenario_dir,
+            config.as_deref(),
+            &store_path,
+            verbose,
+        )
+        .await
+        {
+            eprintln!("error: {error:#}");
+        }
+    }
+
+    println!();
+    println!("bye");
+    Ok(())
+}
+
+/// Push the user's utterance as a turn-stamped question, then run one flow pass.
+async fn chat_turn(
+    utterance: &str,
+    scenario_dir: &Path,
+    config: Option<&Path>,
+    store_path: &Path,
+    verbose: bool,
+) -> Result<()> {
+    let mut store = ReferenceStore::from_jsonl_path(store_path)
+        .with_context(|| format!("failed to load chat store {}", store_path.display()))?;
+    let turn = next_turn(&store);
+    store.push(
+        NewEntry::new(EntryType::Question, "user", utterance)
+            .with_meta("turn", json!(turn))
+            .with_meta("kind", json!("chat_user")),
+        "user",
+    );
+    store.write_jsonl(store_path).with_context(|| {
+        format!(
+            "failed to persist chat question to {}",
+            store_path.display()
+        )
+    })?;
+
+    run_pass_and_render(scenario_dir, config, store_path, verbose, turn).await
+}
+
+/// Run one `run_flow` pass over the persisted store and render this turn's
+/// freshly generated entries. The task is seeded idempotently, so re-running
+/// over the same store only appends the new turn's work.
+async fn run_pass_and_render(
+    scenario_dir: &Path,
+    config: Option<&Path>,
+    store_path: &Path,
+    verbose: bool,
+    turn: u64,
+) -> Result<()> {
+    let result = run_flow(FlowRunOptions {
+        scenario_dir: scenario_dir.to_path_buf(),
+        config_path: config.map(Path::to_path_buf),
+        budget: None,
+        persist_path: Some(store_path.to_path_buf()),
+        cycle_seed: Some(turn as usize),
+    })
+    .await
+    .with_context(|| format!("chat turn {turn} flow failed"))?;
+
+    render_chat_turn(&result, verbose);
+    Ok(())
+}
+
+/// The next chat turn number: one past the maximum `meta.turn` in the store
+/// (1 if none), so turns stay contiguous across REPL restarts.
+fn next_turn(store: &ReferenceStore) -> u64 {
+    store
+        .all()
+        .iter()
+        .filter_map(|entry| entry.meta.get("turn").and_then(Value::as_u64))
+        .max()
+        .map_or(1, |max| max + 1)
+}
+
+/// The turn a chat entry belongs to: user questions carry `meta.turn`; flow
+/// outputs (answers) carry `meta.work_item_cycle`, which chat sets to the turn.
+fn entry_turn(entry: &Entry) -> u64 {
+    entry
+        .meta
+        .get("turn")
+        .or_else(|| entry.meta.get("work_item_cycle"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+/// Render one chat turn from the flow result's freshly generated entries. Never
+/// summarizes (no central synthesizer) — it only selects which entries to show.
+fn render_chat_turn(result: &FlowRunResult, verbose: bool) {
+    if verbose {
+        let _ = print_run_report(result);
+        return;
+    }
+
+    // Separate codex read-only tool/command provenance from the spoken answer.
+    let (provenance, body): (Vec<&Entry>, Vec<&Entry>) = result.entries.iter().partition(|entry| {
+        entry
+            .meta
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.starts_with("codex_"))
+    });
+
+    let last_stage = result.stages.last().map(|stage| stage.id.as_str());
+
+    // Governed flows end on adjudication Decisions carrying a 判定 label: fold
+    // them mechanically into a conclusion (the same rule-based aggregate).
+    let has_verdict = body.iter().any(|entry| {
+        entry.entry_type == EntryType::Decision
+            && tracefield_core::classify_verdict(&entry.text) != "unclassified"
+    });
+    if let Some(stage) = last_stage.filter(|_| has_verdict) {
+        // Select and label entries for display — no synthesis (no central
+        // synthesizer): each lens's position, then each verdict's text by class,
+        // then the mechanical conclusion.
+        let stances: Vec<&Entry> = body
+            .iter()
+            .copied()
+            .filter(|entry| entry.entry_type == EntryType::Stance)
+            .collect();
+        if !stances.is_empty() {
+            println!("■ 立場");
+            for entry in &stances {
+                println!("  [{}] {}", entry.author, first_line(&entry.text));
+            }
+            println!();
+        }
+        let report = aggregate_verdicts_in(&result.entries, stage);
+        let conclusion_ja = match report.conclusion.as_str() {
+            "changed" => "結論変更を要する",
+            "maintained" => "結論維持",
+            "indeterminate" => "未確定（要対応）",
+            other => other,
+        };
+        println!(
+            "■ 判定 — {} (覆る{} 条件付き{} 却下{} 維持{}{})",
+            conclusion_ja,
+            report.overturn.len(),
+            report.conditional.len(),
+            report.reject.len(),
+            report.maintain.len(),
+            if report.unclassified.is_empty() {
+                String::new()
+            } else {
+                format!(" 未分類{}", report.unclassified.len())
+            }
+        );
+        for record in &report.records {
+            println!("  [{}] {}", record.class, first_line(&record.text));
+        }
+        render_tool_trace(&provenance);
+        return;
+    }
+
+    // Otherwise speak the final stage's answer / synthesis / decision text.
+    let answer: Vec<&Entry> = last_stage
+        .map(|stage| {
+            body.iter()
+                .copied()
+                .filter(|entry| entry.meta.get("stage").and_then(Value::as_str) == Some(stage))
+                .filter(|entry| {
+                    matches!(
+                        entry.entry_type,
+                        EntryType::Answer | EntryType::Synthesis | EntryType::Decision
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let shown = if answer.is_empty() { &body } else { &answer };
+    if shown.is_empty() {
+        // No silent drop: if nothing matched, show whatever was generated.
+        for entry in &result.entries {
+            print_entry_line(&serde_json::to_value(entry).unwrap_or(Value::Null));
+        }
+    } else {
+        for entry in shown {
+            println!("{}", entry.text.trim());
+        }
+    }
+    render_tool_trace(&provenance);
+}
+
+fn render_tool_trace(provenance: &[&Entry]) {
+    if provenance.is_empty() {
+        return;
+    }
+    println!();
+    for entry in provenance {
+        println!("  [tool] {}", first_line(&entry.text));
+    }
+}
+
+/// Handle a `/command`. Returns whether the REPL should continue or quit.
+async fn dispatch_slash(
+    command: &str,
+    scenario_dir: &Path,
+    config: Option<&Path>,
+    store_path: &Path,
+    verbose: bool,
+) -> Result<ChatControl> {
+    let mut parts = command.splitn(2, char::is_whitespace);
+    let verb = parts.next().unwrap_or("").trim();
+    let rest = parts.next().unwrap_or("").trim();
+
+    match verb {
+        "quit" | "exit" => return Ok(ChatControl::Quit),
+        "help" => println!("{}", CHAT_HELP),
+        "history" => chat_history(store_path)?,
+        "retract" => {
+            if rest.is_empty() {
+                println!("usage: /retract <id>");
+            } else {
+                chat_retract(store_path, rest)?;
+            }
+        }
+        "supersede" => {
+            let mut sup = rest.splitn(2, char::is_whitespace);
+            let id = sup.next().unwrap_or("").trim();
+            let text = sup.next().unwrap_or("").trim();
+            if id.is_empty() || text.is_empty() {
+                println!("usage: /supersede <id> <new question>");
+            } else {
+                let turn = chat_supersede(store_path, id, text)?;
+                run_pass_and_render(scenario_dir, config, store_path, verbose, turn).await?;
+            }
+        }
+        "aggregate" => {
+            let stage = if rest.is_empty() {
+                "adjudication"
+            } else {
+                rest
+            };
+            let reference = ReferenceStore::from_jsonl_path(store_path)
+                .with_context(|| format!("failed to load store {}", store_path.display()))?;
+            print_aggregate_report(&aggregate_verdicts(&reference, stage));
+        }
+        "new" => {
+            println!("(話題を区切りました。過去の発言は撤回していません。新しい問いをどうぞ)");
+        }
+        other => {
+            println!("unknown command: /{other} — /help を参照");
+        }
+    }
+
+    Ok(ChatControl::Continue)
+}
+
+/// List the Active questions / answers in turn order.
+fn chat_history(store_path: &Path) -> Result<()> {
+    let store = ReferenceStore::from_jsonl_path(store_path)
+        .with_context(|| format!("failed to load store {}", store_path.display()))?;
+    let mut rows: Vec<&Entry> = store
+        .all()
+        .iter()
+        .filter(|entry| entry.status == EntryStatus::Active)
+        .filter(|entry| matches!(entry.entry_type, EntryType::Question | EntryType::Answer))
+        .collect();
+    rows.sort_by_key(|entry| entry_turn(entry));
+
+    if rows.is_empty() {
+        println!("(まだ会話がありません)");
+        return Ok(());
+    }
+    for entry in rows {
+        let turn = entry_turn(entry);
+        let who: &str = if entry.entry_type == EntryType::Question {
+            "you"
+        } else {
+            entry.author.as_str()
+        };
+        println!("[{}] t{turn} {who}: {}", entry.id, first_line(&entry.text));
+    }
+    Ok(())
+}
+
+/// Retract an entry (and its citation closure) — the conversational "撤回".
+fn chat_retract(store_path: &Path, id: &str) -> Result<()> {
+    let mut store = ReferenceStore::from_jsonl_path(store_path)
+        .with_context(|| format!("failed to load store {}", store_path.display()))?;
+    let affected = store
+        .retract(id, "user")
+        .with_context(|| format!("failed to retract {id}"))?;
+    store
+        .write_jsonl(store_path)
+        .with_context(|| format!("failed to persist retraction to {}", store_path.display()))?;
+    print_closure_report(&format!("retracted {id}"), &affected)?;
+    Ok(())
+}
+
+/// Supersede a prior question with a reworded one — the conversational "言い直し".
+/// Returns the new turn number so the caller can answer it immediately.
+fn chat_supersede(store_path: &Path, old_id: &str, text: &str) -> Result<u64> {
+    let mut store = ReferenceStore::from_jsonl_path(store_path)
+        .with_context(|| format!("failed to load store {}", store_path.display()))?;
+    let turn = next_turn(&store);
+    let replacement = store.push(
+        NewEntry::new(EntryType::Question, "user", text)
+            .with_meta("turn", json!(turn))
+            .with_meta("kind", json!("chat_user")),
+        "user",
+    );
+    let new_id = replacement.id.clone();
+    let affected = store
+        .supersede(old_id, &new_id)
+        .with_context(|| format!("failed to supersede {old_id} with {new_id}"))?;
+    store
+        .write_jsonl(store_path)
+        .with_context(|| format!("failed to persist supersession to {}", store_path.display()))?;
+    print_closure_report(&format!("superseded {old_id} by {new_id}"), &affected)?;
+    Ok(turn)
 }
 
 #[cfg(test)]
