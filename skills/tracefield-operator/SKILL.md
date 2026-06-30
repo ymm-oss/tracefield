@@ -135,6 +135,25 @@ changed question a first-class, provenance-linked event. Re-run `aggregate`
 afterward: the read path filters `Active`, so the stale closure drops out and
 the basis is recomputed (no silent recompute — the closure is shown).
 
+8. Interactive chat (REPL) over a persisted store:
+
+```sh
+tracefield new <name> --profile chat   # lightweight single-stage chat scenario
+tracefield chat --scenario-dir scenarios/<name> [--persist <jsonl>] [--config <toml>] [--verbose]
+```
+
+Each turn pushes your message as a turn-stamped `question` entry, then runs
+**one** `run_flow` pass over the same store and shows that turn's freshly
+generated entries. The conversation history *is* the `ReferenceStore` (one
+JSONL), so `/retract` and `/supersede` act as conversational "前言撤回" — the
+status-driven read path drops the retracted closure from the next turn's context
+automatically. `--persist` defaults to `<scenario-dir>/chat.jsonl` and continues
+across restarts. Depth is whatever `flow.toml` is: the lightweight `chat` profile
+(single `reply` stage) for quick Q&A, or any governed flow for per-turn
+deliberation. Slash commands: `/history` `/retract <id>` `/supersede <id> <text>`
+`/aggregate [stage]` `/new` `/help` `/quit`. Design of chat flows (the `latest:`
+selector, weave) is in tracefield-flow-design.
+
 ## Output Policy
 
 - Use the readable report for humans.

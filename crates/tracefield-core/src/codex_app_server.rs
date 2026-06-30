@@ -300,7 +300,10 @@ pub(crate) fn collect_turn_output<W: Write>(
                 // error (e.g. transient) is followed by another attempt, so let
                 // the stream continue; a non-retryable one dooms the turn — surface
                 // it instead of silently returning an empty message.
-                let will_retry = params.get("willRetry").and_then(Value::as_bool).unwrap_or(false);
+                let will_retry = params
+                    .get("willRetry")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 if !will_retry {
                     let detail = params
                         .pointer("/error/message")

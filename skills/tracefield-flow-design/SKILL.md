@@ -138,6 +138,12 @@ denoise（`[long_run]` 自己参照サイクル）には検証状態の異なる
 - **supersede（問い/主張が変わった）**: `tracefield supersede --entry <旧> --with <新>` で旧 entry＋下流閉包を `Superseded`（`superseded_by=<新>`）にし、後継 entry は Active に残す（後継が旧を cite していても埋もれない）。古い問いに答えた結論群が閉包ごと退場し、新しい問いの下で再調査できる。
 - **再集約は自動でなく手動**: 読み取り経路（入力セレクタ・`tracefield aggregate`・serve）は全て `Active` 限定なので、retract/supersede 後に `aggregate` を再実行すると除外分が落ちて基盤が再計算される。手動なのは設計判断で、黙って再集約すると「結論が変わった」事実が silent recompute に消えるため、閉包を人間に見せる（鉄則の no-silent-drop の裏返し）。
 
+### 対話的に回す（chat・multi-turn・findings-survey-lens-breadth）
+`tracefield chat` は同じ persist ストアに run_flow を毎ターン1回呼ぶ（seed 冪等＝task は1回だけ seed）。1ターン = 発話を `question`(meta.turn 付き)で push → 1パス → 今ターン生成分を表示。会話履歴は ReferenceStore のエントリ列なので、retract/supersede が「前言撤回」として status-driven に効く（次ターンの文脈から自動で外れる）。運用は tracefield-operator。
+- **`latest:<entry_type>` セレクタ**: `meta.turn`(user question) または `meta.work_item_cycle`(flow 出力。chat は cycle=turn で回す)が最大のエントリだけ返す＝今ターンの入力を過去ターンから分離する要。`latest:question`=今の問い、`entry_type:question`/`answer`=過去の文脈。stage 間連携も `latest:stance`→`latest:audit`→… で今ターン分だけ繋ぐ（multi-turn でも過去を引きずらない）。
+- **深さは flow.toml 次第**: 軽量 `chat` profile(単段 reply) / governed flow(surface-don't-resolve・哲学パネル等)を `--scenario-dir` で切替。チャット機構は flow 非依存。
+- **広さの足し方（実証 n=4 盲検）**: 並列俯瞰(GENERALIST を panel に＝浅い列挙) **<** 拡散→連続 weave(SURVEY が5学派の死角を1つ名指す→`audit`→DEEPENER が深掘り)。weave が uncued で最良。反復(3サイクル螺旋)は cued で深いが compute 3倍・タイムアウトで実用性に難。効きどころは一貫して uncued（cued は鍛えた単体で足りる）。lens-catalog の「俯瞰レンズ」節も参照。
+
 ### 接地ゲート（grounded flag・読み取りハルシネーション抑制・findings-grounded-reading）
 レンズ（解釈）が**読み取った主張を出典に逐語照合**する per-claim ゲート。`[stages.<id>] grounded = true` で、その段の各主張に `meta.evidence_quote`（出典の逐語部分文字列8〜30語）を要求し、**引用 store エントリ本文 ∪ `meta.source_path`(+`source_line`) の実ファイル**に機械照合する（外れたら `evidence_quote_not_found`＋`needs_review`、per-claim・retract 閉包内・no-silent-drop）。LLM 不使用の決定論照合＝再接地テーゼ（citation-precision を 0.40→1.00、H1c で審判の覆し決定性を律速）をエンジン側で実装。
 - **効き所**: コード/文書の**読み取り段**（analysis / evidence / spec_draft / verify）の主張捏造を機械検出。`relies_on` の真偽を初めて機械検証する。**文書**は store チャンク（in-store 照合）、**コード**は disk 上ファイル（actor が `meta.source_path`/`source_line` を申告し on-disk 照合）。

@@ -18,6 +18,13 @@ pub struct FlowRunOptions {
     pub config_path: Option<PathBuf>,
     pub budget: Option<usize>,
     pub persist_path: Option<PathBuf>,
+    /// Work-item cycle for this run's initial-pass stages. Stage outputs are
+    /// keyed by `work_item_cycle`, so re-running over the same persisted store
+    /// with the *same* cycle resumes prior output (the default), whereas a
+    /// *distinct* cycle re-runs the stage fresh. Chat passes the turn number so
+    /// each turn produces a new answer instead of resuming the previous one.
+    /// `None` keeps the default single-pass cycle (1).
+    pub cycle_seed: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,7 +340,7 @@ pub async fn run_flow(options: FlowRunOptions) -> Result<FlowRunResult> {
     let mut stages = Vec::new();
     let mut all_generated = Vec::new();
     let mut all_artifacts = Vec::new();
-    let mut work_queue = initial_work_queue(&config);
+    let mut work_queue = initial_work_queue(&config, options.cycle_seed.unwrap_or(1));
     let mut budget_step = 0;
     let mut feedback_cycles = 0;
     let mut dry_streak = 0usize;
@@ -625,14 +632,14 @@ fn cycle_dry_signal(entries: &[Entry]) -> Option<bool> {
     None
 }
 
-fn initial_work_queue(config: &FlowConfig) -> Vec<FlowWorkItem> {
+fn initial_work_queue(config: &FlowConfig, cycle_seed: usize) -> Vec<FlowWorkItem> {
     let cycles = configured_long_run_cycles(config);
     if !config.long_run.enabled || cycles <= 1 {
         return config
             .stages
             .iter()
             .enumerate()
-            .map(|(stage_index, _)| FlowWorkItem::new(stage_index, 1, "initial"))
+            .map(|(stage_index, _)| FlowWorkItem::new(stage_index, cycle_seed, "initial"))
             .collect();
     }
 
@@ -2413,6 +2420,47 @@ fn entries_for_selector(store: &ReferenceStore, selector: &str) -> Vec<Entry> {
             .filter(|entry| entry.meta.get("stage").and_then(Value::as_str) == Some(value))
             .cloned()
             .collect();
+    }
+
+    // `latest:<entry_type>` returns only the Active entries of that type belonging
+    // to the latest turn. A turn is `meta.turn` (chat user questions) or, failing
+    // that, `meta.work_item_cycle` (flow-stage outputs, which chat runs with
+    // cycle = turn). This lets a chat flow chain stages within one turn
+    // (`latest:stance` → `latest:observation`) without dragging in earlier turns,
+    // while earlier turns stay Active as history reachable via `entry_type:`.
+    // Entries with neither stamp never match, so this selector is chat-specific.
+    if let Some(value) = selector.strip_prefix("latest:") {
+        let entry_type = EntryType::parse(value);
+        let max_turn = store
+            .all()
+            .iter()
+            .filter(|entry| entry.status == EntryStatus::Active && entry.entry_type == entry_type)
+            .filter_map(|entry| {
+                entry
+                    .meta
+                    .get("turn")
+                    .or_else(|| entry.meta.get("work_item_cycle"))
+                    .and_then(Value::as_u64)
+            })
+            .max();
+        return match max_turn {
+            Some(turn) => store
+                .all()
+                .iter()
+                .filter(|entry| {
+                    entry.status == EntryStatus::Active
+                        && entry.entry_type == entry_type
+                        && entry
+                            .meta
+                            .get("turn")
+                            .or_else(|| entry.meta.get("work_item_cycle"))
+                            .and_then(Value::as_u64)
+                            == Some(turn)
+                })
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        };
     }
 
     Vec::new()
@@ -6322,7 +6370,7 @@ kind = "report"
         assert_eq!(config.long_run.max_work_items, Some(20));
         assert_eq!(effective_max_feedback_cycles(&config), 7);
 
-        let queue = initial_work_queue(&config)
+        let queue = initial_work_queue(&config, 1)
             .into_iter()
             .map(|item| {
                 format!(
@@ -6487,6 +6535,7 @@ path = "outputs/report.md"
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -6581,6 +6630,7 @@ args = ["-c", "echo PROBE_MARKER; cat \"$1\"", "sh", "{input}"]
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -6638,6 +6688,7 @@ scope = "store"
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -6707,6 +6758,7 @@ mode = "per_agent"
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -6787,6 +6839,7 @@ count = 1
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -6890,6 +6943,7 @@ path = "outputs/report.md"
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -6999,6 +7053,7 @@ path = "outputs/report.md"
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -7128,6 +7183,7 @@ count = 1
             config_path: None,
             budget: None,
             persist_path: Some(store_path.clone()),
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -7136,6 +7192,7 @@ count = 1
             config_path: None,
             budget: None,
             persist_path: Some(store_path.clone()),
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -7544,6 +7601,55 @@ outputs = ["change", "decision"]
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec!["e2"]
+        );
+    }
+
+    #[test]
+    fn latest_selector_returns_only_max_turn_entries() {
+        let mut store = ReferenceStore::new();
+        store.push(
+            NewEntry::new(EntryType::Question, "user", "turn one").with_meta("turn", json!(1)),
+            "user",
+        );
+        store.push(
+            NewEntry::new(EntryType::Question, "user", "turn two").with_meta("turn", json!(2)),
+            "user",
+        );
+        // An unstamped question must be ignored by `latest:`.
+        store.push(
+            NewEntry::new(EntryType::Question, "user", "no turn"),
+            "user",
+        );
+
+        let latest = entries_for_selector(&store, "latest:question");
+        assert_eq!(
+            latest
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["turn two".to_string()]
+        );
+        // `entry_type:` still returns the whole history (all three).
+        assert_eq!(entries_for_selector(&store, "entry_type:question").len(), 3);
+
+        // Flow-stage outputs carry `work_item_cycle` (= turn) instead of `turn`;
+        // `latest:` must honor it so a chat flow can chain stages within a turn.
+        store.push(
+            NewEntry::new(EntryType::Stance, "a", "old stance")
+                .with_meta("work_item_cycle", json!(1)),
+            "a",
+        );
+        store.push(
+            NewEntry::new(EntryType::Stance, "a", "new stance")
+                .with_meta("work_item_cycle", json!(2)),
+            "a",
+        );
+        assert_eq!(
+            entries_for_selector(&store, "latest:stance")
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["new stance".to_string()]
         );
     }
 
@@ -8604,6 +8710,7 @@ mode = "none"
             config_path: None,
             budget: None,
             persist_path: None,
+            cycle_seed: None,
         })
         .await
         .unwrap();
@@ -8779,6 +8886,7 @@ mode = "per_input"
             config_path: None,
             budget: None,
             persist_path: Some(store_path.clone()),
+            cycle_seed: None,
         })
         .await
         .unwrap();

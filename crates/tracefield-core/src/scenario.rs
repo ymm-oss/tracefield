@@ -140,7 +140,7 @@ pub fn scaffold_with_profile(
             force,
         )?;
         write_if_allowed(&base.join("README.md"), MEETING_SUPPORT_README, force)?;
-    } else {
+    } else if profile != "chat" {
         write_if_allowed(
             &base.join("private").join("lens1.md"),
             "Private lens for A1.\n",
@@ -157,7 +157,6 @@ pub fn scaffold_with_profile(
             force,
         )?;
     }
-
     write_if_allowed(
         &base.join("flow.toml"),
         flow_template(profile).with_context(|| format!("unknown flow profile {profile:?}"))?,
@@ -170,6 +169,7 @@ pub fn scaffold_with_profile(
 fn task_template(profile: &str) -> &'static str {
     match profile {
         "meeting-support" => MEETING_SUPPORT_TASK,
+        "chat" => CHAT_TASK_MD,
         _ => "Describe the decision or investigation task here.\n",
     }
 }
@@ -177,6 +177,7 @@ fn task_template(profile: &str) -> &'static str {
 fn agents_template(profile: &str) -> &'static str {
     match profile {
         "meeting-support" => MEETING_SUPPORT_AGENTS,
+        "chat" => CHAT_AGENTS_JSON,
         _ => {
             r#"{
   "agents": [
@@ -751,9 +752,62 @@ path = "outputs/deck.md"
 "#,
         ),
         "meeting-support" => Some(MEETING_SUPPORT_FLOW),
+        "chat" => Some(
+            r#"[flow]
+profile = "chat"
+policy = "fixed"
+budget = 10
+max_feedback_cycles = 0
+
+[actor_scaling]
+default_mode = "fixed"
+max_total_actors = 2
+max_parallel_actors = 1
+
+# 既定は mock（モデル不要・骨格検証用）。実チャットは1行で codex へ切替:
+#   adapter = "cli"   command = "codex"
+# 読んだファイル/実行コマンド等の来歴も残すなら:
+#   adapter = "codex-app-server"
+[organs.reasoning]
+adapter = "mock"
+
+# 1ターン = 1ステージ。今ターンの問い(latest:question)を最優先し、
+# 過去の問い/答え(entry_type:question/answer)を文脈として読む。
+# 撤回・差し替えられた発言は Active でなくなるため文脈に現れない。
+[stages.reply]
+organ = "reasoning"
+inputs = ["latest:question", "entry_type:answer", "entry_type:question"]
+outputs = ["answer"]
+
+[stages.reply.actors]
+mode = "fixed"
+count = 1
+roles = ["ASSISTANT"]
+
+# 文脈の肥大を抑える（既定 2400 を据え置き、超過分は古い順に truncate）
+[stages.reply.context]
+chars_per_entry = 300
+chars_total = 2400
+"#,
+        ),
         _ => None,
     }
 }
+
+const CHAT_TASK_MD: &str = r#"# 対話アシスタント
+
+ユーザーの問いに、これまでの会話（CONTEXT 内の question / answer エントリ）を
+踏まえて簡潔・誠実に答える。今回の対象は最新の問い（latest:question）。
+撤回・差し替えられた発言は CONTEXT に現れないので考慮しない。
+わからないことは断定せず、その旨を述べる。
+"#;
+
+const CHAT_AGENTS_JSON: &str = r#"{
+  "agents": [
+    {"id": "ASSISTANT", "domain": "general", "desc": "会話履歴を踏まえ、最新の問いに簡潔・誠実に答える。不確かなことは断定しない。"}
+  ]
+}
+"#;
 
 fn load_private_docs(dir: &Path) -> Result<BTreeMap<String, String>> {
     let private_dir = dir.join("private");
@@ -1059,6 +1113,24 @@ Review procedure
         assert!(flow.contains("cycle_stages = [\"deliberate\"]"));
         assert!(flow.contains("[stages.deliberate]"));
         assert!(flow.contains("mode = \"per_agent\""));
+    }
+
+    #[test]
+    fn scaffold_can_create_chat_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("chat");
+        let scenario_dir = scaffold_with_profile("chat", Some(&target), false, "chat").unwrap();
+        let flow = fs::read_to_string(scenario_dir.join("flow.toml")).unwrap();
+
+        assert!(flow.contains("profile = \"chat\""));
+        assert!(flow.contains("[stages.reply]"));
+        assert!(flow.contains("latest:question"));
+        assert!(flow.contains("outputs = [\"answer\"]"));
+
+        let agents = fs::read_to_string(scenario_dir.join("agents.json")).unwrap();
+        assert!(agents.contains("ASSISTANT"));
+        // The chat profile does not seed the default lens docs.
+        assert!(!scenario_dir.join("private").join("lens1.md").exists());
     }
 
     #[test]
