@@ -53,19 +53,19 @@ cd tracefield
 
 Then pick one:
 
-**Bootstrap script** — builds the CLI and runs a model-free smoke check:
+**Bootstrap script** — installs the CLI onto your PATH (`cargo install`) and runs a model-free smoke check:
 
 ```sh
 ./install.sh            # --test also runs the test suite; --no-smoke skips the smoke run
 ```
 
-**Install the `tracefield` binary onto your PATH:**
+**Or install the `tracefield` binary onto your PATH directly:**
 
 ```sh
 cargo install --path crates/tracefield-cli --locked
 ```
 
-**Or build in place** and call `./target/release/tracefield`:
+**Or build in place** and call `./target/release/tracefield` — useful while iterating on the source, since it skips the install-to-PATH step:
 
 ```sh
 cargo build --release
@@ -73,8 +73,7 @@ cargo build --release
 
 > If a previously installed `~/.cargo/bin/tracefield` lags behind the source
 > (e.g. an adapter errors with `unknown option '--force'`, or a subcommand is
-> missing), rebuild with `cargo build --release` or reinstall with the
-> `cargo install` line above.
+> missing), re-run `./install.sh` or `cargo install --path crates/tracefield-cli --locked --force`.
 
 ### Verify
 

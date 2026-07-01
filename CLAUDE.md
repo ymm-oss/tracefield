@@ -21,9 +21,9 @@ The `mock` adapter means tests and smoke scenarios run with no model. A model-fr
 ./target/release/tracefield run --scenario-dir scenarios/smoke
 ```
 
-`./install.sh` builds + runs the smoke (`--test` also runs tests, `--no-smoke` skips). Note: the `cargo` package name for the CLI crate is **`tracefield`**, not `tracefield-cli`.
+`./install.sh` installs the CLI onto your PATH (`cargo install`) + runs the smoke (`--test` also runs tests, `--no-smoke` skips). Note: the `cargo` package name for the CLI crate is **`tracefield`**, not `tracefield-cli`.
 
-> A stale `~/.cargo/bin/tracefield` can lag the source (missing flag/subcommand). Rebuild with `cargo build --release` and invoke `./target/release/tracefield` when iterating.
+> A stale `~/.cargo/bin/tracefield` can lag the source (missing flag/subcommand). Re-run `./install.sh` to refresh it, or use `cargo build --release` and invoke `./target/release/tracefield` directly when iterating.
 
 ## Architecture
 

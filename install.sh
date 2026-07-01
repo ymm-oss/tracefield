@@ -5,8 +5,9 @@
 #
 #     ./install.sh
 #
-# It builds the Rust CLI and runs a model-free smoke check. No Ollama instance
-# or external API key is required for the default run.
+# It installs the tracefield CLI onto your PATH (cargo install) and runs a
+# model-free smoke check. No Ollama instance or external API key is required
+# for the default run.
 #
 # Flags:
 #   --no-smoke   skip the mock flow smoke run
@@ -51,9 +52,13 @@ if ! command -v cargo >/dev/null 2>&1; then
     then re-run ./install.sh"
 fi
 
-step "Building Rust CLI"
-cargo build --release -p tracefield
-info "built ./target/release/tracefield"
+step "Installing tracefield CLI"
+cargo install --path crates/tracefield-cli --locked --force
+if ! command -v tracefield >/dev/null 2>&1; then
+  die "tracefield installed but not found on PATH.
+    Add cargo's bin directory (usually ~/.cargo/bin) to PATH, then re-run."
+fi
+info "installed $(command -v tracefield)"
 
 step "Checking Rust workspace"
 cargo check -p tracefield
@@ -67,8 +72,8 @@ if [ "$RUN_SMOKE" -eq 1 ]; then
   step "Smoke check: mock flow run"
   SMOKE_TMP=$(mktemp -d)
   trap 'rm -rf "$SMOKE_TMP"' EXIT
-  ./target/release/tracefield new smoke --dir "$SMOKE_TMP/smoke" >/dev/null
-  ./target/release/tracefield run --scenario-dir "$SMOKE_TMP/smoke" >/dev/null
+  tracefield new smoke --dir "$SMOKE_TMP/smoke" >/dev/null
+  tracefield run --scenario-dir "$SMOKE_TMP/smoke" >/dev/null
   rm -rf "$SMOKE_TMP"
   trap - EXIT
   info "mock flow run OK"
@@ -78,10 +83,10 @@ printf '\n%s✓ tracefield is ready.%s\n\n' "$GREEN$BOLD" "$RESET"
 cat <<EOF
 Next steps:
 
-  ./target/release/tracefield doctor
-  ./target/release/tracefield new smoke
-  ./target/release/tracefield run --scenario-dir scenarios/smoke
-  ./target/release/tracefield new my-review
+  tracefield doctor
+  tracefield new smoke
+  tracefield run --scenario-dir scenarios/smoke
+  tracefield new my-review
 
 For live runs with a local model, start Ollama and pull a model first
 (see README.md / RUNNING.md). The default flow above needs no model at all.
