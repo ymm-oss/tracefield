@@ -65,7 +65,12 @@ fi
 
 if [ "$RUN_SMOKE" -eq 1 ]; then
   step "Smoke check: mock flow run"
-  ./target/release/tracefield run --scenario-dir scenarios/generic-smoke >/dev/null
+  SMOKE_TMP=$(mktemp -d)
+  trap 'rm -rf "$SMOKE_TMP"' EXIT
+  ./target/release/tracefield new smoke --dir "$SMOKE_TMP/smoke" >/dev/null
+  ./target/release/tracefield run --scenario-dir "$SMOKE_TMP/smoke" >/dev/null
+  rm -rf "$SMOKE_TMP"
+  trap - EXIT
   info "mock flow run OK"
 fi
 
@@ -74,7 +79,8 @@ cat <<EOF
 Next steps:
 
   ./target/release/tracefield doctor
-  ./target/release/tracefield run --scenario-dir scenarios/generic-smoke
+  ./target/release/tracefield new smoke
+  ./target/release/tracefield run --scenario-dir scenarios/smoke
   ./target/release/tracefield new my-review
 
 For live runs with a local model, start Ollama and pull a model first
